@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Client-Server Model</title>
+<meta name="description" content="The foundational client-server architecture behind web pages, APIs, and modern internet applications.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals · Topic 01</div>
+  <h1>The <span>Client–Server</span> Model</h1>
+  <p class="hero-sub">The foundational architecture of the modern internet. Behind every web page and API call is the same old deal: one machine asks, another replies.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms (Quick Reference)</a></li>
+    <li><a href="#s1">What Is the Client-Server Model?</a></li>
+    <li><a href="#s2">Core Concepts & Vocabulary</a></li>
+    <li><a href="#s3">How It Actually Works (Step by Step)</a></li>
+    <li><a href="#s4">Architectural Diagram</a></li>
+    <li><a href="#s5">The Network Stack — Where It Lives</a></li>
+    <li><a href="#s5b">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s6">Memory Map — Data Flow in RAM</a></li>
+    <li><a href="#s7">Production Example 1: Netflix</a></li>
+    <li><a href="#s8">Production Example 2: Stripe Payments</a></li>
+    <li><a href="#s9">Variants & Evolution</a></li>
+    <li><a href="#s10">Edge Cases & Gotchas</a></li>
+    <li><a href="#s11">Interview Questions & Answers</a></li>
+    <li><a href="#s12">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References & Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- KEY TERMS -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Key Terms</h2>
+
+  <h3>Client</h3>
+  <p>A <strong>client</strong> is the process that initiates communication in order to obtain data, trigger work, or use a remote capability exposed by another system. In practice, a client might be a browser, mobile app, CLI tool, backend service, or even a database worker calling another service. The important point is that <strong>client is a role</strong>: the side that starts the interaction and waits for a response.</p>
+
+  <h3>Server</h3>
+  <p>A <strong>server</strong> is the process that listens for incoming requests, applies business logic, accesses data or other dependencies, and returns a response. A server is usually designed to be continuously available, to handle many clients over time, and to expose a stable interface such as HTTP, gRPC, or a database protocol. Like the client, <strong>server is also a role</strong>, not a guarantee about a physical machine.</p>
+
+  <h3>Client—Server Model</h3>
+  <p>The <strong>client-server model</strong> is an architectural pattern in which responsibilities are split between request initiators and request handlers. Clients focus on presentation, user interaction, or orchestration; servers centralize computation, data access, coordination, and shared system behavior. This separation makes systems easier to scale, secure, evolve, and operate because the two sides can change somewhat independently as long as they preserve the communication contract.</p>
+
+  <h3>IP Address</h3>
+  <p>An <strong>IP address</strong> is the network-level identifier used to route packets to a host or network interface. On the public internet, it is how other machines know where to send traffic; inside private networks, it plays the same routing role within that local environment. IPv4 addresses consist of four numbers separated by dots, like <code class="inline">a.b.c.d</code>, where each number is between 0 and 255. Special values include:</p>
+  <p><code class="inline">127.0.0.1</code> — Your own local machine. Also referred to as <strong>localhost</strong>.</p>
+  <p><code class="inline">192.168.x.y</code> — Your private network. Your machine and all machines on your private wifi network will usually share the <strong>192.168</strong> prefix.</p>
+
+  <h3>Port</h3>
+  <p>A <strong>port</strong> identifies a specific network endpoint on a machine so the operating system knows <em>which process</em> should receive incoming traffic. The IP address gets data to the right machine; the port gets it to the right application on that machine. A port is an integer between 0 and 65,535 (2<sup>16</sup> total), and servers bind to ports so clients know where to connect.</p>
+  <p>Typically, ports 0–1023 are reserved for <em>well-known system services</em>, while higher ports are commonly used by application processes and ephemeral outbound connections. Certain ports have standard conventions:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Port</th><th>Service</th></tr></thead>
+      <tbody>
+        <tr><td><code>22</code></td><td>SSH (Secure Shell)</td></tr>
+        <tr><td><code>53</code></td><td>DNS lookup</td></tr>
+        <tr><td><code>80</code></td><td>HTTP</td></tr>
+        <tr><td><code>443</code></td><td>HTTPS</td></tr>
+        <tr><td><code>5432</code></td><td>PostgreSQL</td></tr>
+        <tr><td><code>6379</code></td><td>Redis</td></tr>
+        <tr><td><code>3306</code></td><td>MySQL</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>DNS</h3>
+  <p><strong>DNS</strong>, or <strong>Domain Name System</strong>, is the distributed naming system that translates human-readable domain names like <code class="inline">example.com</code> into IP addresses that clients can actually connect to. Before a browser can send an HTTP request to a host name, it usually performs DNS resolution through a resolver, which may answer from cache or recursively query other DNS servers. DNS is therefore a prerequisite step in most client-server interactions: <strong>name first, then network connection</strong>.</p>
+</section>
+
+<!-- SECTION 1 -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>What Is the Client–Server Model?</h2>
+  <p>The <strong>Client-Server model</strong> is a distributed computing architecture where the system is split into two distinct roles: a <strong>client</strong> that makes requests, and a <strong>server</strong> that processes those requests and sends back responses. That's the entire idea. Every time you open a browser, type a URL, and see a webpage — you just participated in a client-server interaction.</p>
+  <p>The client doesn't know <em>how</em> the server produces the answer. The server doesn't care <em>why</em> the client wants it. Each side has a well-defined contract (the <strong>protocol</strong>), and they communicate over a <strong>network</strong>.</p>
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>Think of a restaurant. <strong>You</strong> (the client) look at the menu and place an order. The <strong>kitchen</strong> (the server) prepares the food and sends it to your table. You don't walk into the kitchen. The kitchen doesn't eat the food. Clear separation of responsibility.</p>
+  </div>
+  <h3>Why does this matter?</h3>
+  <p>Without the client-server model, every computer would need to have every piece of data and every program locally. There'd be no Google, no Netflix, no APIs, no cloud computing. The model lets us <strong>centralize resources</strong> (data, computation, storage) on powerful servers while keeping <strong>lightweight clients</strong> (browsers, mobile apps, IoT devices) that simply request what they need. This separation aligns with the <strong>end-to-end principle</strong> <a href="#ref2" style="color:var(--accent);font-family:var(--mono);font-size:12px;">[2]</a> — keep the network simple, push intelligence to the edges.</p>
+  <h3>Formal Definition</h3>
+  <p>A <strong>client</strong> is a process (a running program) that initiates a communication session by sending a request. A <strong>server</strong> is a process that <em>listens</em> for incoming requests, performs some computation or data retrieval, and returns a response. They communicate over a network using an agreed-upon protocol (most commonly HTTP/HTTPS over TCP/IP). <a href="#ref1" style="color:var(--blue);font-family:var(--mono);font-size:12px;">[1]</a></p>
+  <div class="callout blue">
+    <div class="callout-label">Key Distinction</div>
+    <p><strong>"Client" and "Server" are roles, not physical machines.</strong> A single physical computer can act as both a client and a server simultaneously. Your laptop runs a browser (client) and could also run a local development server (server). In microservice architectures, a service is a server to external clients and a client to internal services it depends on.</p>
+  </div>
+</section>
+
+<!-- SECTION 2 -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Core Concepts & Vocabulary</h2>
+  <p>Before going deeper, here are the building blocks you need to understand. Every system design interview expects you to use these terms precisely.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Term</th><th>What It Is</th><th>Analogy</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Client</strong></td><td>The process that initiates communication. Examples: web browser, mobile app, CLI tool like <code>curl</code>, another backend service.</td><td>The person ordering food</td></tr>
+        <tr><td><strong>Server</strong></td><td>The process that listens for, processes, and responds to requests. Runs on always-on infrastructure. Examples: Nginx, Node.js Express, Flask.</td><td>The kitchen + waiter</td></tr>
+        <tr><td><strong>Request</strong></td><td>A structured message from client to server. Contains a method (GET, POST), a path (/api/users), headers, and optionally a body.</td><td>The order slip</td></tr>
+        <tr><td><strong>Response</strong></td><td>A structured message from server to client. Contains a status code (200, 404), headers, and a body (the data).</td><td>The food arriving</td></tr>
+        <tr><td><strong>Protocol</strong></td><td>The agreed-upon rules for communication. HTTP, HTTPS, FTP, WebSocket, gRPC.</td><td>The language everyone speaks</td></tr>
+        <tr><td><strong>IP Address</strong></td><td>A numerical address identifying a machine on a network. IPv4: <code>192.168.1.1</code>. IPv6: <code>2001:db8::1</code>.</td><td>The street address</td></tr>
+        <tr><td><strong>Port</strong></td><td>A number (0–65535) that identifies a specific process on a machine. HTTP=80, HTTPS=443, Postgres=5432.</td><td>The specific door in the building</td></tr>
+        <tr><td><strong>DNS</strong></td><td>Domain Name System. Translates human-readable names (<code>google.com</code>) to IP addresses (<code>142.250.80.46</code>).</td><td>The phone book</td></tr>
+        <tr><td><strong>Socket</strong></td><td>The combination of <code>IP + Port</code>. One endpoint of a two-way communication link. Server listens on a socket; client connects to it.</td><td>A specific phone line</td></tr>
+        <tr><td><strong>TCP</strong></td><td>Transmission Control Protocol. Reliable, ordered delivery. Connection-oriented (3-way handshake). Used by HTTP.</td><td>Certified mail — guaranteed, in order</td></tr>
+        <tr><td><strong>UDP</strong></td><td>User Datagram Protocol. Unreliable but fast. No connection setup. Used for streaming, gaming, DNS.</td><td>Shouting across the street — fast, no guarantee</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- SECTION 3 -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>How It Actually Works (Step by Step)</h2>
+  <p>Let's trace exactly what happens when you type <code class="inline">https://www.example.com/api/users</code> into your browser and press Enter. Every single step, no magic.</p>
+
+  <h3>Step 1: DNS Resolution</h3>
+  <p>Your browser doesn't know where <code class="inline">www.example.com</code> lives. It asks the OS, which checks its local cache, then asks a <strong>DNS resolver</strong> (usually your ISP's or a public one like 8.8.8.8). Your machine makes a recursive query to that resolver, and the resolver typically performs the upstream lookup by walking root servers → TLD servers (.com) → authoritative nameservers until it gets back an IP like <code class="inline">93.184.216.34</code>.</p>
+
+  <h3>Step 2: TCP Connection (3-Way Handshake)</h3>
+  <p>Your browser opens a <strong>TCP connection</strong> to <code class="inline">93.184.216.34:443</code> (port 443 for HTTPS): <a href="#ref3" style="color:var(--orange);font-family:var(--mono);font-size:12px;">[3]</a></p>
+  <div class="code-block">
+    <div class="code-header"><span>TCP 3-Way Handshake</span></div>
+    <pre><span class="b">Client → Server</span>:  SYN           <span class="cm">"Hey, I want to talk"</span>
+<span class="b">Server → Client</span>:  SYN-ACK       <span class="cm">"OK, I'm ready, are you?"</span>
+<span class="b">Client → Server</span>:  ACK           <span class="cm">"Yes, let's go"</span>
+
+<span class="cm">Connection is now ESTABLISHED. Both sides agree on
+sequence numbers, window sizes, and MSS (max segment size).</span></pre>
+  </div>
+
+  <h3>Step 3: TLS Handshake (for HTTPS)</h3>
+  <p>Since we used <code class="inline">https://</code>, there's a TLS handshake on top of TCP. The server presents its <strong>SSL/TLS certificate</strong>. The client verifies it against trusted Certificate Authorities. They negotiate an encryption algorithm and exchange keys. All subsequent data is encrypted.</p>
+
+  <h3>Step 4: HTTP Request</h3>
+  <div class="code-block">
+    <div class="code-header"><span>HTTP Request</span></div>
+    <pre><span class="kw">GET</span> /api/users <span class="str">HTTP/1.1</span>
+<span class="fn">Host</span>: www.example.com
+<span class="fn">Accept</span>: application/json
+<span class="fn">User-Agent</span>: Mozilla/5.0 ...
+<span class="fn">Authorization</span>: Bearer eyJhbGciOi...
+<span class="fn">Connection</span>: keep-alive</pre>
+  </div>
+
+  <h3>Step 5: Server Processing</h3>
+  <p>The server receives the raw bytes, parses them into an HTTP request object, routes to the correct handler (e.g., <code class="inline">UsersController.index()</code>), validates the auth token, queries a database, serializes the result to JSON, and builds an HTTP response.</p>
+
+  <h3>Step 6: HTTP Response</h3>
+  <div class="code-block">
+    <div class="code-header"><span>HTTP Response</span></div>
+    <pre><span class="str">HTTP/1.1</span> <span class="num">200</span> <span class="str">OK</span>
+<span class="fn">Content-Type</span>: application/json
+<span class="fn">Content-Length</span>: 245
+<span class="fn">Cache-Control</span>: max-age=60
+
+[
+  {<span class="str">"id"</span>: <span class="num">1</span>, <span class="str">"name"</span>: <span class="str">"Alice"</span>},
+  {<span class="str">"id"</span>: <span class="num">2</span>, <span class="str">"name"</span>: <span class="str">"Bob"</span>}
+]</pre>
+  </div>
+
+  <h3>Step 7: Client Rendering</h3>
+  <p>The browser receives the response, parses the JSON, and renders it. The TCP connection may stay open for subsequent requests (<strong>keep-alive</strong>) or be closed.</p>
+
+  <div class="callout orange">
+    <div class="callout-label">Latency Budget — Where Time Goes</div>
+    <p><strong>DNS lookup:</strong> 1–50ms (cached) or 100–200ms (cold) · <strong>TCP handshake:</strong> 1 RTT (~10–100ms) · <strong>TLS handshake:</strong> 1–2 RTT (~20–200ms) · <strong>Server processing:</strong> 1ms–seconds · <strong>Data transfer:</strong> depends on size/bandwidth · Total TTFB for a cold transatlantic request: <strong>~200–500ms</strong>.</p>
+  </div>
+</section>
+
+<!-- SECTION 4 -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Architectural Diagram</h2>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 840 520" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="ar" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#5c6580"/></marker>
+        <marker id="ab" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#60a5fa"/></marker>
+        <marker id="ao" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#fb923c"/></marker>
+        <marker id="ap" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#a78bfa"/></marker>
+      </defs>
+      <rect x="30" y="60" width="200" height="400" rx="14" fill="#1a1e28" stroke="#3d4663" stroke-width="1.5"/>
+      <text x="130" y="44" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6ee7b7" letter-spacing="2">CLIENT</text>
+      <rect x="52" y="92" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="130" y="116" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">Browser / App UI</text>
+      <rect x="52" y="148" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="130" y="172" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">HTTP Client Library</text>
+      <rect x="52" y="204" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="130" y="228" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">TLS Layer</text>
+      <rect x="52" y="260" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="130" y="284" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">TCP Socket</text>
+      <rect x="52" y="316" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="130" y="340" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">OS Network Stack</text>
+      <rect x="52" y="372" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="130" y="396" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">NIC (Hardware)</text>
+      <path d="M130 130 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <path d="M130 186 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <path d="M130 242 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <path d="M130 298 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <path d="M130 354 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <rect x="610" y="60" width="200" height="400" rx="14" fill="#1a1e28" stroke="#3d4663" stroke-width="1.5"/>
+      <text x="710" y="44" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" letter-spacing="2">SERVER</text>
+      <rect x="632" y="92" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="710" y="116" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">App Logic / Router</text>
+      <rect x="632" y="148" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="710" y="172" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">Web Framework</text>
+      <rect x="632" y="204" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="710" y="228" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">TLS Termination</text>
+      <rect x="632" y="260" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="710" y="284" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">TCP Listener</text>
+      <rect x="632" y="316" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="710" y="340" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">OS Network Stack</text>
+      <rect x="632" y="372" width="156" height="38" rx="6" fill="#222734" stroke="#2a3040"/>
+      <text x="710" y="396" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#e2e6f0">NIC (Hardware)</text>
+      <path d="M710 130 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <path d="M710 186 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <path d="M710 242 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <path d="M710 298 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <path d="M710 354 v18" stroke="#5c6580" stroke-width="1" marker-end="url(#ar)"/>
+      <rect x="330" y="200" width="180" height="120" rx="60" fill="none" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="6 4"/>
+      <text x="420" y="252" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" fill="#6ee7b7">THE INTERNET</text>
+      <text x="420" y="272" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">TCP/IP Network</text>
+      <path d="M238 240 L322 240" stroke="#60a5fa" stroke-width="2" marker-end="url(#ab)"/>
+      <text x="280" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#60a5fa">REQUEST</text>
+      <path d="M602 280 L518 280" stroke="#fb923c" stroke-width="2" marker-end="url(#ao)" stroke-dasharray="6 3"/>
+      <path d="M518 240 L602 240" stroke="#60a5fa" stroke-width="2" marker-end="url(#ab)"/>
+      <path d="M322 280 L238 280" stroke="#fb923c" stroke-width="2" marker-end="url(#ao)" stroke-dasharray="6 3"/>
+      <text x="560" y="272" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#fb923c">RESPONSE</text>
+      <rect x="345" y="380" width="150" height="55" rx="10" fill="#1a1e28" stroke="#a78bfa" stroke-width="1"/>
+      <text x="420" y="404" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#a78bfa">DNS Resolver</text>
+      <text x="420" y="422" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#5c6580">domain → IP address</text>
+      <path d="M208 410 Q274 446 345 410" stroke="#a78bfa" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ap)"/>
+    </svg>
+    <div class="diagram-caption">Full Client–Server architecture with internal layer stacks and DNS resolution</div>
+  </div>
+</section>
+
+<!-- SECTION 5 -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>The Network Stack — Where It Lives</h2>
+  <p>The Client-Server model sits at the <strong>Application Layer</strong> of the network stack. Here's the OSI model mapped to reality:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Layer</th><th>OSI Name</th><th>Protocol</th><th>What It Does</th></tr></thead>
+      <tbody>
+        <tr><td><strong>7</strong></td><td>Application</td><td><code>HTTP, gRPC, WebSocket</code></td><td>Where client-server logic lives. "GET /users" is an application-layer concept.</td></tr>
+        <tr><td><strong>6</strong></td><td>Presentation</td><td><code>TLS/SSL, JSON, Protobuf</code></td><td>Encryption (TLS), data serialization (JSON → bytes).</td></tr>
+        <tr><td><strong>5</strong></td><td>Session</td><td><code>TLS session resumption, RPC sessions</code></td><td>Coordinates longer-lived conversations between endpoints. In practice, this layer is often thin or folded into application/transport behavior.</td></tr>
+        <tr><td><strong>4</strong></td><td>Transport</td><td><code>TCP, UDP</code></td><td>Reliable delivery (TCP) or fast unreliable (UDP). Port numbers. Segmentation, retransmissions.</td></tr>
+        <tr><td><strong>3</strong></td><td>Network</td><td><code>IP (v4/v6)</code></td><td>Routing packets across networks. IP addresses. Each router picks a "next hop."</td></tr>
+        <tr><td><strong>2</strong></td><td>Data Link</td><td><code>Ethernet, Wi-Fi</code></td><td>Frames data for local segment. MAC addresses. Error detection (CRC).</td></tr>
+        <tr><td><strong>1</strong></td><td>Physical</td><td><code>Signals, fiber</code></td><td>Bits on the wire, radio waves, or light pulses.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Interview Tip</div>
+    <p>In practice, people use the simpler <strong>TCP/IP 4-layer model</strong>: Application → Transport → Internet → Link. The key insight: <strong>each layer wraps the data from above with its own header</strong> (<strong>encapsulation</strong>). On receive, it <strong>unwraps</strong> (decapsulates) layer by layer.</p>
+  </div>
+</section>
+
+<!-- HANDS-ON: TERMINAL DEMOS -->
+<section class="section" id="s5b">
+  <div class="section-num">05b</div>
+  <h2>Hands-On: Terminal Demos</h2>
+  <p>Theory is one thing — watching bytes flow through your own terminal is another. These commands let you <strong>see</strong> the client-server model in action on your local machine. Open two terminal windows and follow along.</p>
+  <p>Where command syntax differs, this section calls out both <strong>macOS</strong> and <strong>Linux</strong>. If only one command is shown, assume it works on both.</p>
+  <p>Exact output will vary by machine, network, DNS answers, TLS negotiation, and remote server configuration. Focus on the shape of the interaction, not the literal IPs or header values.</p>
+
+  <h3>Demo 1: Raw TCP with Netcat (<code class="inline">nc</code>)</h3>
+  <p>Netcat is the Swiss Army knife of networking. It lets you create raw TCP connections — no HTTP, no frills, just a client and a server talking over a port.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Terminal 1 — Start a Server (macOS / Linux)</span></div>
+    <pre><span class="cm"># -l = listen mode (act as a SERVER)</span>
+<span class="cm"># 8081 = the port to listen on</span>
+$ <span class="fn">nc</span> <span class="kw">-l</span> <span class="num">8081</span>
+
+<span class="cm"># The terminal now hangs — it's WAITING for a connection.</span>
+<span class="cm"># This is exactly what a real server does: listen on a socket.</span></pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Terminal 2 — Connect as a Client (macOS / Linux)</span></div>
+    <pre><span class="cm"># Connect to localhost (127.0.0.1) on port 8081</span>
+$ <span class="fn">nc</span> <span class="num">127.0.0.1</span> <span class="num">8081</span>
+
+<span class="cm"># Connection established! Type anything and press Enter:</span>
+Hello from the client!
+
+<span class="cm"># → This text appears in Terminal 1 (the server).</span>
+<span class="cm"># Type in Terminal 1 and it appears in Terminal 2.</span>
+<span class="cm"># You just built a bidirectional client-server connection.</span></pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">What Just Happened</div>
+    <p><strong>Terminal 1</strong> created a TCP socket on <code class="inline">127.0.0.1:8081</code> and called <code class="inline">listen()</code> — it became a <strong>server</strong>. <strong>Terminal 2</strong> called <code class="inline">connect()</code> to that socket — it became a <strong>client</strong>. The OS performed the TCP 3-way handshake (SYN → SYN-ACK → ACK) under the hood. Every byte you type is wrapped in a TCP segment, an IP packet, and sent through the loopback interface. This is the <em>exact same mechanism</em> that powers every website on the internet — just without HTTP on top.</p>
+  </div>
+
+  <h3>Demo 2: DNS Lookup with <code class="inline">dig</code></h3>
+  <p>See how DNS resolution actually works — your machine acting as a <strong>client</strong> to a DNS <strong>server</strong>.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>DNS Resolution (macOS / Linux)</span></div>
+    <pre><span class="cm"># Query the DNS server for google.com's IP address</span>
+$ <span class="fn">dig</span> google.com
+
+<span class="cm"># Key parts of the output:</span>
+;; ANSWER SECTION:
+google.com.    <span class="num">300</span>    IN    A    <span class="num">142.250.80.46</span>
+
+<span class="cm"># 300 = TTL (time-to-live) in seconds — cache this for 5 minutes</span>
+<span class="cm"># A = Address record (IPv4)</span>
+<span class="cm"># 142.250.80.46 = the actual IP address of google.com</span>
+
+;; Query time: <span class="num">12</span> msec
+;; SERVER: <span class="num">192.168.1.1</span>#53    <span class="cm">← your router's DNS server, port 53</span>
+
+<span class="cm"># Your machine (client) sent a UDP packet to 192.168.1.1:53 (server)</span>
+<span class="cm"># The DNS server responded with the IP. Client-server in action.</span></pre>
+  </div>
+
+  <h3>Demo 3: HTTP Request with <code class="inline">curl</code></h3>
+  <p>Watch a full HTTP client-server round trip with verbose output showing every header.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Full HTTP Round Trip (macOS / Linux)</span></div>
+    <pre><span class="cm"># -v = verbose (show request AND response headers)</span>
+$ <span class="fn">curl</span> <span class="kw">-v</span> <span class="str">https://httpbin.org/get</span>
+
+<span class="cm">* Trying 34.199.75.4:443...</span>                  <span class="cm">← DNS resolved, connecting</span>
+<span class="cm">* Connected to httpbin.org (34.199.75.4)</span>       <span class="cm">← TCP handshake done</span>
+<span class="cm">* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384</span>  <span class="cm">← TLS done</span>
+
+<span class="b">&gt; GET /get HTTP/1.1</span>                            <span class="cm">← REQUEST starts</span>
+<span class="b">&gt; Host: httpbin.org</span>
+<span class="b">&gt; User-Agent: curl/8.1.2</span>
+<span class="b">&gt; Accept: */*</span>
+
+<span class="v">&lt; HTTP/1.1 200 OK</span>                              <span class="cm">← RESPONSE starts</span>
+<span class="v">&lt; Content-Type: application/json</span>
+<span class="v">&lt; Content-Length: 256</span>
+
+{
+  <span class="str">"headers"</span>: {
+    <span class="str">"Host"</span>: <span class="str">"httpbin.org"</span>,
+    <span class="str">"User-Agent"</span>: <span class="str">"curl/8.1.2"</span>
+  },
+  <span class="str">"origin"</span>: <span class="str">"203.0.113.42"</span>,        <span class="cm">← your public IP as seen by server</span>
+  <span class="str">"url"</span>: <span class="str">"https://httpbin.org/get"</span>
+}</pre>
+  </div>
+
+  <h3>Demo 4: Simulate an HTTP Server with Netcat</h3>
+  <p>Build a fake HTTP server that responds to a browser — proving that servers are just programs that follow a protocol.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Terminal — Fake HTTP Server (macOS / Linux)</span></div>
+    <pre><span class="cm"># Serve a one-shot HTTP response on port 8080</span>
+$ <span class="fn">echo</span> <span class="kw">-e</span> <span class="str">"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 28\r\nConnection: close\r\n\r\n&lt;h1&gt;Hello from raw TCP!&lt;/h1&gt;"</span> | <span class="fn">nc</span> <span class="kw">-l</span> <span class="num">8080</span>
+
+<span class="cm"># Now open your browser and go to: http://localhost:8080</span>
+<span class="cm"># You'll see "Hello from raw TCP!" rendered as HTML.</span>
+
+<span class="cm"># What happened:</span>
+<span class="cm"># 1. nc listened on port 8080 (server)</span>
+<span class="cm"># 2. Browser connected to 127.0.0.1:8080 (client)</span>
+<span class="cm"># 3. Browser sent: "GET / HTTP/1.1\r\nHost: localhost..."</span>
+<span class="cm"># 4. nc piped back a valid HTTP response with length + close semantics</span>
+<span class="cm"># 5. Browser parsed it as HTML and rendered the &lt;h1&gt;</span>
+<span class="cm"># That's ALL a web server is — a program that speaks HTTP.</span></pre>
+  </div>
+
+  <h3>Demo 5: See Your Machine's IP and Open Ports</h3>
+  <p>This is the one demo here where the command set differs noticeably across operating systems, so both variants are shown explicitly.</p>
+  <div class="code-block">
+    <div class="code-header"><span>Network Inspection Commands (macOS and Linux)</span></div>
+    <pre><span class="cm"># Your private IP on the local network</span>
+<span class="cm"># macOS (Wi-Fi is usually en0)</span>
+$ <span class="fn">ipconfig</span> <span class="str">getifaddr</span> <span class="str">en0</span>
+<span class="num">192.168.1.42</span>
+
+<span class="cm"># Linux alternative</span>
+$ <span class="fn">hostname</span> <span class="kw">-I</span>
+<span class="num">192.168.1.42</span>
+
+<span class="cm"># Your public IP (what the internet sees) — makes an HTTP request to a server</span>
+$ <span class="fn">curl</span> <span class="str">https://ifconfig.me</span>
+<span class="num">203.0.113.42</span>
+
+<span class="cm"># List all TCP ports currently being listened on</span>
+<span class="cm"># macOS</span>
+$ <span class="fn">lsof</span> <span class="kw">-nP</span> <span class="kw">-iTCP</span> <span class="kw">-sTCP:LISTEN</span>
+COMMAND   PID   USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+sshd      123   root    3u  IPv4 0x...            0t0  TCP *:<span class="num">22</span> (LISTEN)
+postgres  456   user    7u  IPv4 0x...            0t0  TCP 127.0.0.1:<span class="num">5432</span> (LISTEN)
+node      789   user   21u  IPv4 0x...            0t0  TCP *:<span class="num">3000</span> (LISTEN)
+
+<span class="cm"># Linux alternative</span>
+$ <span class="fn">ss</span> <span class="kw">-tlnp</span>
+State   Recv-Q  Send-Q  Local Address:Port   Process
+LISTEN  0       128     0.0.0.0:<span class="num">22</span>           sshd
+LISTEN  0       511     127.0.0.1:<span class="num">5432</span>       postgres
+LISTEN  0       128     0.0.0.0:<span class="num">3000</span>        node
+
+<span class="cm"># Each line = a server process listening on a socket.</span>
+<span class="cm"># 0.0.0.0:22 = sshd accepts connections from ANY IP on port 22</span>
+<span class="cm"># 127.0.0.1:5432 = postgres only accepts connections from localhost</span></pre>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Why These Demos Matter</div>
+    <p>In interviews, when someone asks "what happens when you type a URL", you can say "I've literally watched it happen byte by byte with <code class="inline">curl -v</code> and built a fake server with <code class="inline">nc</code>." Hands-on understanding beats memorized definitions every time. These tools — <code class="inline">nc</code>, <code class="inline">dig</code>, <code class="inline">curl</code>, <code class="inline">lsof</code>, and <code class="inline">ss</code> — are also daily-use tools for debugging production issues.</p>
+  </div>
+</section>
+
+<!-- SECTION 6 -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Memory Map — Data Flow in RAM</h2>
+  <p>This is what the data actually looks like in memory at each stage. Understanding this separates junior from senior engineers.</p>
+
+  <h3>Client Side — Sending a Request</h3>
+  <div class="memory-map"><span class="h">USER ACTION</span>
+<span class="d">│</span>
+<span class="d">├──</span> User clicks "Load Users" in React app
+<span class="d">│   └──</span> <span class="v">onClick → fetch('/api/users')</span>
+<span class="d">│</span>
+<span class="h">APPLICATION MEMORY (JS Heap)</span>
+<span class="d">│</span>
+<span class="d">├──</span> Request object in JS runtime:
+<span class="d">│   ┌─────────────────────────────────────────────┐</span>
+<span class="d">│   │</span> <span class="b">method</span>:  <span class="str">"GET"</span>                             <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">url</span>:     <span class="str">"https://api.example.com/users"</span>    <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">headers</span>: <span class="str">{ Authorization: "Bearer ..." }</span>   <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">body</span>:    <span class="str">null</span>                               <span class="d">│</span>
+<span class="d">│   └─────────────────────────────────────────────┘</span>
+<span class="d">│</span>
+<span class="h">SERIALIZATION → BYTES</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="v">"GET /api/users HTTP/1.1\r\nHost: api.example.com\r\n..."</span>
+<span class="d">│</span>
+<span class="h">TLS ENCRYPTION</span>
+<span class="d">│</span>
+<span class="d">├──</span> Plaintext → AES-256-GCM ciphertext
+<span class="d">│   <span class="v">[0xA3 0x7F 0x12 0x8B ... 256+ encrypted bytes]</span></span>
+<span class="d">│</span>
+<span class="h">TCP SEGMENTATION</span>
+<span class="d">│</span>
+<span class="d">├──</span> TCP header wraps data:
+<span class="d">│   ┌──────────────────────────────────────────────┐</span>
+<span class="d">│   │</span> <span class="b">src_port</span>: <span class="num">52431</span> (ephemeral)                 <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">dst_port</span>: <span class="num">443</span>                               <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">seq_num</span>:  <span class="num">0x00A3F1B2</span>                       <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">flags</span>:    <span class="str">PSH, ACK</span>                         <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">payload</span>:  <span class="str">[encrypted bytes]</span>                 <span class="d">│</span>
+<span class="d">│   └──────────────────────────────────────────────┘</span>
+<span class="d">│</span>
+<span class="h">IP PACKETIZATION</span>
+<span class="d">│</span>
+<span class="d">├──</span> IP header wraps segment:
+<span class="d">│   ┌──────────────────────────────────────────────┐</span>
+<span class="d">│   │</span> <span class="b">src_ip</span>:   <span class="num">192.168.1.42</span>                     <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">dst_ip</span>:   <span class="num">93.184.216.34</span>                    <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">ttl</span>:      <span class="num">64</span>                                 <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">protocol</span>: <span class="num">6</span> (TCP)                           <span class="d">│</span>
+<span class="d">│   └──────────────────────────────────────────────┘</span>
+<span class="d">│</span>
+<span class="h">ETHERNET FRAMING</span>
+<span class="d">│</span>
+<span class="d">└──</span> Frame + MAC addrs → <span class="v">NIC → Wire → Router → Internet</span></div>
+
+  <h3>Server Side — Receiving & Processing</h3>
+  <div class="memory-map"><span class="h">NIC → OS Kernel → TCP reassembly → TLS decrypt</span>
+<span class="d">│</span>
+<span class="h">SERVER APPLICATION MEMORY</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Listener</span> picks up connection (event loop / worker)
+<span class="d">│</span>
+<span class="d">├──</span> HTTP parser → request object in server memory:
+<span class="d">│   ┌──────────────────────────────────────────────┐</span>
+<span class="d">│   │</span> <span class="b">req.method</span>:  <span class="str">"GET"</span>                         <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">req.path</span>:    <span class="str">"/api/users"</span>                  <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">req.headers</span>: <span class="str">{ authorization: "..." }</span>      <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">req.ip</span>:      <span class="str">"192.168.1.42"</span>                <span class="d">│</span>
+<span class="d">│   └──────────────────────────────────────────────┘</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Router</span> → <span class="v">UsersController.list()</span>
+<span class="d">├──</span> <span class="b">Auth middleware</span> validates JWT → user_id
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">DB query</span>:
+<span class="d">│   └──</span> <span class="v">SELECT id, name FROM users WHERE org_id = 42;</span>
+<span class="d">│   └──</span> Result set → ORM objects in heap
+<span class="d">│       <span class="str">[User{1,"Alice"}, User{2,"Bob"}]</span></span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">JSON serialization</span>:
+<span class="d">│   └──</span> <span class="v">[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Response object</span>:
+<span class="d">│   ┌──────────────────────────────────────────────┐</span>
+<span class="d">│   │</span> <span class="b">status</span>:  <span class="num">200</span>                                <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">headers</span>: <span class="str">{ Content-Type: application/json }</span>  <span class="d">│</span>
+<span class="d">│   │</span> <span class="b">body</span>:    <span class="str">[...JSON bytes...]</span>                 <span class="d">│</span>
+<span class="d">│   └──────────────────────────────────────────────┘</span>
+<span class="d">│</span>
+<span class="d">└──</span> Serialize → TLS encrypt → TCP → IP → <span class="v">Wire</span></div>
+</section>
+
+<!-- SECTION 7 -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Production Example 1: Netflix</h2>
+  <p>Netflix is a masterclass in client-server architecture at extreme scale.</p>
+
+  <h3>The Client</h3>
+  <p>Netflix has clients for <strong>every platform</strong>: iOS, Android, Smart TVs, game consoles, Roku, Fire TV, and web. Each is purpose-built but speaks the <strong>same API contract</strong> to Netflix's backend.</p>
+
+  <h3>The Server(s)</h3>
+  <p>Netflix runs <strong>thousands of microservices</strong> in AWS. But from the client's perspective, it's one server — the Netflix API Gateway (originally Zuul, now custom). The gateway fans out to downstream services internally.</p>
+
+  <h3>How a Play Request Works</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Netflix Play Flow (Simplified)</span></div>
+    <pre><span class="cm">1.</span> <span class="b">Client</span> → <span class="str">POST /api/playback/start</span>
+   <span class="cm">Body: { titleId: "80100172", profileId: "abc123" }</span>
+
+<span class="cm">2.</span> <span class="b">API Gateway</span> authenticates, routes to Playback Service
+
+<span class="cm">3.</span> <span class="b">Playback Service</span> checks:
+   <span class="cm">- Title available in user's region? (Licensing Service)</span>
+   <span class="cm">- What quality can device handle? (Device Capabilities DB)</span>
+   <span class="cm">- Closest CDN node? (Open Connect / CDN Service)</span>
+
+<span class="cm">4.</span> <span class="b">Response</span>:
+   {
+     <span class="str">"manifestUrl"</span>: <span class="str">"https://cdn-fra001.netflix.com/..."</span>,
+     <span class="str">"drmLicense"</span>: <span class="str">"..."</span>,
+     <span class="str">"profiles"</span>: [<span class="str">"h264-main-L40"</span>, <span class="str">"hevc-main10-L51"</span>]
+   }
+
+<span class="cm">5.</span> <span class="b">Client</span> fetches video chunks directly from CDN
+   <span class="cm">(SECOND client-server interaction: client ↔ CDN)</span></pre>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">Key Insight</div>
+    <p>Netflix uses <strong>two layers</strong> of client-server: (1) Client ↔ API servers for metadata, auth, recommendations. (2) Client ↔ CDN edge servers for video bytes. The API path optimizes for correctness; the CDN path optimizes for bandwidth and latency.</p>
+  </div>
+</section>
+
+<!-- SECTION 8 -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Production Example 2: Stripe Payments</h2>
+  <p>Stripe processes hundreds of billions of dollars per year. The client-server model is at the heart of every transaction.</p>
+
+  <h3>The Multi-Layer Client-Server Chain</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Stripe Payment Flow</span></div>
+    <pre><span class="cm">LAYER 1: Browser ↔ Your Server</span>
+<span class="b">Browser (client)</span> → <span class="str">POST /checkout</span> → <span class="b">Your Server (server)</span>
+
+<span class="cm">LAYER 2: Your Server ↔ Stripe API</span>
+<span class="b">Your Server (now a client!)</span> → <span class="str">POST api.stripe.com/v1/payment_intents</span>
+  <span class="cm">Headers: { Authorization: "Bearer sk_live_..." }</span>
+  <span class="cm">Body:    { amount: 4999, currency: "usd" }</span>
+  → <span class="b">Stripe API (server)</span>
+
+<span class="cm">LAYER 3: Stripe ↔ Card Networks</span>
+<span class="b">Stripe (now a client!)</span> → <span class="str">ISO 8583 auth message</span>
+  → <span class="b">Visa/Mastercard (server)</span> → <span class="b">Issuing Bank (server)</span>
+
+<span class="cm">RESPONSE CHAIN (reverse):</span>
+  Issuing Bank → Visa → Stripe → Your Server → Browser
+  <span class="str">"Payment succeeded"</span></pre>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Critical Observation</div>
+    <p><strong>Your server plays BOTH roles.</strong> It's a server when receiving the browser's request. It's a client when calling Stripe's API. This duality is fundamental — in microservices, every service is simultaneously a client and a server.</p>
+  </div>
+  <h3>Why This Matters for System Design</h3>
+  <p>The Stripe example shows a <strong>chain of client-server interactions</strong>, creating complexity around: error handling (Stripe times out?), idempotency (server crashes after charge but before responding to browser?), and consistency (4 systems must agree on the outcome).</p>
+</section>
+
+<!-- SECTION 9 -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Variants & Evolution</h2>
+  <p>The basic model has evolved into important variants. Knowing these shows architectural maturity.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pattern</th><th>How It Differs</th><th>When to Use</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Thin Client</strong></td><td>Client does almost nothing; server renders everything. Classic server-rendered websites (PHP, Rails).</td><td>CRUD apps, admin panels, content sites.</td></tr>
+        <tr><td><strong>Thick Client</strong></td><td>Client handles significant logic, rendering, state. Server provides data APIs. E.g., React SPA + REST.</td><td>Complex interactive apps (Figma, Notion).</td></tr>
+        <tr><td><strong>Peer-to-Peer (P2P)</strong></td><td>No fixed server. Every node is both client and server. BitTorrent, blockchain, WebRTC.</td><td>File sharing, decentralized systems.</td></tr>
+        <tr><td><strong>3-Tier</strong></td><td>Client → App Server → Database. Business logic in the middle tier.</td><td>Standard web app architecture.</td></tr>
+        <tr><td><strong>Microservices</strong></td><td>Server decomposed into many small services, each a server to external and client to internal.</td><td>Large-scale systems (Netflix, Uber).</td></tr>
+        <tr><td><strong>Serverless</strong></td><td>Server exists but you don't manage it. Cloud runs your code on demand (Lambda). Still client-server.</td><td>Event-driven, variable traffic.</td></tr>
+        <tr><td><strong>Bidirectional (WebSocket)</strong></td><td>After handshake, both sides send messages anytime. Server pushes without request.</td><td>Chat, live dashboards, games.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- SECTION 10 -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Edge Cases & Gotchas</h2>
+  <p>These break in production and interviewers love to ask about them.</p>
+
+  <h3>1. The Server Is Down</h3>
+  <p>Client gets <strong>connection refused</strong> or <strong>timeout</strong>. Fix: <strong>retries with exponential backoff + jitter</strong>, circuit breakers, and fallback responses (cached data, degraded experience).</p>
+
+  <h3>2. The Network Is Unreliable</h3>
+  <p>Packets drop, reorder, duplicate. TCP handles most of this, but application-level <strong>partial failures</strong> remain: the request arrived and was processed, but the response was lost. Client retries → operation happens twice. Fix: <strong>idempotency keys</strong>.</p>
+
+  <h3>3. DNS Caching Gone Wrong</h3>
+  <p>Client caches a DNS entry. Server's IP changes (migration, failover). Client talks to the old IP. Fix: respect <strong>TTL</strong> values.</p>
+
+  <h3>4. Head-of-Line Blocking (HTTP/1.1)</h3>
+  <p>Requests on the same connection are serialized. First request slow → everything waits. HTTP/2 fixes this with <strong>multiplexing</strong>.</p>
+
+  <h3>5. Stateful vs. Stateless Servers</h3>
+  <p><strong>Stateless</strong> servers treat each request independently — dramatically easier to scale. <strong>Stateful</strong> servers remember things (sessions) but create problems when user's next request hits a different server. Fix: externalize state to Redis/DB, or use sticky sessions.</p>
+
+  <h3>6. TLS Certificate Expiry</h3>
+  <p>Expired cert → <strong>all clients refuse to connect</strong>. Has caused major outages. Fix: automated renewal (Let's Encrypt + cert-manager), expiration monitoring.</p>
+
+  <h3>7. The "Thundering Herd"</h3>
+  <p>Server goes down, 10K clients wait. Comes back → 10K clients retry simultaneously → instant overload. Fix: <strong>jittered retries</strong> + server-side rate limiting.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story</div>
+    <p>In 2017, Amazon S3 experienced a major outage caused by an operational error during routine maintenance that cascaded across thousands of dependent services. Lesson: when a foundational server fails, every client upstream fails. <strong>Design for failure.</strong></p>
+  </div>
+</section>
+
+<!-- SECTION 11 -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Interview Questions & Answers</h2>
+  <p>Click any question to reveal a detailed answer. These are asked at FAANG-level interviews.</p>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What happens when you type a URL into your browser and press Enter?</div>
+    <div class="qa-a">
+      <p>The classic question. Full answer covers: <strong>(1)</strong> URL parsing (scheme, host, path, query). <strong>(2)</strong> DNS resolution — browser cache → OS cache → resolver → root/TLD/authoritative nameservers. <strong>(3)</strong> TCP 3-way handshake. <strong>(4)</strong> TLS handshake (cert validation, key exchange, cipher negotiation). <strong>(5)</strong> HTTP request sent. <strong>(6)</strong> Server processing (LB → web server → app server → DB). <strong>(7)</strong> HTTP response. <strong>(8)</strong> Browser parses HTML, builds DOM, requests CSS/JS/images (each a new client-server interaction). <strong>(9)</strong> Rendering: DOM + CSSOM → render tree → layout → paint → composite.</p>
+      <p>Depth signals level. Juniors: steps 1-7. Seniors add: connection pooling, HTTP/2 multiplexing, CDN behavior, caching layers (memory, disk, service workers), CORS.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: What's the difference between a client and a server? Can a machine be both?</div>
+    <div class="qa-a">
+      <p><strong>Client</strong> = initiates request. <strong>Server</strong> = listens and responds. These are <em>roles</em>, not machines. A machine can absolutely be both. A Node.js backend receives browser requests (server) while calling PostgreSQL and Redis (client). In microservices, <em>every</em> service plays both roles.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: Why is HTTP "stateless"? How do we add state?</div>
+    <div class="qa-a">
+      <p>HTTP is stateless: each request is independent. Server doesn't inherently remember previous requests. State is added via: <strong>(1) Cookies</strong> — server sends Set-Cookie, browser includes it in subsequent requests. <strong>(2) Session IDs</strong> — cookie holds a session ID, server looks up state in Redis/DB. <strong>(3) JWT tokens</strong> — self-contained tokens in Authorization header. <strong>(4) URL params</strong> (fragile, security risk). <strong>(5) Hidden form fields</strong>.</p>
+      <p>Tradeoff: stateless = easy to scale (any server handles any request) but harder to personalize. Stateful = richer experience but scaling/consistency challenges.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: How would you handle 1 million concurrent connections?</div>
+    <div class="qa-a">
+      <p><strong>Single server:</strong> Event-driven, non-blocking I/O (Node.js, Nginx) over thread-per-connection. One server can handle ~100K+ connections with epoll/kqueue.</p>
+      <p><strong>Horizontal scaling:</strong> Load balancer in front of 10+ servers. Health checks route away from failures.</p>
+      <p><strong>Connection management:</strong> Aggressive idle timeouts, HTTP/2 multiplexing, WebSocket only when push is genuinely needed.</p>
+      <p><strong>Architecture:</strong> Separate stateless API servers (easy to scale) from stateful WebSocket servers. Externalize state. Multi-AZ deployment. CDN offloads static content.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: Server processes request but response is lost. Now what?</div>
+    <div class="qa-a">
+      <p>Client times out, retries. If non-idempotent ("transfer $100"), money transfers twice. Solutions: <strong>(1) Idempotency keys</strong> — unique key per operation, server deduplicates. Stripe uses this. <strong>(2) At-most-once</strong> — don't retry, accept silent failures. <strong>(3) Exactly-once semantics</strong> via at-least-once + server-side dedup log.</p>
+      <p>Deep insight: <strong>exactly-once delivery is impossible at the network level.</strong> You simulate it with at-least-once + idempotent processing.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: Long Polling vs WebSockets vs Server-Sent Events?</div>
+    <div class="qa-a">
+      <p><strong>Long Polling:</strong> Client sends HTTP request, server holds it open until data arrives, responds, client immediately re-requests. Works everywhere but high overhead.</p>
+      <p><strong>SSE:</strong> Single HTTP connection, server pushes text events. Unidirectional (server→client). Auto-reconnect, works with HTTP/2. Text only.</p>
+      <p><strong>WebSocket:</strong> Full-duplex binary channel after HTTP upgrade. Lowest latency, bidirectional. More complex, harder to scale (persistent connections).</p>
+      <p><strong>When:</strong> Chat → WebSocket. Live dashboards → SSE. Legacy compat → Long Polling.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q7: Why do we need load balancers?</div>
+    <div class="qa-a">
+      <p>Single server has finite resources. Load balancer distributes requests across server pool. Algorithms: round-robin, least connections, weighted, IP hash (sticky sessions).</p>
+      <p><strong>L4 vs L7:</strong> Layer 4 = TCP level (fast, can't inspect HTTP). Layer 7 = HTTP level (route by URL, headers, cookies — more flexible, slightly slower).</p>
+      <p>Also provides: health checking, SSL termination, DDoS protection.</p>
+    </div>
+  </div>
+</section>
+
+<!-- SECTION 12 -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Client initiates, server responds. These are roles, not machines.<br>
+    <strong>2.</strong> Communication happens over a network using a protocol (usually HTTP over TCP/IP).<br>
+    <strong>3.</strong> DNS translates domains to IPs. IP + Port = Socket (endpoint).<br>
+    <strong>4.</strong> TCP provides reliable delivery (3-way handshake). UDP is faster but unreliable.<br>
+    <strong>5.</strong> HTTPS = HTTP + TLS encryption. TLS adds ~1-2 RTTs on first connection.<br>
+    <strong>6.</strong> HTTP is stateless. State is added via cookies, sessions, or tokens.<br>
+    <strong>7.</strong> A machine can be both client and server. Microservices live on this principle.<br>
+    <strong>8.</strong> Stateless servers scale horizontally. Stateful servers need shared stores or sticky sessions.<br>
+    <strong>9.</strong> Networks fail. Design for it: retries with backoff, idempotency keys, circuit breakers.<br>
+    <strong>10.</strong> Real systems use multiple client-server layers (browser → your API → Stripe → Visa).</p>
+  </div>
+</section>
+
+<!-- MENTAL MODEL -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Request Lifecycle Under Stress</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs><marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker></defs>
+      <!-- Client -->
+      <rect x="20" y="50" width="100" height="50" rx="8" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="70" y="80" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#60a5fa" font-weight="600">Client</text>
+      <!-- DNS -->
+      <rect x="170" y="10" width="90" height="36" rx="6" fill="#222734" stroke="#a78bfa" stroke-width="1"/>
+      <text x="215" y="33" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#a78bfa">DNS</text>
+      <path d="M120 62 L170 30" stroke="#a78bfa" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ma)"/>
+      <!-- Internet -->
+      <ellipse cx="310" cy="75" rx="70" ry="35" fill="none" stroke="#6ee7b7" stroke-width="1" stroke-dasharray="5 3"/>
+      <text x="310" y="80" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6ee7b7">Network</text>
+      <path d="M120 75 L240 75" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma)"/>
+      <text x="180" y="68" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">request →</text>
+      <!-- Server -->
+      <rect x="430" y="50" width="110" height="50" rx="8" fill="#222734" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="485" y="80" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#fb923c" font-weight="600">Server</text>
+      <path d="M380 75 L430 75" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma)"/>
+      <!-- DB -->
+      <rect x="600" y="50" width="100" height="50" rx="8" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="650" y="80" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">Database</text>
+      <path d="M540 75 L600 75" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <!-- Response -->
+      <path d="M430 96 C370 118, 245 118, 120 103" stroke="#6ee7b7" stroke-width="1" stroke-dasharray="5 3" marker-end="url(#ma)"/>
+      <text x="275" y="122" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">response</text>
+      <!-- Pressure annotations -->
+      <rect x="20" y="170" width="700" height="150" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
+      <text x="40" y="195" font-family="IBM Plex Mono,monospace" font-size="11" fill="#f87171" font-weight="600">WHERE THINGS BREAK UNDER LOAD</text>
+      <text x="40" y="220" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ DNS: cached result stale after IP change → requests to wrong server (TTL gotcha)</text>
+      <text x="40" y="242" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ Network: 1000s of concurrent connections → TCP backlog full → connection refused</text>
+      <text x="40" y="264" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ Server: thread pool exhausted → requests queue → latency spikes → timeouts</text>
+      <text x="40" y="286" font-family="DM Sans,sans-serif" font-size="12" fill="#fb923c">▸ Database: the usual bottleneck. Slow queries → connection pool exhausted → everything stalls</text>
+      <text x="40" y="308" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">▸ Response lost: client retries non-idempotent request → duplicate operation (needs idempotency keys)</text>
+    </svg>
+    <div class="diagram-caption">Client-Server request lifecycle with failure pressure points annotated</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Every client-server interaction is a chain of handoffs, and the system breaks at its weakest link.</strong> Under load, pressure cascades backward: the database slows down → server connections pile up → client sees timeouts. Most real-world outages trace back to an overwhelmed resource at the end of the chain — almost always the database.</p>
+  </div>
+</section>
+
+<!-- REFERENCES -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References & Further Reading</h2>
+  <p>Primary sources cited throughout this document. Each is broken down into digestible takeaways.</p>
+
+  <div id="ref1" class="callout blue" style="margin-top: 28px;">
+    <div class="callout-label">[1] RFC 2616 — Hypertext Transfer Protocol — HTTP/1.1</div>
+    <p><strong>Fielding, R., et al.</strong> "Hypertext Transfer Protocol — HTTP/1.1." IETF, June 1999. (Obsoleted by RFCs 7230–7235.)<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc2616" style="color:var(--blue);" target="_blank">https://datatracker.ietf.org/doc/html/rfc2616</a></p>
+    <p>• Defines the request-response model that underpins every web client-server interaction — methods, headers, status codes, and connection management.</p>
+    <p>• Establishes HTTP as a <strong>stateless</strong> protocol: each request is independent, with no inherent memory of prior requests.</p>
+    <p>• Introduces the <code class="inline">Connection: keep-alive</code> mechanism that lets TCP connections be reused across multiple request-response cycles.</p>
+    <p>• Formalizes the concept of <strong>content negotiation</strong> — the client tells the server what formats it can accept; the server picks the best match.</p>
+    <p>• Later superseded by the RFC 723x series (2014), which decomposed the monolithic spec into modular parts for easier evolution.</p>
+  </div>
+
+  <div id="ref2" class="callout green">
+    <div class="callout-label">[2] Saltzer, Reed & Clark — "End-to-End Arguments in System Design" (1984)</div>
+    <p><strong>J.H. Saltzer, D.P. Reed, D.D. Clark.</strong> ACM Transactions on Computer Systems, Vol. 2, No. 4, Nov 1984, pp. 277–288.<br>
+    <a href="https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf" style="color:var(--accent);" target="_blank">https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf</a></p>
+    <p>• The foundational design principle of the internet: functions should be implemented at the <strong>endpoints</strong> (application layer), not in the network core.</p>
+    <p>• Explains why IP is deliberately "dumb" (best-effort) and TCP adds reliability at the endpoints — pushing complexity to the edges where applications have full context.</p>
+    <p>• Directly explains the client-server split: the <strong>client and server are the "ends"</strong> that negotiate correctness. The network in between just moves packets.</p>
+    <p>• Argues that lower-level reliability (in the network) is useful as a <strong>performance optimization</strong> but can never <em>replace</em> application-level checks.</p>
+    <p>• One of the most cited papers in computer science — understanding it deeply gives you a mental model for <em>every</em> architectural layering decision.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] RFC 793 — Transmission Control Protocol (1981)</div>
+    <p><strong>Postel, J.</strong> "Transmission Control Protocol." IETF, September 1981. (Obsoleted by RFC 9293, August 2022.)<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc793" style="color:var(--orange);" target="_blank">https://datatracker.ietf.org/doc/html/rfc793</a></p>
+    <p>• The original specification for TCP — the reliable transport protocol that makes the client-server model practical over unreliable IP networks.</p>
+    <p>• Defines the 3-way handshake (SYN → SYN-ACK → ACK) that establishes every TCP connection between client and server.</p>
+    <p>• Introduces <strong>sequence numbers, acknowledgments, and retransmission</strong> — the mechanisms that guarantee ordered, reliable delivery.</p>
+    <p>• Defines <strong>sockets</strong> (IP + port) as connection endpoints — the fundamental abstraction that client-server programming is built on.</p>
+    <p>• Superseded by RFC 9293 (2022), which consolidates 40 years of TCP updates into a single modern spec.</p>
+  </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] Fielding — "Architectural Styles and the Design of Network-based Software Architectures" (2000)</div>
+    <p><strong>Roy Thomas Fielding.</strong> Doctoral Dissertation, University of California, Irvine, 2000.<br>
+    <a href="https://ics.uci.edu/~fielding/pubs/dissertation/top.htm" style="color:var(--purple);" target="_blank">https://ics.uci.edu/~fielding/pubs/dissertation/top.htm</a></p>
+    <p>• The dissertation that coined <strong>REST</strong> (Representational State Transfer) — the architectural style that dominates modern web APIs.</p>
+    <p>• Chapter 3 catalogues network-based architectural styles, including <strong>client-server</strong> as a foundational pattern with explicit separation of concerns.</p>
+    <p>• Argues that the client-server constraint improves <strong>portability</strong> (clients can be simple) and <strong>scalability</strong> (servers can evolve independently).</p>
+    <p>• Introduces the <strong>uniform interface</strong> constraint — the idea that standardized methods (GET, POST, PUT, DELETE) and resource identifiers (URLs) decouple clients from servers.</p>
+    <p>• Essential reading for understanding why modern APIs look the way they do and why REST succeeded over alternatives like SOAP and XML-RPC.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+</body>
+</html>
