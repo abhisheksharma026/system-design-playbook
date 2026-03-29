@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+import re
 import shutil
 from html import escape
 
 from site_utils import discover_pages, repo_root
 
 
+TOPIC_NUMBER_RE = re.compile(r"Topic\s+(\d+)", re.IGNORECASE)
+
+
+def topic_number_from_source(path: str) -> int | None:
+    match = TOPIC_NUMBER_RE.search(path)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
 def build_index(pages: list[dict[str, str]]) -> str:
-    cards = "\n".join(
+    topic_rows = "\n".join(
         f"""
-        <a class="card" href="{escape(page["href"])}">
-          <h2>{escape(page["title"])}</h2>
-          <p>{escape(page["description"])}</p>
-        </a>
+        <li class="topic-item">
+          <a class="topic-link" href="{escape(page["href"])}">
+            <span class="topic-num">{escape(page["label"])}</span>
+            <span class="topic-main">
+              <span class="topic-title">{escape(page["title"])}</span>
+              <span class="topic-desc">{escape(page["description"])}</span>
+            </span>
+          </a>
+        </li>
         """.strip()
         for page in pages
     )
@@ -30,20 +46,18 @@ def build_index(pages: list[dict[str, str]]) -> str:
   <main>
     <section class="hero">
       <p class="eyebrow">System Design Playbook</p>
-      <h1>Study one topic at a time.</h1>
-      <p>
-        Clear, visual notes on core system design concepts. Start with the fundamentals,
-        build stronger mental models, and move from one topic to the next without getting
-        lost in jargon.
-      </p>
-      <div class="meta">
-        <span>{len(pages)} published topics</span>
-        <span>Visual deep dives</span>
-        <span>Open access</span>
-      </div>
+      <h1>Build system design fundamentals.</h1>
     </section>
-    <section class="grid">
-      {cards}
+
+    <section class="index-shell">
+      <div class="index-copy">
+        <p class="section-kicker">Learning Path</p>
+        <h2>Start at the foundation, then layer on complexity.</h2>
+      </div>
+
+      <ol class="topic-list">
+        {topic_rows}
+      </ol>
     </section>
   </main>
 </body>
@@ -54,7 +68,11 @@ def build_index(pages: list[dict[str, str]]) -> str:
 def main() -> int:
     root = repo_root()
     dist = root / "dist"
-    pages = discover_pages(root)
+    pages = [
+        page
+        for page in discover_pages(root)
+        if page.relative_path.parts and page.relative_path.parts[0] == "topics"
+    ]
 
     if dist.exists():
         shutil.rmtree(dist)
@@ -79,10 +97,22 @@ def main() -> int:
                 "href": href,
                 "title": page.h1 or page.title,
                 "description": page.description or page.title,
+                "order": topic_number_from_source(page.source_path.read_text(encoding="utf-8")),
+                "label": "--",
             }
         )
 
-    page_cards.sort(key=lambda item: item["title"].lower())
+    page_cards.sort(
+        key=lambda item: (
+            item["order"] is None,
+            item["order"] if item["order"] is not None else 999,
+            item["title"].lower(),
+        )
+    )
+    for index, item in enumerate(page_cards, start=1):
+        number = item["order"] if item["order"] is not None else index
+        item["label"] = f"{number:02d}"
+
     (dist / "index.html").write_text(build_index(page_cards), encoding="utf-8")
     print(f"Built site into {dist}")
     return 0
