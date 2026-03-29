@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Storage</title>
+<meta name="description" content="A system design guide to the storage hierarchy, persistence, RAM, SSDs, HDDs, and database durability tradeoffs.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals · Topic 03</div>
+  <h1><span>Storage</span></h1>
+  <p class="hero-sub">Where data lives when the power goes out — and where it lives when speed is everything. Understanding the storage hierarchy is the foundation of every database, cache, and distributed system decision you'll ever make.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms</a></li>
+    <li><a href="#s1">Why Storage Matters in System Design</a></li>
+    <li><a href="#s2">The Storage Hierarchy</a></li>
+    <li><a href="#s3">Memory (RAM) — Deep Dive</a></li>
+    <li><a href="#s4">Disk — HDD vs SSD</a></li>
+    <li><a href="#s5">Persistence vs Volatility</a></li>
+    <li><a href="#s6">How Databases Use Storage</a></li>
+    <li><a href="#s7">Memory Map — What Lives Where in RAM</a></li>
+    <li><a href="#s8">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s9">Mini-Project: Memory vs Disk Store</a></li>
+    <li><a href="#s10">Production Example 1: Redis</a></li>
+    <li><a href="#s11">Production Example 2: PostgreSQL</a></li>
+    <li><a href="#s12">Edge Cases & Gotchas</a></li>
+    <li><a href="#s13">Interview Questions & Answers</a></li>
+    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References & Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Key Terms</h2>
+
+  <h3>Databases</h3>
+  <p>At their core, databases are specialized programs built to do two things: <strong>record</strong> data (writes) and <strong>query</strong> data (reads). They run as long-lived server processes that your application talks to over the network — typically via TCP-based protocols or HTTP APIs.</p>
+  <p>Some databases operate entirely in memory (like Redis or Memcached), and their users accept that all stored data can vanish if the process or machine dies. Most databases, however, need <strong>persistence</strong> — the guarantee that your data survives crashes. This requires writing to disk, since anything on disk remains intact through power failures and machine restarts.</p>
+  <p>In production environments where machines regularly fail, databases use dedicated disk partitions or network-attached volumes that can be recovered and re-mounted even if the original machine is permanently destroyed.</p>
+
+  <h3>Disk</h3>
+  <p>Refers to <strong>non-volatile storage</strong> — either <strong>HDD (hard-disk drive)</strong> or <strong>SSD (solid-state drive)</strong>. The defining property: data written to disk survives power failures and machine crashes.</p>
+  <p>SSDs offer dramatically faster read/write speeds than HDDs (particularly for random access) but cost significantly more per gigabyte. The practical result: HDDs are used for infrequently accessed, long-retention data (archives, backups), while SSDs serve frequently accessed, latency-sensitive data (active databases, caches-on-disk).</p>
+
+  <h3>Memory</h3>
+  <p>Short for <strong>Random Access Memory (RAM)</strong>. The defining property: data stored in memory is <strong>volatile</strong> — it disappears the moment the process writing it terminates or the machine loses power. What makes RAM invaluable is its speed: ~1,000× faster than SSD for random access.</p>
+
+  <h3>Persistent Storage</h3>
+  <p>Any storage medium that retains data even when the process managing it crashes or the machine powers down. Usually this means disk (HDD or SSD), but it also encompasses network-attached storage, object stores (S3, GCS), and replicated volumes in cloud environments.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>Why Storage Matters in System Design</h2>
+
+  <p>Every system design interview eventually comes down to this question: <strong>where does the data live?</strong> The answer determines your system's speed, cost, durability, and failure behavior. Choose wrong and you're either losing data or burning money — often both.</p>
+
+  <p>Storage is the bridge between <strong>computation</strong> (what the CPU does) and <strong>persistence</strong> (what survives when the power goes out). The fundamental tension is simple: <strong>fast storage is expensive and volatile</strong> (RAM), <strong>cheap storage is slow and persistent</strong> (HDD). Every system design decision in databases, caching, and data pipelines is navigating this tradeoff.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>Think of storage like a kitchen. Your <strong>countertop</strong> (RAM) is where you actively work — fast access, limited space, and everything gets cleared when you leave. Your <strong>refrigerator</strong> (SSD) keeps things fresh and accessible for longer. Your <strong>basement freezer</strong> (HDD) stores large quantities cheaply but takes time to get to. Your <strong>off-site warehouse</strong> (tape/cold storage) holds archives you rarely need. A well-designed kitchen uses all of them — not just one.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>The Storage Hierarchy</h2>
+
+  <p>Modern computers have a layered storage hierarchy. As you move down, capacity increases but speed decreases dramatically. The numbers below are approximate for 2024-era hardware. <a href="#ref1" class="ref">[1]</a></p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Level</th><th>Medium</th><th>Latency</th><th>Throughput</th><th>Capacity</th><th>Cost/GB</th><th>Volatile?</th></tr></thead>
+      <tbody>
+        <tr><td><strong>L1 Cache</strong></td><td>SRAM</td><td><code>~1 ns</code></td><td>TB/s</td><td>64 KB</td><td>$$$$</td><td>Yes</td></tr>
+        <tr><td><strong>L2 Cache</strong></td><td>SRAM</td><td><code>~4 ns</code></td><td>TB/s</td><td>256 KB–1 MB</td><td>$$$$</td><td>Yes</td></tr>
+        <tr><td><strong>L3 Cache</strong></td><td>SRAM</td><td><code>~10 ns</code></td><td>~500 GB/s</td><td>8–64 MB</td><td>$$$</td><td>Yes</td></tr>
+        <tr><td><strong>RAM</strong></td><td>DRAM</td><td><code>~100 ns</code></td><td>~50 GB/s</td><td>16–512 GB</td><td>~$3/GB</td><td>Yes</td></tr>
+        <tr><td><strong>SSD</strong></td><td>NAND Flash</td><td><code>~100 µs</code></td><td>~3.5 GB/s (NVMe)</td><td>1–8 TB</td><td>~$0.08/GB</td><td>No</td></tr>
+        <tr><td><strong>HDD</strong></td><td>Magnetic platter</td><td><code>~5 ms</code></td><td>~200 MB/s</td><td>4–20 TB</td><td>~$0.02/GB</td><td>No</td></tr>
+        <tr><td><strong>Network</strong></td><td>Remote storage</td><td><code>~1–100 ms</code></td><td>~1–10 Gbps</td><td>Unlimited</td><td>Varies</td><td>No</td></tr>
+        <tr><td><strong>Tape / Cold</strong></td><td>Magnetic tape</td><td><code>~seconds</code></td><td>~300 MB/s seq</td><td>Petabytes</td><td>~$0.004/GB</td><td>No</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 780 420" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs><marker id="ad" markerWidth="7" markerHeight="5" refX="3.5" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#5c6580"/></marker></defs>
+      <!-- Pyramid -->
+      <polygon points="390,20 160,380 620,380" fill="none" stroke="var(--border-accent)" stroke-width="1.5"/>
+      <!-- Tier lines -->
+      <line x1="244" y1="118" x2="536" y2="118" stroke="var(--border)" stroke-width="1" stroke-dasharray="4 3"/>
+      <line x1="250" y1="155" x2="530" y2="155" stroke="var(--border)" stroke-width="1" stroke-dasharray="4 3"/>
+      <line x1="278" y1="200" x2="502" y2="200" stroke="var(--border)" stroke-width="1" stroke-dasharray="4 3"/>
+      <line x1="305" y1="255" x2="475" y2="255" stroke="var(--border)" stroke-width="1" stroke-dasharray="4 3"/>
+      <line x1="332" y1="310" x2="448" y2="310" stroke="var(--border)" stroke-width="1" stroke-dasharray="4 3"/>
+      <!-- Labels inside -->
+      <text x="390" y="70" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#f87171" font-weight="600">REGISTERS</text>
+      <text x="390" y="94" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#fb923c" font-weight="600">CPU CACHES</text>
+      <text x="390" y="107" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#fb923c" font-weight="600">(L1/L2/L3)</text>
+      <text x="390" y="142" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="14" fill="#fbbf24" font-weight="600">RAM (DRAM)</text>
+      <text x="390" y="156" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">~100 ns · 50 GB/s · volatile</text>
+      <text x="390" y="183" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="14" fill="#6ee7b7" font-weight="600">SSD (NAND Flash)</text>
+      <text x="390" y="197" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">~100 µs · 3.5 GB/s · persistent</text>
+      <text x="390" y="238" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="14" fill="#60a5fa" font-weight="600">HDD (Magnetic Disk)</text>
+      <text x="390" y="252" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">~5 ms · 200 MB/s · persistent</text>
+      <text x="390" y="293" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="14" fill="#93c5fd" font-weight="600">Network / Remote Storage</text>
+      <text x="390" y="307" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">~1–100 ms · shared / remote · persistent</text>
+      <text x="390" y="348" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="14" fill="#a78bfa" font-weight="600">Cold / Archival Storage</text>
+      <text x="390" y="362" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">seconds to hours · cheapest · archival</text>
+      <!-- Side labels -->
+      <text x="170" y="205" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">UP THE PYRAMID</text>
+      <text x="170" y="223" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">faster</text>
+      <text x="170" y="238" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">smaller</text>
+      <text x="170" y="253" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">costlier</text>
+      <text x="610" y="205" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#60a5fa">DOWN THE PYRAMID</text>
+      <text x="610" y="223" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#60a5fa">slower</text>
+      <text x="610" y="238" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#60a5fa">bigger</text>
+      <text x="610" y="253" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#60a5fa">cheaper</text>
+    </svg>
+    <div class="diagram-caption">The storage hierarchy pyramid — speed vs capacity tradeoff</div>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">The Latency Gap Is Enormous</div>
+    <p>RAM is <strong>~1,000× faster</strong> than SSD for random reads. SSD is <strong>~50× faster</strong> than HDD. If RAM access were 1 second, SSD would be <strong>17 minutes</strong>, and HDD would be <strong>14 hours</strong>. This is why caching exists — moving hot data up the hierarchy saves orders of magnitude in latency. It's also why Jim Gray's "Five-Minute Rule" <a href="#ref2" class="ref">[2]</a> remains one of the most important heuristics in storage engineering.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3: RAM ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Memory (RAM) — Deep Dive</h2>
+
+  <p><strong>RAM (Random Access Memory)</strong> is where the CPU does its active work. Every running program, every variable, every data structure, every cache entry — all in RAM. The "random access" means any byte can be read in the same amount of time (~100ns), regardless of its location. This is in contrast to HDD where the read head must physically seek to the right position.</p>
+
+  <h3>Key Properties</h3>
+  <p><strong>Volatile:</strong> RAM loses all data when power is lost. Kill the process → data gone. Reboot the machine → data gone. This is the defining characteristic that separates memory from persistent storage.</p>
+  <p><strong>Byte-addressable:</strong> You can read or write any individual byte. No need to read a whole "block" or "page" (though CPU caches do operate in cache lines of 64 bytes).</p>
+  <p><strong>Uniform access time:</strong> ~100ns for any address. This makes hash tables, trees, and random data structures practical. On HDD, random access is catastrophically slow.</p>
+  <p><strong>Limited capacity:</strong> Typical servers have 64–512 GB of RAM. Large memory-optimized machines can reach multiple terabytes of RAM, but disk capacity still scales much farther and much more cheaply.</p>
+
+  <h3>What Lives in RAM</h3>
+  <p>Your application's <strong>heap and stack</strong> (variables, objects, function calls), the OS <strong>page cache</strong> (recently read disk blocks), database <strong>buffer pools</strong> (hot table pages), cache layers (<strong>Redis, Memcached</strong> — entirely in-memory), and the <strong>kernel's network buffers</strong> (TCP send/receive windows).</p>
+
+  <div class="callout blue">
+    <div class="callout-label">Why Not Just Put Everything in RAM?</div>
+    <p>Cost. DRAM is still orders of magnitude more expensive per gigabyte than HDD, and materially more expensive than SSD. Plus RAM is volatile — you'd lose everything on a power failure. The engineering challenge is figuring out <em>which</em> data should be in RAM (hot, frequently accessed) and which can stay on disk (cold, rarely accessed). This is exactly what the Five-Minute Rule <a href="#ref2" class="ref">[2]</a> quantifies.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4: DISK ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Disk — HDD vs SSD</h2>
+
+  <h3>HDD (Hard Disk Drive)</h3>
+  <p>A spinning magnetic platter with a read/write head that physically moves to the correct position. <strong>Sequential reads</strong> are fast (~200 MB/s) because the head just follows the track. <strong>Random reads</strong> are slow (~5ms per seek) because the head must physically reposition. This mechanical limitation makes HDDs 50,000× slower than RAM for random reads.</p>
+  <p><strong>Best for:</strong> Cold data, backups, data lakes, log archives — anything that's written once and read sequentially (or rarely).</p>
+
+  <h3>SSD (Solid-State Drive)</h3>
+  <p>No moving parts. Uses NAND flash memory cells that can be read electronically. Random reads are ~100µs (50× faster than HDD). Sequential reads reach 3.5+ GB/s on NVMe. However, SSDs have a <strong>write amplification</strong> problem and limited write endurance (each cell can only be written ~3,000–100,000 times depending on the type).</p>
+  <p><strong>Best for:</strong> Database data files, frequently accessed data, write-ahead logs, OLTP workloads — anything with random access patterns.</p>
+
+  <h3>The Critical Difference: Random vs Sequential</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Operation</th><th>RAM</th><th>SSD (NVMe)</th><th>HDD</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Random Read (4KB)</strong></td><td><code>~100 ns</code></td><td><code>~100 µs</code></td><td><code>~5 ms</code></td></tr>
+        <tr><td><strong>Sequential Read (1MB)</strong></td><td><code>~20 µs</code></td><td><code>~0.3 ms</code></td><td><code>~5 ms</code></td></tr>
+        <tr><td><strong>Random Write (4KB)</strong></td><td><code>~100 ns</code></td><td><code>~20 µs</code></td><td><code>~5 ms</code></td></tr>
+        <tr><td><strong>Sequential Write (1MB)</strong></td><td><code>~20 µs</code></td><td><code>~0.3 ms</code></td><td><code>~5 ms</code></td></tr>
+        <tr><td><strong>IOPS (random 4KB)</strong></td><td>Millions</td><td>~500K–1M</td><td>~100–200</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Interview Insight — IOPS Matters More Than Throughput</div>
+    <p>When designing database storage, <strong>IOPS (I/O Operations Per Second)</strong> matters more than raw throughput for OLTP workloads. An HDD does ~150 random IOPS. An NVMe SSD does ~500,000. That's a 3,000× difference. This is why databases moved from HDD to SSD — not for the bandwidth, but for the random access performance. When you hear "the database is slow," the first question is often: "is it on SSD or HDD?"</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5: PERSISTENCE ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Persistence vs Volatility</h2>
+
+  <p>This is the core concept of storage in system design: <strong>volatile storage</strong> (RAM) is fast but loses data on failure. <strong>Persistent storage</strong> (disk) is slower but survives failures. The tension between these two defines how every database and storage system is built.</p>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 780 320" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="aw" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#e2e6f0"/></marker>
+        <marker id="ag" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
+        <marker id="ar" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#f87171"/></marker>
+      </defs>
+      <!-- Incoming write -->
+      <rect x="40" y="120" width="120" height="44" rx="8" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="100" y="148" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#60a5fa" font-weight="600">WRITE request</text>
+      <path d="M160 142 L238 142" stroke="#e2e6f0" stroke-width="1.6" marker-end="url(#aw)"/>
+
+      <!-- Split node -->
+      <circle cx="250" cy="142" r="10" fill="#1a1f2b" stroke="#5c6580" stroke-width="1.2"/>
+      <path d="M260 142 L310 92" stroke="#e2e6f0" stroke-width="1.4" marker-end="url(#aw)"/>
+      <path d="M260 142 L310 192" stroke="#e2e6f0" stroke-width="1.4" marker-end="url(#aw)"/>
+
+      <!-- RAM path -->
+      <rect x="320" y="58" width="170" height="70" rx="10" fill="#222734" stroke="#6ee7b7" stroke-width="1.7"/>
+      <text x="405" y="84" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="14" fill="#6ee7b7" font-weight="600">Memory / Page Cache</text>
+      <text x="405" y="104" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">fast write acknowledged</text>
+      <text x="405" y="118" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">volatile until flushed</text>
+      <path d="M405 128 L405 160" stroke="#f87171" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+      <text x="474" y="149" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">crash / power loss</text>
+      <text x="405" y="182" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171" font-weight="600">data can disappear</text>
+
+      <!-- Disk path -->
+      <rect x="320" y="194" width="170" height="70" rx="10" fill="#222734" stroke="#fbbf24" stroke-width="1.7"/>
+      <text x="405" y="220" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="14" fill="#fbbf24" font-weight="600">Disk / Durable Storage</text>
+      <text x="405" y="240" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">fsync / flush completed</text>
+      <text x="405" y="254" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">slower, but survives restart</text>
+      <path d="M490 229 L560 229" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#ag)"/>
+      <text x="632" y="222" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">after restart</text>
+      <text x="632" y="242" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#6ee7b7" font-weight="600">data still present</text>
+
+      <!-- Contrast labels -->
+      <text x="110" y="290" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">VOLATILE PATH</text>
+      <text x="405" y="290" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#fbbf24">PERSISTENT PATH</text>
+    </svg>
+    <div class="diagram-caption">The same write can be fast-but-volatile in memory, or slower-but-durable once it is flushed to persistent storage</div>
+  </div>
+
+  <h3>The Durability Spectrum</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Storage</th><th>Survives Process Crash?</th><th>Survives Power Loss?</th><th>Survives Disk Failure?</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><strong>In-process memory</strong></td><td>No</td><td>No</td><td>No</td><td>Python dict, HashMap</td></tr>
+        <tr><td><strong>External memory store</strong></td><td>Yes (if separate process)</td><td>No</td><td>No</td><td>Redis (default), Memcached</td></tr>
+        <tr><td><strong>Single-disk persistence</strong></td><td>Yes</td><td>Yes</td><td>No</td><td>SQLite, single-node Postgres</td></tr>
+        <tr><td><strong>Replicated storage</strong></td><td>Yes</td><td>Yes</td><td>Yes</td><td>Postgres with replicas, S3, GCS</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">The fsync() Gotcha</div>
+    <p>Writing to a file doesn't mean the data is on disk. The OS buffers writes in the <strong>page cache</strong> (RAM) and flushes to disk asynchronously. If the machine crashes before the flush, your "written" data is lost. To guarantee persistence, you must call <code class="inline">fsync()</code> (or <code class="inline">fdatasync()</code>), which forces the OS to flush the buffer to physical storage. Databases like PostgreSQL call fsync on every transaction commit — that's what makes ACID durable. <a href="#ref3" class="ref">[3]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 6: DATABASES ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>How Databases Use Storage</h2>
+
+  <p>Databases are the most important consumers of storage in system design. Understanding how they use RAM and disk is essential. Most databases use a <strong>hybrid approach</strong> — keeping hot data in memory for speed while persisting everything to disk for durability.</p>
+
+  <h3>The Write Path (simplified)</h3>
+  <div class="code-block">
+    <div class="code-header"><span>What happens when you INSERT a row</span></div>
+    <pre><span class="cm">1.</span> Client sends: <span class="str">INSERT INTO users (name) VALUES ('Alice')</span>
+
+<span class="cm">2.</span> <span class="b">WAL (Write-Ahead Log)</span> — write to sequential log on disk
+   <span class="cm">→ This is an APPEND to a file = sequential I/O = fast even on HDD</span>
+   <span class="cm">→ fsync() to guarantee durability</span>
+   <span class="cm">→ If machine crashes, WAL is replayed on restart</span>
+
+<span class="cm">3.</span> <span class="b">Buffer Pool</span> — update the in-memory page
+   <span class="cm">→ The actual table page is modified in RAM (not yet on disk)</span>
+   <span class="cm">→ This "dirty page" will be flushed to disk later (checkpoint)</span>
+
+<span class="cm">4.</span> <span class="b">Acknowledge</span> to client: "Commit OK"
+   <span class="cm">→ The data is durable (WAL is on disk) even though the table</span>
+   <span class="cm">   data file hasn't been updated yet</span>
+
+<span class="cm">5.</span> <span class="b">Background checkpoint</span> — eventually flush dirty pages to data files
+   <span class="cm">→ This is random I/O to disk (slower), but happens asynchronously</span></pre>
+  </div>
+
+  <h3>The Read Path (simplified)</h3>
+  <div class="code-block">
+    <div class="code-header"><span>What happens when you SELECT</span></div>
+    <pre><span class="cm">1.</span> Client sends: <span class="str">SELECT * FROM users WHERE id = 42</span>
+
+<span class="cm">2.</span> <span class="b">Buffer Pool check</span> — is the page in RAM?
+   <span class="cm">→ If YES: return from memory (~100ns) — "buffer hit"</span>
+   <span class="cm">→ If NO: read from disk (~100µs SSD, ~5ms HDD) — "buffer miss"</span>
+
+<span class="cm">3.</span> <span class="b">Disk read</span> (on buffer miss)
+   <span class="cm">→ Read the 8KB page from the data file</span>
+   <span class="cm">→ Load it into the buffer pool (evicting an old page if full)</span>
+   <span class="cm">→ Use LRU or clock-sweep eviction algorithm</span>
+
+<span class="cm">4.</span> <span class="b">Return</span> the row to the client</pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">The WAL Trick — Why Databases Are Fast</div>
+    <p>The <strong>Write-Ahead Log</strong> is the single most important storage optimization in databases. Instead of updating the table data file (random I/O, slow) on every write, the database appends to a sequential log (fast) and modifies the in-memory page. The data file is updated lazily in background checkpoints. This converts <strong>random writes → sequential writes</strong>, which is 100× faster on HDD and still 5-10× faster on SSD. WAL also enables crash recovery: replay the log to reconstruct any writes that weren't checkpointed. <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 7: MEMORY MAP ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Memory Map — What Lives Where</h2>
+
+  <div class="memory-map"><span class="h">SERVER MEMORY (RAM) — 64 GB example</span>
+<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
+<span class="d">│</span> <span class="b">OS Kernel</span>                                      <span class="num">~2 GB</span>        <span class="d">│</span>
+<span class="d">│</span>   Network buffers, page tables, filesystem cache              <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">OS Page Cache</span>                                   <span class="num">~20 GB</span>       <span class="d">│</span>
+<span class="d">│</span>   Recently read disk blocks cached by the OS                  <span class="d">│</span>
+<span class="d">│</span>   <span class="cm">→ This is why "free" memory looks low on Linux</span>              <span class="d">│</span>
+<span class="d">│</span>   <span class="cm">→ It's used, not wasted — will be reclaimed if needed</span>       <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">Database Buffer Pool</span> (e.g., PostgreSQL shared_buffers)       <span class="d">│</span>
+<span class="d">│</span>                                                <span class="num">~16 GB</span>       <span class="d">│</span>
+<span class="d">│</span>   Hot table pages, index pages, temp sort buffers             <span class="d">│</span>
+<span class="d">│</span>   <span class="cm">→ Managed by DB, not OS. LRU/clock eviction.</span>               <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">Application Heap</span>                                <span class="num">~8 GB</span>        <span class="d">│</span>
+<span class="d">│</span>   Your app server's objects, connection pools, request state   <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">Redis / Cache Layer</span>                             <span class="num">~16 GB</span>       <span class="d">│</span>
+<span class="d">│</span>   In-memory key-value store for session data, hot queries      <span class="d">│</span>
+<span class="d">│</span>   <span class="cm">→ All in RAM. Data lost if process restarts (by default).</span>    <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">Free / Available</span>                                <span class="num">~2 GB</span>        <span class="d">│</span>
+<span class="d">└──────────────────────────────────────────────────────────────┘</span>
+
+<span class="h">SERVER DISK (SSD) — 1 TB example</span>
+<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
+<span class="d">│</span> <span class="b">Database Data Files</span>          <span class="num">~400 GB</span>                          <span class="d">│</span>
+<span class="d">│</span>   Table data, indexes (B-trees), TOAST for large values       <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">WAL (Write-Ahead Log)</span>        <span class="num">~50 GB</span>                           <span class="d">│</span>
+<span class="d">│</span>   Sequential append-only log for crash recovery               <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">Application Logs</span>             <span class="num">~20 GB</span>                           <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">OS + Binaries</span>                <span class="num">~30 GB</span>                           <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">Free</span>                         <span class="num">~500 GB</span>                          <span class="d">│</span>
+<span class="d">└──────────────────────────────────────────────────────────────┘</span></div>
+</section>
+
+<!-- ============ SECTION 8: TERMINAL DEMOS ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Hands-On: Terminal Demos</h2>
+  <p>Exact output varies by OS, filesystem, drive type, and hardware. Where macOS and Linux differ, both variants are called out explicitly.</p>
+
+  <h3>Demo 1: Measure Disk vs Memory Speed</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Write speed: disk vs RAM-backed storage</span></div>
+    <pre><span class="cm"># Linux: write 1GB directly to disk (bypass page cache)</span>
+$ <span class="fn">dd</span> if=/dev/zero of=./testfile bs=1M count=1024 oflag=direct
+<span class="num">1073741824</span> bytes copied, <span class="num">0.98</span> s, <span class="str">1.1 GB/s</span>
+
+<span class="cm"># Linux: write 1GB to tmpfs (/dev/shm lives in RAM)</span>
+$ <span class="fn">dd</span> if=/dev/zero of=/dev/shm/testfile bs=1M count=1024
+<span class="num">1073741824</span> bytes copied, <span class="num">0.21</span> s, <span class="str">5.1 GB/s</span>
+
+<span class="cm"># macOS: create a 1GB RAM disk, then write to it</span>
+$ <span class="fn">diskutil</span> erasevolume HFS+ RAMDisk $(<span class="fn">hdiutil</span> attach -nomount ram://2097152)
+$ <span class="fn">dd</span> if=/dev/zero of=/Volumes/RAMDisk/testfile bs=1m count=1024
+
+<span class="cm"># RAM-backed storage is typically much faster than durable disk writes.</span>
+<span class="cm"># For random reads, the RAM-vs-disk gap is usually far larger.</span></pre>
+  </div>
+
+  <h3>Demo 2: See What's Using Your RAM</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Memory breakdown (macOS and Linux)</span></div>
+    <pre><span class="cm"># Linux: human-readable memory summary</span>
+$ <span class="fn">free</span> <span class="kw">-h</span>
+              total   used   free   shared  buff/cache  available
+Mem:          <span class="num">64Gi</span>    <span class="num">28Gi</span>   <span class="num">2Gi</span>    <span class="num">1.2Gi</span>  <span class="num">34Gi</span>        <span class="num">33Gi</span>
+Swap:         <span class="num">8Gi</span>     <span class="num">0B</span>     <span class="num">8Gi</span>
+
+<span class="cm"># macOS: VM statistics</span>
+$ <span class="fn">vm_stat</span>
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                <span class="num">9876</span>.
+Pages active:                            <span class="num">197893</span>.
+Pages inactive:                          <span class="num">196291</span>.
+Pages speculative:                         <span class="num">1149</span>.
+Pages wired down:                        <span class="num">142633</span>.
+
+<span class="cm"># Linux: "buff/cache" = OS page cache</span>
+<span class="cm"># macOS: inactive/file-backed pages often reflect reclaimable cache</span>
+<span class="cm"># In both cases, low "free" memory alone is not a problem.</span>
+
+<span class="cm"># Linux: see top memory consumers</span>
+$ <span class="fn">ps</span> aux --sort=<span class="kw">-rss</span> | head -5
+USER    PID   %MEM  RSS       COMMAND
+postgres 1234 25.0  <span class="num">16384000</span>  postgres: writer process
+redis    5678 12.5  <span class="num">8192000</span>   redis-server *:6379
+node     9012  3.1  <span class="num">2048000</span>   node server.js
+
+<span class="cm"># macOS: sort by RSS manually</span>
+$ <span class="fn">ps</span> aux | <span class="fn">sort</span> <span class="kw">-nrk</span> <span class="num">6</span> | <span class="fn">head</span> <span class="kw">-5</span></pre>
+  </div>
+
+  <h3>Demo 3: Watch Disk I/O in Real Time</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Monitor disk IOPS and latency</span></div>
+    <pre><span class="cm"># Linux: extended disk stats every second</span>
+$ <span class="fn">iostat</span> <span class="kw">-x</span> <span class="num">1</span>
+Device   r/s     w/s    rkB/s   wkB/s   await  %util
+nvme0n1  <span class="num">250</span>     <span class="num">1200</span>   <span class="num">4000</span>    <span class="num">19200</span>   <span class="num">0.15</span>   <span class="num">12%</span>
+
+<span class="cm"># macOS: disk throughput view every second</span>
+$ <span class="fn">iostat</span> <span class="num">1</span>
+          disk0           cpu
+    KB/t  tps  MB/s    us sy id
+   <span class="num">48.12</span>   <span class="num">73</span>  <span class="num">3.41</span>    <span class="num">7</span>  <span class="num">4</span> <span class="num">89</span>
+
+<span class="cm"># r/s = reads per second (IOPS)</span>
+<span class="cm"># w/s = writes per second (IOPS)</span>
+<span class="cm"># Linux exposes await and %util directly; macOS exposes throughput and tps</span>
+<span class="cm"># SSDs usually sit in the sub-millisecond to low-millisecond range</span>
+
+<span class="cm"># If latency stays in multi-millisecond territory, storage may be your bottleneck</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 9: MINI-PROJECT ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Mini-Project: Memory vs Disk Store</h2>
+
+  <p>Build a Python key-value store with two backends — one in-memory (dict) and one on-disk (files) — to viscerally feel the persistence and performance difference.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>kv_store.py — volatile vs persistent storage</span></div>
+    <pre><span class="kw">import</span> os, time
+<span class="kw">from</span> http.server <span class="kw">import</span> HTTPServer, BaseHTTPRequestHandler
+
+<span class="cm"># ── Two storage backends ──</span>
+memory_store = {}                <span class="cm"># Volatile: lives in RAM, dies with process</span>
+DISK_DIR = <span class="str">"/tmp/kv_disk_store"</span>  <span class="cm"># Persistent: survives process restarts</span>
+os.makedirs(DISK_DIR, exist_ok=<span class="num">True</span>)
+
+<span class="kw">def</span> <span class="fn">mem_set</span>(k, v): memory_store[k] = v
+<span class="kw">def</span> <span class="fn">mem_get</span>(k): <span class="kw">return</span> memory_store.get(k)
+
+<span class="kw">def</span> <span class="fn">disk_set</span>(k, v):
+    <span class="kw">with</span> open(f<span class="str">"{DISK_DIR}/{k}"</span>, <span class="str">"w"</span>) <span class="kw">as</span> f:
+        f.write(v)
+        f.flush()
+        os.<span class="fn">fsync</span>(f.fileno())  <span class="cm"># Force write to physical disk!</span>
+
+<span class="kw">def</span> <span class="fn">disk_get</span>(k):
+    <span class="kw">try</span>:
+        <span class="kw">with</span> open(f<span class="str">"{DISK_DIR}/{k}"</span>) <span class="kw">as</span> f: <span class="kw">return</span> f.read()
+    <span class="kw">except</span> FileNotFoundError: <span class="kw">return</span> <span class="num">None</span>
+
+<span class="kw">class</span> <span class="fn">Handler</span>(BaseHTTPRequestHandler):
+    <span class="kw">def</span> <span class="fn">do_POST</span>(self):
+        parts = self.path.strip(<span class="str">"/"</span>).split(<span class="str">"/"</span>)  <span class="cm"># /memory/mykey or /disk/mykey</span>
+        backend, key = parts[<span class="num">0</span>], parts[<span class="num">1</span>]
+        body = self.rfile.read(int(self.headers[<span class="str">'Content-Length'</span>])).decode()
+        t0 = time.perf_counter_ns()
+        <span class="kw">if</span> backend == <span class="str">"memory"</span>: mem_set(key, body)
+        <span class="kw">else</span>: disk_set(key, body)
+        elapsed = (time.perf_counter_ns() - t0) / <span class="num">1000</span>
+        self.send_response(<span class="num">200</span>)
+        self.end_headers()
+        self.wfile.write(f<span class="str">"SET {backend}/{key} in {elapsed:.1f}µs\n"</span>.encode())
+
+    <span class="kw">def</span> <span class="fn">do_GET</span>(self):
+        parts = self.path.strip(<span class="str">"/"</span>).split(<span class="str">"/"</span>)
+        backend, key = parts[<span class="num">0</span>], parts[<span class="num">1</span>]
+        t0 = time.perf_counter_ns()
+        val = mem_get(key) <span class="kw">if</span> backend == <span class="str">"memory"</span> <span class="kw">else</span> disk_get(key)
+        elapsed = (time.perf_counter_ns() - t0) / <span class="num">1000</span>
+        self.send_response(<span class="num">200</span>)
+        self.end_headers()
+        result = <span class="str">"null"</span> <span class="kw">if</span> val <span class="kw">is</span> <span class="num">None</span> <span class="kw">else</span> val
+        self.wfile.write(f<span class="str">"{result}  [{elapsed:.1f}µs]\n"</span>.encode())
+
+    <span class="kw">def</span> <span class="fn">log_message</span>(self, *a): <span class="kw">pass</span>
+
+print(<span class="str">"[KV Store] http://localhost:8888"</span>)
+print(<span class="str">"  POST /memory/:key  — store in RAM (volatile)"</span>)
+print(<span class="str">"  POST /disk/:key    — store on disk (persistent)"</span>)
+print(<span class="str">"  GET  /memory/:key  — read from RAM"</span>)
+print(<span class="str">"  GET  /disk/:key    — read from disk\n"</span>)
+HTTPServer((<span class="str">""</span>, <span class="num">8888</span>), Handler).serve_forever()</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Experiments to run</span></div>
+    <pre><span class="cm"># Start the server</span>
+$ <span class="fn">python3</span> kv_store.py
+
+<span class="cm"># Example output on a local machine. Exact timings vary by CPU, filesystem,</span>
+<span class="cm"># SSD/HDD choice, and whether the OS page cache is warm.</span>
+
+<span class="cm"># ── Experiment 1: Store data in both backends ──</span>
+$ <span class="fn">curl</span> <span class="kw">-X POST</span> <span class="str">localhost:8888/memory/greeting</span> <span class="kw">-d</span> <span class="str">"Hello from RAM"</span>
+<span class="v">SET memory/greeting in 2.1µs</span>
+
+$ <span class="fn">curl</span> <span class="kw">-X POST</span> <span class="str">localhost:8888/disk/greeting</span> <span class="kw">-d</span> <span class="str">"Hello from disk"</span>
+<span class="v">SET disk/greeting in 412.7µs</span>         <span class="cm">← often much slower because of fsync()</span>
+
+<span class="cm"># ── Experiment 2: Read from both ──</span>
+$ <span class="fn">curl</span> <span class="str">localhost:8888/memory/greeting</span>
+<span class="v">Hello from RAM  [0.8µs]</span>
+
+$ <span class="fn">curl</span> <span class="str">localhost:8888/disk/greeting</span>
+<span class="v">Hello from disk  [45.2µs]</span>           <span class="cm">← ~50× slower</span>
+
+<span class="cm"># ── Experiment 3: Kill the server (Ctrl+C), restart it ──</span>
+$ <span class="fn">curl</span> <span class="str">localhost:8888/memory/greeting</span>
+<span class="v">null  [0.4µs]</span>                        <span class="cm">← GONE! Memory was volatile.</span>
+
+$ <span class="fn">curl</span> <span class="str">localhost:8888/disk/greeting</span>
+<span class="v">Hello from disk  [38.9µs]</span>           <span class="cm">← STILL HERE! Disk persists.</span>
+
+<span class="cm"># ── Experiment 4: Benchmark 1000 writes ──</span>
+$ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span class="kw">do</span>
+    <span class="fn">curl</span> -s -X POST localhost:8888/memory/k$i -d "v$i"
+  <span class="kw">done</span> | tail -1
+<span class="cm"># Compare with /disk/ — you'll feel the fsync cost at scale</span></pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">What You'll Learn</div>
+    <p>Memory writes are usually much faster than disk writes that include <code class="inline">fsync()</code>, often by one or more orders of magnitude. But after killing and restarting the process, only the disk data survives. This is the fundamental tradeoff. Every database, cache, and storage system is a different answer to: "how much latency am I willing to pay for durability?"</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 10: REDIS ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production Example 1: Redis</h2>
+
+  <p>Redis is one of the most widely used in-memory data stores. It keeps <strong>all data in RAM</strong> for extreme speed (sub-millisecond latency), with optional disk persistence.</p>
+
+  <h3>Storage Architecture</h3>
+  <p><strong>Primary store:</strong> RAM. All keys, values, data structures (strings, lists, sets, sorted sets, hashes) live entirely in memory. A Redis instance with 64GB RAM can hold ~64GB of data.</p>
+  <p><strong>Optional persistence — two mechanisms:</strong></p>
+  <p><strong>RDB (snapshots):</strong> Periodically dumps the entire dataset to disk as a binary file. Fast to load on restart, but you lose data between snapshots (e.g., last 5 minutes).</p>
+  <p><strong>AOF (Append-Only File):</strong> Logs every write command to disk (like a WAL). On restart, Redis replays the AOF to reconstruct the dataset. When AOF is enabled, Redis supports <code class="inline">appendfsync always</code>, <code class="inline">everysec</code>, and <code class="inline">no</code>; the recommended default AOF fsync policy is <code class="inline">everysec</code>. <a href="#ref5" class="ref">[5]</a></p>
+
+  <div class="callout orange">
+    <div class="callout-label">The Redis Tradeoff</div>
+    <p>Redis is fast <em>because</em> it's in-memory. But RAM is expensive and volatile. If the process dies without persistence, everything is gone. With AOF enabled and <code class="inline">appendfsync everysec</code>, Redis typically trades away up to about 1 second of recent writes in exchange for much better performance than fsyncing every command. For truly critical data, Redis is usually <em>not the only store</em> — it's a cache or fast-access layer in front of a more durable database. <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 11: POSTGRES ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Production Example 2: PostgreSQL</h2>
+
+  <p>PostgreSQL is the gold standard of persistent relational databases. It uses a sophisticated combination of RAM and disk to achieve both speed and durability.</p>
+
+  <h3>Storage Architecture</h3>
+  <p><strong>Buffer Pool (shared_buffers):</strong> PostgreSQL keeps frequently-accessed table and index pages in a RAM cache. Typically configured to 25% of system RAM. Buffer hits avoid disk I/O entirely.</p>
+  <p><strong>WAL (Write-Ahead Log):</strong> Every transaction is first written to the WAL (sequential disk write + fsync). This guarantees durability even if the machine crashes before the data files are updated.</p>
+  <p><strong>Data Files:</strong> The actual table data on disk, stored as 8KB pages. Updated asynchronously by the background writer and checkpoint processes.</p>
+  <p><strong>OS Page Cache:</strong> The OS also caches recently-read disk pages in RAM. PostgreSQL benefits from this "double caching" — a page might miss the buffer pool but still be found in the OS cache, avoiding physical disk I/O.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Key Insight — The Buffer Hit Ratio</div>
+    <p>In a read-heavy PostgreSQL system, engineers usually want a <strong>high buffer cache hit ratio</strong> so most reads come from memory instead of disk. You can inspect it with <code class="inline">SELECT sum(blks_hit) / sum(blks_hit + blks_read) FROM pg_stat_database;</code>, but the right target depends on workload, indexing, and whether the working set fits in memory. A low ratio is a signal to investigate RAM pressure, poor locality, or missing indexes rather than a universal "bad number." <a href="#ref3" class="ref">[3]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 12: EDGE CASES ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>Edge Cases & Gotchas</h2>
+
+  <h3>1. The fsync() Lie</h3>
+  <p><code class="inline">fsync()</code> is only as trustworthy as the storage stack underneath it. Battery-backed write caches can make delayed persistence safe; dishonest drives or broken flush behavior can make it unsafe. PostgreSQL's own reliability documentation explicitly warns that durability depends on the correctness of the OS, filesystem, controller, and disk firmware underneath the database. <a href="#ref3" class="ref">[3]</a></p>
+
+  <h3>2. SSD Write Amplification</h3>
+  <p>SSDs can't overwrite individual bytes — they must erase entire blocks (128KB–512KB) before writing. A small 4KB write might trigger erasing and rewriting a full 512KB block. This "write amplification" reduces SSD lifespan and throughput under write-heavy workloads. Modern SSDs mitigate this with TRIM commands and wear-leveling algorithms.</p>
+
+  <h3>3. OOM Killer</h3>
+  <p>When Linux runs out of RAM, the <strong>Out-Of-Memory killer</strong> (OOM) selects and kills a process to free memory. If it kills your database process, you lose all in-memory state. Fix: configure <code class="inline">vm.overcommit_memory</code>, set appropriate memory limits, and ensure the DB process has an OOM score adjustment (<code class="inline">oom_score_adj = -1000</code>).</p>
+
+  <h3>4. Page Cache Confusion</h3>
+  <p>On Linux, <code class="inline">free -h</code> shows most memory as "used" because the OS aggressively caches disk blocks in RAM. New engineers often panic ("we're out of memory!") when in reality the "buff/cache" column is reclaimable. The <strong>"available"</strong> column is what matters.</p>
+
+  <h3>5. Network Storage Latency</h3>
+  <p>Cloud block storage (AWS EBS, GCP Persistent Disk, Azure Managed Disks) adds network hops on top of storage latency. Local NVMe is usually much lower latency; network-attached block storage is usually in the millisecond range instead of the low hundreds of microseconds. For latency-sensitive databases, instance-local NVMe can be attractive, but the tradeoff is operational: local storage disappears when the instance is terminated.</p>
+
+  <h3>6. Cold Start / Empty Cache</h3>
+  <p>After a database restart, the buffer pool is empty — every query hits disk. Performance can be dramatically worse until the cache "warms up." Some databases support <strong>buffer pool pre-warming</strong> (loading hot pages from disk on startup). PostgreSQL has <code class="inline">pg_prewarm</code>; MySQL has buffer pool dump/restore.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story</div>
+    <p>In 2017, GitLab suffered a major database incident that resulted in hours of downtime and roughly six hours of lost database data. The failure exposed gaps in backup coverage and restore readiness, not just in primary storage. The lesson: persistence is not only about <code class="inline">fsync()</code>; it is also about <strong>verified, tested backups</strong> across multiple storage tiers. A backup that has never been restored successfully is not a backup. <a href="#ref6" class="ref">[6]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 13: INTERVIEW Q&A ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Interview Questions & Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What's the difference between memory and disk? When would you use each?</div>
+    <div class="qa-a">
+      <p><strong>Memory (RAM)</strong> is volatile, fast (~100ns random read), expensive (~$3/GB), and limited in capacity (typically 64–512 GB). Data is lost when the process or machine stops.</p>
+      <p><strong>Disk (SSD/HDD)</strong> is persistent, slower (100µs–5ms random read), cheaper ($0.02–0.08/GB), and available in large capacities (TBs). Data survives power loss.</p>
+      <p><strong>Use RAM for:</strong> Caches (Redis, Memcached), hot data in database buffer pools, application state that can be recomputed, session data. <strong>Use disk for:</strong> Database data files, WAL, logs, anything that must survive failures. Most real systems use both — RAM for speed, disk for durability.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: How does a database achieve both speed and durability?</div>
+    <div class="qa-a">
+      <p>Through the <strong>Write-Ahead Log (WAL)</strong> pattern. On every write: (1) Append the change to a sequential log on disk (fast — sequential I/O), (2) fsync the log (guarantees durability), (3) Update the in-memory buffer pool (fast — RAM), (4) Acknowledge success to the client. The actual data files on disk are updated later by background checkpoint processes.</p>
+      <p>This achieves speed (writes go to RAM immediately) and durability (WAL on disk survives crashes). On crash recovery, the database replays the WAL to reconstruct any changes that weren't checkpointed. This pattern is used by virtually every serious database: PostgreSQL, MySQL, SQLite, MongoDB, CockroachDB.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: What is fsync() and why does it matter?</div>
+    <div class="qa-a">
+      <p><code>fsync()</code> is a system call that forces the OS to flush all buffered writes for a file descriptor to the physical storage device. Without it, a "write" might only update the OS page cache (RAM), not the disk. If the machine crashes, unflushed data is lost.</p>
+      <p>Databases call fsync() on WAL writes to guarantee durability. The cost: each fsync() can take 100µs–1ms (SSD) or 5–10ms (HDD), which limits throughput. This is why group commit exists — batch multiple transactions into a single fsync to amortize the cost.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: SSD vs HDD — when would you still choose HDD?</div>
+    <div class="qa-a">
+      <p>HDDs still make sense for: <strong>(1) Large-scale cold storage</strong> — data lakes, backups, archives where data is rarely accessed. HDD at $0.02/GB vs SSD at $0.08/GB means 4× cost savings at petabyte scale. <strong>(2) Sequential workloads</strong> — HDDs achieve ~200MB/s sequential throughput, which is acceptable for log ingestion and batch processing. <strong>(3) Budget constraints</strong> — where the 50× random IOPS difference doesn't matter because the workload is read-once or sequential.</p>
+      <p>Choose SSD for: any workload with random access patterns (OLTP databases, key-value stores, search indexes), latency-sensitive applications, and anything where IOPS matters more than raw capacity.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: A system design question says "the data must not be lost." What storage decisions does this imply?</div>
+    <div class="qa-a">
+      <p>This implies: <strong>(1) Persistent storage</strong> — data must be on disk, not just in memory. <strong>(2) Write-ahead logging</strong> — every write is logged to disk before acknowledging. <strong>(3) fsync on commit</strong> — flushes to physical medium, not just OS cache. <strong>(4) Replication</strong> — at least 2-3 copies across different machines/AZs to survive disk and machine failures. <strong>(5) Backups</strong> — periodic snapshots to a separate storage tier (S3, GCS) for disaster recovery.</p>
+      <p>The full durability stack: RAM (buffer pool) → WAL on local SSD (crash recovery) → Replicated to standby (disk failure survival) → Backed up to object storage (disaster recovery). Each layer adds latency and cost but reduces the probability of data loss.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: What does the "Five-Minute Rule" say and why is it relevant?</div>
+    <div class="qa-a">
+      <p>Jim Gray's Five-Minute Rule (1987, updated in 1997, 2007, 2017) says: <strong>data that is accessed more frequently than every 5 minutes should be kept in RAM; data accessed less frequently should stay on disk</strong>. The break-even interval is computed from the cost of RAM per GB vs. the fractional cost of a disk's IOPS.</p>
+      <p>The rule has evolved: the original 5-minute interval for 1KB pages (RAM vs HDD, 1987) is now ~90 minutes for DRAM vs HDD (2017), but ~5 minutes for DRAM vs SSD. The rule matters because it gives you a quantitative framework for cache sizing: if your "hot" data fits in RAM and is accessed frequently, keep it there. If not, invest in faster disks rather than more RAM. <a href="#ref2" class="ref">[2]</a></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SECTION 14: CHEAT SHEET ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> RAM is fast (~100ns), volatile, expensive ($3/GB). Disk is slow (100µs–5ms), persistent, cheap ($0.02–0.08/GB).<br>
+    <strong>2.</strong> Databases do two things: <strong>record</strong> (write) and <strong>query</strong> (read). Storage choice determines the speed and durability of both.<br>
+    <strong>3.</strong> SSD is ~1,000× faster than HDD for random reads (IOPS), ~50× for sequential. Always use SSD for OLTP databases.<br>
+    <strong>4.</strong> Persistence means surviving process/machine crashes. RAM alone is never persistent. Disk + fsync = persistent.<br>
+    <strong>5.</strong> The Write-Ahead Log (WAL) pattern: append to sequential log + fsync → update memory → lazy checkpoint to data files. This is how databases achieve speed + durability.<br>
+    <strong>6.</strong> fsync() forces data to physical storage. Without it, "writes" may only be in the OS page cache (still volatile!).<br>
+    <strong>7.</strong> Most databases use a hybrid: RAM buffer pool for hot data + disk for durable storage. Aim for a high cache hit ratio, but judge it against the workload.<br>
+    <strong>8.</strong> Redis = all-in-memory (fast, volatile by default). PostgreSQL = disk-primary with RAM cache (slower, durable).<br>
+    <strong>9.</strong> Cloud storage (EBS, Persistent Disk) adds network latency. Local NVMe is faster but ephemeral.<br>
+    <strong>10.</strong> Distributed storage adds replication, sharding, and specialized tradeoffs on top of these fundamentals.</p>
+  </div>
+
+  <div class="callout yellow">
+    <div class="callout-label">What to Study Next</div>
+    <p>Now that you understand storage fundamentals, the next topics are: <strong>Latency & Throughput</strong> (the numbers that govern every design decision), <strong>Availability</strong> (keeping systems up when storage fails), and <strong>Caching</strong> (the art of moving data up the storage hierarchy). After that, distributed storage topics like replication, sharding, and specialized databases will make much more sense.</p>
+  </div>
+</section>
+
+<!-- MENTAL MODEL -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Write Path Under Pressure</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
+        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
+      </defs>
+      <!-- Write request -->
+      <rect x="20" y="30" width="120" height="40" rx="8" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="80" y="55" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#60a5fa" font-weight="600">INSERT row</text>
+      <path d="M140 50 L192 50" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma)"/>
+      <!-- WAL -->
+      <rect x="200" y="20" width="150" height="60" rx="8" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="275" y="45" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">WAL (append)</text>
+      <text x="275" y="65" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">sequential → fast</text>
+      <path d="M275 84 L275 108" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <!-- fsync -->
+      <rect x="225" y="115" width="100" height="30" rx="6" fill="#2a1520" stroke="#f87171" stroke-width="1.5"/>
+      <text x="275" y="135" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#f87171" font-weight="600">fsync()</text>
+      <text x="128" y="96" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">fsync bottleneck</text>
+      <text x="128" y="107" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">~100µs SSD, ~5ms HDD</text>
+      <path d="M275 148 L275 173" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <!-- Buffer pool -->
+      <rect x="200" y="180" width="150" height="50" rx="8" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="275" y="202" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24" font-weight="600">Buffer Pool (RAM)</text>
+      <text x="275" y="220" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">dirty page updated</text>
+      <!-- ACK back -->
+      <path d="M196 205 C150 208 124 158 88 78" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#mg)"/>
+      <text x="38" y="96" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">COMMIT OK</text>
+      <!-- Background checkpoint -->
+      <path d="M275 234 L275 268" stroke="#5c6580" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ma)"/>
+      <rect x="200" y="275" width="150" height="50" rx="8" fill="#222734" stroke="#5c6580" stroke-width="1"/>
+      <text x="275" y="297" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#5c6580">Data Files (disk)</text>
+      <text x="275" y="315" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">async checkpoint</text>
+      <!-- Pressure box -->
+      <rect x="430" y="20" width="310" height="310" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
+      <text x="585" y="48" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">UNDER HEAVY WRITE LOAD</text>
+      <text x="445" y="78" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ WAL writes queue behind fsync()</text>
+      <text x="445" y="100" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ Each commit waits for disk flush</text>
+      <text x="445" y="122" font-family="DM Sans,sans-serif" font-size="11" fill="#fb923c">▸ Group commit: batch multiple txns</text>
+      <text x="445" y="144" font-family="DM Sans,sans-serif" font-size="11" fill="#fb923c">  into one fsync → huge throughput win</text>
+      <text x="445" y="174" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ Buffer pool fills with dirty pages</text>
+      <text x="445" y="196" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ Checkpoint must flush to disk (random I/O)</text>
+      <text x="445" y="218" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">▸ If checkpoint can't keep up →</text>
+      <text x="445" y="240" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">  WAL grows unbounded, recovery slows</text>
+      <text x="445" y="270" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">▸ SSD vs HDD makes 50× difference here</text>
+      <text x="445" y="292" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">▸ More RAM = larger buffer pool =</text>
+      <text x="445" y="314" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">  fewer checkpoint flushes needed</text>
+    </svg>
+    <div class="diagram-caption">Database write path: WAL → fsync → buffer pool → async checkpoint, with pressure points</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>The speed of writes is gated by the speed of fsync() to the WAL.</strong> Everything else (buffer pool update, data file checkpoint) happens in the background. The WAL converts random writes into sequential appends, and fsync() is the moment where "in memory" becomes "durable." This single bottleneck is why SSD vs HDD matters so much for write-heavy workloads, and why group commit exists.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References & Further Reading</h2>
+
+  <div id="ref1" class="callout blue" style="margin-top:28px;">
+    <div class="callout-label">[1] Latency Numbers Every Programmer Should Know</div>
+    <p><strong>Jeff Dean, Google.</strong> Originally presented ~2009, widely updated. Compiled by Colin Scott.<br>
+    <a href="https://colin-scott.github.io/personal_website/research/interactive_latency.html" style="color:var(--blue);" target="_blank">https://colin-scott.github.io/personal_website/research/interactive_latency.html</a></p>
+    <p>• Quantifies the storage hierarchy: L1 cache (0.5ns), RAM (100ns), SSD random read (16µs in 2020), HDD seek (2ms in 2020).</p>
+    <p>• Shows how latency gaps have changed over decades — RAM has gotten faster at a different rate than disk, widening the gap.</p>
+    <p>• The source of the famous "if RAM were 1 second, disk would be X days" analogies used in every system design interview.</p>
+    <p>• Essential for <strong>napkin math</strong> — back-of-the-envelope calculations that interviewers expect you to do fluently.</p>
+  </div>
+
+  <div id="ref2" class="callout green">
+    <div class="callout-label">[2] Gray & Putzolu — "The 5-Minute Rule for Trading Memory for Disk Accesses" (1987)</div>
+    <p><strong>Jim Gray, Gianfranco Putzolu.</strong> ACM SIGMOD, 1987. Revised in 1997, 2007, and 2017.<br>
+    <a href="https://jimgray.azurewebsites.net/5_min_rule_sigmod.pdf" style="color:var(--accent);" target="_blank">https://jimgray.azurewebsites.net/5_min_rule_sigmod.pdf</a> (1997 revision)<br>
+    <a href="https://cacm.acm.org/research/the-five-minute-rule-30-years-later-and-its-impact-on-the-storage-hierarchy/" style="color:var(--accent);" target="_blank">CACM 2019 — 30-year revision</a></p>
+    <p>• Provides a formula: <strong>BreakEvenInterval = (PagesPerMB_RAM / IOPS_Disk) × (PricePerDisk / PricePerMB_RAM)</strong>. If data is accessed more frequently than this interval, cache it in RAM.</p>
+    <p>• In 1987, the break-even was ~5 minutes for 1KB pages (RAM vs HDD). In 2017, it's ~90 minutes for DRAM-HDD and ~5 minutes for DRAM-SSD.</p>
+    <p>• The 30-year revision shows HDD is becoming irrelevant for random-access workloads — the five-minute rule now applies to DRAM vs SSD.</p>
+    <p>• Jim Gray (Turing Award winner) predicted the storage hierarchy evolution with remarkable accuracy. His framework is still used for cache sizing decisions.</p>
+    <p>• Teaches the fundamental principle: <strong>storage engineering is economics</strong> — cost per access determines where data should live.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] PostgreSQL Documentation — Reliability and the Write-Ahead Log</div>
+    <p><strong>The PostgreSQL Global Development Group.</strong><br>
+    <a href="https://www.postgresql.org/docs/current/wal-reliability.html" style="color:var(--orange);" target="_blank">https://www.postgresql.org/docs/current/wal-reliability.html</a></p>
+    <p>• Explains WAL reliability guarantees: each transaction commit writes to WAL and fsync()s before acknowledging to the client.</p>
+    <p>• Describes the fsync failure problem: if fsync fails, all dirty buffers in the OS page cache for that file become unreliable.</p>
+    <p>• Documents the <code class="inline">full_page_writes</code> mechanism — writing full page images on the first modification after a checkpoint to prevent partial-write corruption.</p>
+    <p>• Covers the interaction between PostgreSQL's buffer pool and the OS page cache — why both layers of caching exist and how they complement each other.</p>
+    <p>• Essential reading for understanding how a real production database achieves ACID durability using the storage hierarchy.</p>
+  </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] Mohan et al. — "ARIES: A Transaction Recovery Method" (1992)</div>
+    <p><strong>C. Mohan, Don Haderle, Bruce Lindsay, Hamid Pirahesh, Peter Schwarz.</strong> ACM TODS, Vol. 17, No. 1, March 1992.<br>
+    <a href="https://cs.stanford.edu/people/chrismre/cs345/rl/aries.pdf" style="color:var(--purple);" target="_blank">https://cs.stanford.edu/people/chrismre/cs345/rl/aries.pdf</a></p>
+    <p>• The foundational paper on write-ahead logging for database crash recovery, used (in some form) by PostgreSQL, MySQL/InnoDB, SQL Server, and most modern databases.</p>
+    <p>• Describes three phases of recovery: <strong>Analysis</strong> (determine what was dirty at crash), <strong>Redo</strong> (replay all logged changes), <strong>Undo</strong> (roll back uncommitted transactions).</p>
+    <p>• Introduces <strong>physiological logging</strong> — logging physical page modifications at a logical level, balancing between full physical logging (too expensive) and pure logical logging (can't handle partial writes).</p>
+    <p>• The WAL "trick" explained in Section 6 of this document is a simplified version of the ARIES protocol.</p>
+    <p>• One of the most cited database papers. Understanding ARIES at a high level gives you deep credibility in database design interviews.</p>
+  </div>
+
+  <div id="ref5" class="callout green">
+    <div class="callout-label">[5] Redis Documentation — Persistence</div>
+    <p><strong>Redis Open Source Docs.</strong><br>
+    <a href="https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/" style="color:var(--accent);" target="_blank">https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/</a></p>
+    <p>• Documents Redis persistence modes: RDB snapshots, AOF, no persistence, or both together.</p>
+    <p>• Explains the three AOF fsync policies: <code class="inline">always</code>, <code class="inline">everysec</code>, and <code class="inline">no</code>.</p>
+    <p>• States that the suggested and default AOF fsync policy is <code class="inline">everysec</code> when AOF is enabled, balancing performance with durability.</p>
+  </div>
+
+  <div id="ref6" class="callout red">
+    <div class="callout-label">[6] GitLab — Postmortem of Database Outage of January 31 (2017)</div>
+    <p><strong>GitLab Engineering.</strong> February 2017.<br>
+    <a href="https://about.gitlab.com/blog/postmortem-of-database-outage-of-january-31/" style="color:var(--red);" target="_blank">https://about.gitlab.com/blog/postmortem-of-database-outage-of-january-31/</a></p>
+    <p>• Documents the accidental removal of data from GitLab.com's primary database and the resulting outage.</p>
+    <p>• Explains that backup and recovery procedures were incomplete or unreliable, which turned a bad production incident into a major data-loss event.</p>
+    <p>• A strong real-world reminder that durability requires not just storage, but verified restore paths and tested backups.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals · built for deep understanding
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+</body>
+</html>
