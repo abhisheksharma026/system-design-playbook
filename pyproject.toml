@@ -1,0 +1,14 @@
+[project]
+name = "system-design-playbook"
+version = "0.1.0"
+description = "Static system design study site with uv-managed tooling."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = []
+
+[tool.uv]
+package = false
+

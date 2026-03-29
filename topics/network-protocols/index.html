@@ -1,0 +1,1213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Network Protocols</title>
+<meta name="description" content="A deep study of IP, TCP, UDP, HTTP, and the layered protocol model that powers distributed systems.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals · Topic 02</div>
+  <h1><span>Network</span> Protocols</h1>
+  <p class="hero-sub">The rules that machines follow to talk to each other. Without protocols, the internet is just a pile of wires connecting boxes that can't understand each other. IP, TCP, UDP, HTTP — each solves a different problem at a different layer.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Prerequisites & Key Terms</a></li>
+    <li><a href="#s1">What Is a Network Protocol?</a></li>
+    <li><a href="#s2">The Protocol Stack — Big Picture</a></li>
+    <li><a href="#s3">IP — The Internet Protocol</a></li>
+    <li><a href="#s4">IP Packets — Anatomy in Detail</a></li>
+    <li><a href="#s5">TCP — Transmission Control Protocol</a></li>
+    <li><a href="#s6">TCP Headers — Every Field Explained</a></li>
+    <li><a href="#s7">UDP — User Datagram Protocol</a></li>
+    <li><a href="#s8">HTTP — The Application Protocol</a></li>
+    <li><a href="#s9">Memory Map — Encapsulation in RAM</a></li>
+    <li><a href="#s10">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s10b">Mini-Project: Build a Protocol Inspector</a></li>
+    <li><a href="#s11">Production Example 1: Google Search</a></li>
+    <li><a href="#s12">Production Example 2: Discord Voice</a></li>
+    <li><a href="#s13">Edge Cases & Gotchas</a></li>
+    <li><a href="#s14">Interview Questions & Answers</a></li>
+    <li><a href="#s15">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References & Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ SECTION 0: KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Prerequisites & Key Terms</h2>
+  <p>Formal definitions from the source material. Memorize these — they're the vocabulary of every system design conversation.</p>
+
+  <h3>IP</h3>
+  <p>Stands for <strong>Internet Protocol</strong>. This network protocol outlines how almost all machine-to-machine communications should happen in the world. Other protocols like <strong>TCP</strong>, <strong>UDP</strong> and <strong>HTTP</strong> are built on top of IP.</p>
+
+  <h3>TCP</h3>
+  <p>Network protocol built on top of the Internet Protocol (IP). Allows for <strong>ordered, reliable data delivery</strong> between machines over the public internet by creating a <strong>connection</strong>.</p>
+  <p>TCP is usually implemented in the kernel, which exposes <strong>sockets</strong> to applications that they can use to stream data through an open connection.</p>
+
+  <h3>HTTP</h3>
+  <p>The <strong>HyperText Transfer Protocol</strong> is a very common network protocol implemented on top of TCP. Clients make HTTP requests, and servers respond with a response.</p>
+  <p>Requests typically have the following schema:</p>
+  <div class="code-block">
+    <div class="code-header"><span>HTTP Request Schema</span></div>
+    <pre><span class="fn">host</span>:    <span class="str">string</span>    <span class="cm">(example: algoexpert.io)</span>
+<span class="fn">port</span>:    <span class="str">integer</span>   <span class="cm">(example: 80 or 443)</span>
+<span class="fn">method</span>:  <span class="str">string</span>    <span class="cm">(example: GET, PUT, POST, DELETE, OPTIONS or PATCH)</span>
+<span class="fn">headers</span>: <span class="str">pair list</span> <span class="cm">(example: "Content-Type" => "application/json")</span>
+<span class="fn">body</span>:    <span class="str">opaque sequence of bytes</span></pre>
+  </div>
+  <p>Responses typically have the following schema:</p>
+  <div class="code-block">
+    <div class="code-header"><span>HTTP Response Schema</span></div>
+    <pre><span class="fn">status code</span>: <span class="str">integer</span>   <span class="cm">(example: 200, 401)</span>
+<span class="fn">headers</span>:     <span class="str">pair list</span> <span class="cm">(example: "Content-Length" => 1238)</span>
+<span class="fn">body</span>:        <span class="str">opaque sequence of bytes</span></pre>
+  </div>
+
+  <h3>IP Packet</h3>
+  <p>Sometimes more broadly referred to as just a (network) <strong>packet</strong>, an IP packet is effectively the smallest unit used to describe data being sent over <strong>IP</strong>, aside from bytes. An IP packet consists of:</p>
+  <p>An <strong>IP header</strong>, which contains the source and destination <strong>IP addresses</strong> as well as other information related to the network.</p>
+  <p>A <strong>payload</strong>, which is just the data being sent over the network.</p>
+</section>
+
+<!-- ============ SECTION 1: WHAT IS A PROTOCOL ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>What Is a Network Protocol?</h2>
+
+  <p>A <strong>network protocol</strong> is an agreed-upon set of rules that define how two machines communicate. That's it. It specifies: (1) the <strong>format</strong> of messages (what the bytes mean), (2) the <strong>order</strong> of messages (who speaks first, how replies work), and (3) the <strong>actions</strong> taken on send/receive/timeout (retransmit? close connection? ignore?).</p>
+
+  <p>Without protocols, machines are just blasting random bytes at each other. Protocols give structure to chaos.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>Think of human languages. English is a "protocol" — it defines vocabulary, grammar, and turn-taking rules. If I speak English and you speak Mandarin, we can't communicate. Protocols are the same: both sides <em>must</em> agree on the same rules. HTTP is one language. TCP is another. They work at different levels, like how phonetics (TCP) is different from semantics (HTTP).</p>
+  </div>
+
+  <h3>Why Multiple Protocols?</h3>
+  <p>Because different layers of the network solve different problems. <strong>IP</strong> solves routing — "how do I get a packet from machine A to machine B across the planet?" <strong>TCP</strong> solves reliability — "how do I make sure all the data arrives, in order, without corruption?" <strong>HTTP</strong> solves application semantics — "what does 'give me the homepage' look like as a structured message?" Each protocol layers on top of the one below it, adding more capabilities. This layering follows the <strong>end-to-end principle</strong> <a href="#ref4" style="color:var(--purple);font-family:var(--mono);font-size:12px;">[4]</a> — keep lower layers simple, push application-specific correctness to the endpoints.</p>
+</section>
+
+<!-- ============ SECTION 2: THE PROTOCOL STACK ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>The Protocol Stack — Big Picture</h2>
+
+  <p>Protocols are <strong>layered</strong>. Each layer only talks to the layer directly above and below it. Data flows <em>down</em> the stack on the sender, across the wire, and <em>up</em> the stack on the receiver.</p>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 780 420" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="ad" markerWidth="7" markerHeight="5" refX="3.5" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#5c6580"/></marker>
+      </defs>
+      <!-- Layer boxes -->
+      <rect x="190" y="20" width="400" height="70" rx="10" fill="#222734" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="390" y="50" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Application Layer</text>
+      <text x="390" y="72" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#a78bfa">HTTP · gRPC · WebSocket · DNS · SMTP</text>
+
+      <rect x="190" y="110" width="400" height="70" rx="10" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="390" y="140" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Transport Layer</text>
+      <text x="390" y="162" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#60a5fa">TCP · UDP</text>
+
+      <rect x="190" y="200" width="400" height="70" rx="10" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="390" y="230" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Network Layer (Internet)</text>
+      <text x="390" y="252" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6ee7b7">IP (IPv4 / IPv6)</text>
+
+      <rect x="190" y="290" width="400" height="70" rx="10" fill="#222734" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="390" y="320" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Link Layer</text>
+      <text x="390" y="342" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">Ethernet · Wi-Fi · ARP</text>
+
+      <!-- Arrows between layers -->
+      <path d="M390 90 V110" stroke="#5c6580" stroke-width="1.5" marker-end="url(#ad)"/>
+      <path d="M390 180 V200" stroke="#5c6580" stroke-width="1.5" marker-end="url(#ad)"/>
+      <path d="M390 270 V290" stroke="#5c6580" stroke-width="1.5" marker-end="url(#ad)"/>
+
+      <!-- Labels on the side -->
+      <text x="150" y="55" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="#a78bfa">L7</text>
+      <text x="150" y="145" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="#60a5fa">L4</text>
+      <text x="150" y="235" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6ee7b7">L3</text>
+      <text x="150" y="325" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c">L2</text>
+
+      <!-- Encapsulation annotation -->
+      <text x="640" y="55" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">DATA</text>
+      <text x="640" y="145" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">TCP HDR + DATA</text>
+      <text x="640" y="235" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">IP HDR + TCP HDR + DATA</text>
+      <text x="640" y="325" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">ETH + IP + TCP + DATA</text>
+
+      <!-- Wire -->
+      <rect x="190" y="385" width="400" height="25" rx="4" fill="none" stroke="#5c6580" stroke-width="1" stroke-dasharray="6 4"/>
+      <text x="390" y="402" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#5c6580">Physical Wire / Radio / Fiber</text>
+      <path d="M390 360 V385" stroke="#5c6580" stroke-width="1.5" marker-end="url(#ad)"/>
+    </svg>
+    <div class="diagram-caption">TCP/IP 4-layer model with encapsulation — each layer wraps the layer above</div>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">Encapsulation — The Key Concept</div>
+    <p>When you send an HTTP request, the Application layer creates HTTP data. TCP wraps it with a <strong>TCP header</strong> (ports, sequence numbers). IP wraps <em>that</em> with an <strong>IP header</strong> (source/destination IP). Ethernet wraps <em>that</em> with a <strong>frame header</strong> (MAC addresses). On the wire, it's all just bytes. The receiving machine <strong>unwraps</strong> each layer in reverse, peeling off headers until the app gets pure HTTP data. This is called <strong>encapsulation/decapsulation</strong>.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3: IP ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>IP — The Internet Protocol</h2>
+
+  <p>IP is the <strong>foundation</strong> of the entire internet. Every single piece of data — whether it's a Google search, a Netflix stream, or a WhatsApp message — travels inside IP packets. IP's job is simple but critical: <strong>get a packet from source IP address to destination IP address</strong>. <a href="#ref1" style="color:var(--accent);font-family:var(--mono);font-size:12px;">[1]</a></p>
+
+  <h3>What IP Does</h3>
+  <p><strong>Addressing:</strong> Every device on the internet gets an IP address. IPv4 uses 32-bit addresses (4 billion possible, mostly exhausted). IPv6 uses 128-bit addresses (practically unlimited).</p>
+  <p><strong>Routing:</strong> Routers read the destination IP in the header and make a "next hop" decision — forward the packet one step closer to its destination. This happens at every router along the path, like a relay race.</p>
+  <p><strong>Fragmentation:</strong> If a packet is too large for a network segment's MTU (Maximum Transmission Unit, typically 1500 bytes for Ethernet), IP can split it into smaller fragments that are reassembled at the destination.</p>
+
+  <h3>What IP Does NOT Do</h3>
+  <p>IP is a <strong>best-effort, connectionless</strong> protocol. This means:</p>
+  <p><strong>No guaranteed delivery</strong> — packets can be dropped (router buffer full, link failure). IP doesn't know and doesn't care.</p>
+  <p><strong>No ordering</strong> — packets can arrive out of order. Packet 3 might arrive before packet 1 if it took a different route.</p>
+  <p><strong>No duplication detection</strong> — the same packet can be delivered multiple times.</p>
+  <p><strong>No error correction</strong> — if a bit flips in transit, the payload is corrupted. (IP has a header checksum, but not a payload checksum.)</p>
+
+  <div class="callout orange">
+    <div class="callout-label">Why This Matters</div>
+    <p>IP alone is <strong>unreliable</strong>. That's by design — it keeps the network layer simple and fast. If you need reliability (and most apps do), you add TCP on top. If you need speed more than reliability (gaming, video calls), you use UDP on top. IP is the "postal system" — it routes letters, but doesn't guarantee delivery. TCP is "registered mail." UDP is "throw it in the general direction."</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4: IP PACKETS ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>IP Packets — Anatomy in Detail</h2>
+
+  <p>An IP packet is the fundamental unit of data on the internet. Every piece of information that crosses the network is wrapped inside one (or more) IP packets. Let's look at exactly what's inside.</p>
+
+  <h3>IPv4 Packet Structure</h3>
+  <p>An IP packet has two parts: the <strong>header</strong> (20–60 bytes of metadata) and the <strong>payload</strong> (the actual data, up to ~65,535 bytes total packet size, but typically ~1,500 bytes due to Ethernet MTU).</p>
+
+  <div class="memory-map"><span class="h">IPv4 PACKET HEADER (20 bytes minimum)</span>
+<span class="d">┌─────────────────────────────────────────────────────────────────┐</span>
+<span class="d">│</span> <span class="b">Bits:  0-3</span>     <span class="d">│</span> <span class="b">4-7</span>       <span class="d">│</span> <span class="b">8-15</span>           <span class="d">│</span> <span class="b">16-31</span>            <span class="d">│</span>
+<span class="d">├──────────┼───────────┼────────────────┼──────────────────┤</span>
+<span class="d">│</span> <span class="v">Version</span>  <span class="d">│</span> <span class="v">IHL</span>       <span class="d">│</span> <span class="v">Type of Service</span> <span class="d">│</span> <span class="v">Total Length</span>     <span class="d">│</span>
+<span class="d">│</span> <span class="num">4</span> (IPv4) <span class="d">│</span> <span class="num">5</span> (words)  <span class="d">│</span> <span class="num">0x00</span>            <span class="d">│</span> <span class="num">1500</span> bytes       <span class="d">│</span>
+<span class="d">├──────────┴───────────┼────────────────┼──────────────────┤</span>
+<span class="d">│</span> <span class="v">Identification</span>       <span class="d">│</span> <span class="v">Flags</span>          <span class="d">│</span> <span class="v">Fragment Offset</span>  <span class="d">│</span>
+<span class="d">│</span> <span class="num">0x1A2B</span>               <span class="d">│</span> <span class="str">DF</span> (Don't Frag) <span class="d">│</span> <span class="num">0</span>                <span class="d">│</span>
+<span class="d">├────────────────────┼────────────────┼──────────────────┤</span>
+<span class="d">│</span> <span class="v">TTL</span>                <span class="d">│</span> <span class="v">Protocol</span>       <span class="d">│</span> <span class="v">Header Checksum</span>  <span class="d">│</span>
+<span class="d">│</span> <span class="num">64</span> (hops left)     <span class="d">│</span> <span class="num">6</span> (TCP)        <span class="d">│</span> <span class="num">0xB1C2</span>           <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="v">Source IP Address</span>                                        <span class="d">│</span>
+<span class="d">│</span> <span class="num">192.168.1.42</span>                                             <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="v">Destination IP Address</span>                                   <span class="d">│</span>
+<span class="d">│</span> <span class="num">142.250.80.46</span>                                            <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="v">Options</span> (if IHL > 5)        <span class="d">│</span> <span class="v">Padding</span>                    <span class="d">│</span>
+<span class="d">└──────────────────────────────────────────────────────────┘</span>
+<span class="d">│</span>
+<span class="h">PAYLOAD (up to ~65,515 bytes)</span>
+<span class="d">┌──────────────────────────────────────────────────────────┐</span>
+<span class="d">│</span> TCP segment / UDP datagram / ICMP message / etc.         <span class="d">│</span>
+<span class="d">│</span> <span class="str">[This is where TCP header + HTTP data lives]</span>              <span class="d">│</span>
+<span class="d">└──────────────────────────────────────────────────────────┘</span></div>
+
+  <h3>Key Fields Explained</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Size</th><th>What It Does</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Version</strong></td><td>4 bits</td><td>IPv4 = <code>4</code>, IPv6 = <code>6</code>. Tells the router which format to expect.</td></tr>
+        <tr><td><strong>IHL</strong></td><td>4 bits</td><td>Internet Header Length, in 32-bit words. Minimum = 5 (20 bytes). Max = 15 (60 bytes with options).</td></tr>
+        <tr><td><strong>Total Length</strong></td><td>16 bits</td><td>Entire packet size (header + payload) in bytes. Max = 65,535. Typically ~1,500 (Ethernet MTU).</td></tr>
+        <tr><td><strong>TTL</strong></td><td>8 bits</td><td>Time To Live. Decremented by 1 at each router. When it hits 0, the packet is dropped. Prevents infinite loops. Default: 64 or 128.</td></tr>
+        <tr><td><strong>Protocol</strong></td><td>8 bits</td><td>What's inside the payload. <code>6</code> = TCP, <code>17</code> = UDP, <code>1</code> = ICMP (ping).</td></tr>
+        <tr><td><strong>Source IP</strong></td><td>32 bits</td><td>The sender's IP address.</td></tr>
+        <tr><td><strong>Destination IP</strong></td><td>32 bits</td><td>The receiver's IP address. Routers use this to make forwarding decisions.</td></tr>
+        <tr><td><strong>Flags / Fragment Offset</strong></td><td>16 bits</td><td>Controls fragmentation. DF = "Don't Fragment" (drop instead). MF = "More Fragments" (reassemble at dest).</td></tr>
+        <tr><td><strong>Header Checksum</strong></td><td>16 bits</td><td>Error-detection for the header <em>only</em> (not the payload). Recalculated at every router (because TTL changes).</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">Critical Detail</div>
+    <p>IP's header checksum only covers the <strong>header</strong>, not the payload. If a bit flips in your actual data during transit, IP won't detect it. That's why TCP has its <em>own</em> checksum covering the payload. If you use UDP and care about data integrity, <em>your application</em> must verify it (or rely on link-layer CRC).</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5: TCP ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>TCP — Transmission Control Protocol</h2>
+
+  <p>TCP takes unreliable IP and builds <strong>reliable, ordered, error-checked delivery</strong> on top. It's the workhorse of the internet — HTTP, HTTPS, SSH, FTP, SMTP, database connections all run over TCP. <a href="#ref2" style="color:var(--blue);font-family:var(--mono);font-size:12px;">[2]</a></p>
+
+  <h3>What TCP Provides</h3>
+  <p><strong>Connection-oriented:</strong> Before exchanging data, client and server perform a 3-way handshake (SYN → SYN-ACK → ACK) to establish a connection. Both sides allocate resources (buffers, sequence numbers).</p>
+  <p><strong>Reliable delivery:</strong> Every byte is acknowledged. If the sender doesn't get an ACK within a timeout, it retransmits. No data silently disappears.</p>
+  <p><strong>Ordered delivery:</strong> Each byte has a sequence number. Even if packets arrive out of order, TCP reassembles them correctly before passing to the application.</p>
+  <p><strong>Flow control:</strong> The receiver advertises a "window size" — how much data it can buffer. The sender won't overwhelm a slow receiver.</p>
+  <p><strong>Congestion control:</strong> TCP dynamically adjusts its sending rate based on network conditions (packet loss, latency). Algorithms: Slow Start, Congestion Avoidance, Fast Retransmit, Fast Recovery. Modern variants: CUBIC (Linux default), BBR (Google).</p>
+
+  <h3>The 3-Way Handshake</h3>
+  <div class="code-block">
+    <div class="code-header"><span>TCP Connection Establishment</span></div>
+    <pre><span class="cm">Client                              Server</span>
+<span class="cm">  │                                    │</span>
+  ├──── <span class="b">SYN</span> (seq=100) ──────────────→  │  <span class="cm">1. "I want to connect, my seq starts at 100"</span>
+  │                                    │
+  │  ←── <span class="v">SYN-ACK</span> (seq=300, ack=101) ──┤  <span class="cm">2. "OK, my seq starts at 300, I expect 101 next"</span>
+  │                                    │
+  ├──── <span class="b">ACK</span> (ack=301) ────────────────→ │  <span class="cm">3. "Got it, I expect 301 next"</span>
+  │                                    │
+  │  <span class="str">  ═══ CONNECTION ESTABLISHED ═══</span>   │
+  │                                    │
+  ├──── <span class="b">PSH,ACK</span> (data: "GET /") ────→  │  <span class="cm">4. Now data flows</span>
+  │                                    │</pre>
+  </div>
+
+  <h3>The 4-Way Teardown</h3>
+  <div class="code-block">
+    <div class="code-header"><span>TCP Connection Termination</span></div>
+    <pre><span class="cm">Client                              Server</span>
+  │                                    │
+  ├──── <span class="b">FIN</span> ─────────────────────────→ │  <span class="cm">1. "I'm done sending"</span>
+  │  ←── <span class="v">ACK</span> ──────────────────────── ┤  <span class="cm">2. "OK, noted"</span>
+  │                                    │  <span class="cm">   (server may still send data)</span>
+  │  ←── <span class="v">FIN</span> ──────────────────────── ┤  <span class="cm">3. "I'm done too"</span>
+  ├──── <span class="b">ACK</span> ─────────────────────────→ │  <span class="cm">4. "Acknowledged"</span>
+  │                                    │
+  │  <span class="str">  ═══ CONNECTION CLOSED ═══</span>       │</pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Why 3 Handshakes, Not 2?</div>
+    <p>Two-way would establish one direction only. The <strong>third packet (ACK)</strong> is critical: it confirms to the server that the client received the server's sequence number. Without it, the server wouldn't know if its SYN-ACK was received or lost. Both sides need to confirm they can both send <em>and</em> receive — that requires 3 messages minimum.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 6: TCP HEADERS ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>TCP Headers — Every Field Explained</h2>
+
+  <p>The TCP header sits inside the IP packet's payload. It's 20 bytes minimum (up to 60 with options). Every field has a purpose — here's the complete anatomy.</p>
+
+  <div class="memory-map"><span class="h">TCP HEADER (20 bytes minimum)</span>
+<span class="d">┌─────────────────────────────┬─────────────────────────────┐</span>
+<span class="d">│</span> <span class="v">Source Port</span>      (16 bits)   <span class="d">│</span> <span class="v">Destination Port</span> (16 bits)   <span class="d">│</span>
+<span class="d">│</span> <span class="num">52431</span>                       <span class="d">│</span> <span class="num">443</span>                         <span class="d">│</span>
+<span class="d">├─────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="v">Sequence Number</span>                                  (32 bits)  <span class="d">│</span>
+<span class="d">│</span> <span class="num">0x00A3F1B2</span>  <span class="cm">← byte position in the stream</span>                   <span class="d">│</span>
+<span class="d">├─────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="v">Acknowledgment Number</span>                            (32 bits)  <span class="d">│</span>
+<span class="d">│</span> <span class="num">0x00F2A100</span>  <span class="cm">← next byte I expect from you</span>                   <span class="d">│</span>
+<span class="d">├────────┬──────────────┬─────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="v">Offset</span> <span class="d">│</span> <span class="v">Reserved</span>     <span class="d">│</span> <span class="v">Flags</span>  (9 bits)                       <span class="d">│</span>
+<span class="d">│</span> <span class="num">5</span>      <span class="d">│</span> <span class="num">000</span>          <span class="d">│</span> <span class="str">SYN ACK PSH FIN RST URG ECE CWR NS</span> <span class="d">│</span>
+<span class="d">├────────┴──────────────┼─────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="v">Window Size</span>           <span class="d">│</span> <span class="v">Checksum</span>                            <span class="d">│</span>
+<span class="d">│</span> <span class="num">65535</span> bytes            <span class="d">│</span> <span class="num">0xA1B2</span>                              <span class="d">│</span>
+<span class="d">├───────────────────────┼─────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="v">Urgent Pointer</span>        <span class="d">│</span> <span class="v">Options</span> (if offset > 5)              <span class="d">│</span>
+<span class="d">└───────────────────────┴─────────────────────────────────────┘</span></div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Size</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Source Port</strong></td><td>16 bits</td><td>The sender's port. Ephemeral ports (49152–65535) for clients. Known ports for servers.</td></tr>
+        <tr><td><strong>Dest Port</strong></td><td>16 bits</td><td>The receiver's port. Identifies which process gets the data. 80=HTTP, 443=HTTPS.</td></tr>
+        <tr><td><strong>Sequence Number</strong></td><td>32 bits</td><td>The byte offset in the stream. If seq=1000 and payload=500 bytes, the next segment starts at seq=1500. Enables <strong>ordering</strong>.</td></tr>
+        <tr><td><strong>ACK Number</strong></td><td>32 bits</td><td>The next byte the sender expects to receive. "I've got everything up to byte X, send me X next." Enables <strong>reliability</strong>.</td></tr>
+        <tr><td><strong>Flags</strong></td><td>9 bits</td><td><code>SYN</code>=start connection, <code>ACK</code>=acknowledge, <code>FIN</code>=close, <code>RST</code>=abort, <code>PSH</code>=push to app immediately.</td></tr>
+        <tr><td><strong>Window Size</strong></td><td>16 bits</td><td>How many bytes the receiver can accept right now. <strong>Flow control</strong> — prevents sender from overwhelming receiver.</td></tr>
+        <tr><td><strong>Checksum</strong></td><td>16 bits</td><td>Covers the TCP header AND payload. Catches bit-flip corruption that IP's checksum misses.</td></tr>
+        <tr><td><strong>Options</strong></td><td>variable</td><td>MSS (max segment size), window scaling, timestamps, SACK (selective ACK). Negotiated in handshake.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">How Sequence Numbers Enable Reliability</div>
+    <p>Imagine sending a 10KB file. TCP breaks it into segments: seq=0 (1460 bytes), seq=1460 (1460 bytes), seq=2920 (1460 bytes)... The receiver sends ACK=1460, then ACK=2920, etc. If the sender doesn't get ACK=2920, it knows that segment was lost and retransmits it. If segments arrive out of order (seq=2920 before seq=1460), the receiver buffers them and waits, then delivers everything in order to the application.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 7: UDP ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>UDP — User Datagram Protocol</h2>
+
+  <p>UDP is TCP's simpler, faster sibling. It sits at the same Transport layer but provides <strong>almost nothing</strong> beyond IP: no connection setup, no reliability, no ordering, no flow control. Just <strong>ports + checksum + your data</strong>.</p>
+
+  <h3>UDP Header (8 bytes total — that's it)</h3>
+  <div class="memory-map"><span class="h">UDP HEADER (8 bytes — compare to TCP's 20+)</span>
+<span class="d">┌───────────────────────┬───────────────────────┐</span>
+<span class="d">│</span> <span class="v">Source Port</span> (16 bits)  <span class="d">│</span> <span class="v">Dest Port</span> (16 bits)    <span class="d">│</span>
+<span class="d">│</span> <span class="num">52431</span>                 <span class="d">│</span> <span class="num">53</span>                     <span class="d">│</span>
+<span class="d">├───────────────────────┼───────────────────────┤</span>
+<span class="d">│</span> <span class="v">Length</span> (16 bits)       <span class="d">│</span> <span class="v">Checksum</span> (16 bits)     <span class="d">│</span>
+<span class="d">│</span> <span class="num">42</span> bytes               <span class="d">│</span> <span class="num">0xA1B2</span>                 <span class="d">│</span>
+<span class="d">└───────────────────────┴───────────────────────┘</span>
+<span class="d">│</span>
+<span class="h">PAYLOAD</span>
+<span class="d">┌───────────────────────────────────────────────┐</span>
+<span class="d">│</span> <span class="str">[Your data — DNS query, game state, video frame]</span><span class="d">│</span>
+<span class="d">└───────────────────────────────────────────────┘</span></div>
+
+  <h3>TCP vs UDP — Head-to-Head</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Property</th><th>TCP</th><th>UDP</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Connection</strong></td><td>Connection-oriented (handshake)</td><td>Connectionless (fire and forget)</td></tr>
+        <tr><td><strong>Reliability</strong></td><td>Guaranteed delivery via ACKs + retransmission</td><td>No guarantees. Packets may be lost.</td></tr>
+        <tr><td><strong>Ordering</strong></td><td>Data delivered in order (sequence numbers)</td><td>No ordering. Packets arrive in any order.</td></tr>
+        <tr><td><strong>Flow Control</strong></td><td>Window-based. Receiver controls send rate.</td><td>None. Sender can overwhelm receiver.</td></tr>
+        <tr><td><strong>Congestion Control</strong></td><td>Built-in (Slow Start, CUBIC, BBR)</td><td>None. Can flood the network.</td></tr>
+        <tr><td><strong>Header Size</strong></td><td>20–60 bytes</td><td>8 bytes</td></tr>
+        <tr><td><strong>Latency</strong></td><td>Higher (handshake, ACKs, retransmits)</td><td>Lower (send immediately)</td></tr>
+        <tr><td><strong>Use Cases</strong></td><td>HTTP, SSH, FTP, SMTP, databases</td><td>DNS, video streaming, VoIP, gaming, DHCP</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">When to Use UDP</div>
+    <p>UDP makes sense when: (1) <strong>Speed matters more than completeness</strong> — in a video call, a dropped frame is better than a delayed one. Retransmitting old video is useless. (2) <strong>Messages are small and self-contained</strong> — DNS queries fit in a single packet. (3) <strong>You'll build your own reliability</strong> — game engines and QUIC implement custom reliability on top of UDP. (4) <strong>Broadcast/multicast</strong> — UDP supports sending to multiple recipients. TCP doesn't.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 8: HTTP ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>HTTP — The Application Protocol</h2>
+
+  <p>HTTP (HyperText Transfer Protocol) sits at the top of the stack — Layer 7 — and defines how clients request resources and servers respond. It's built <em>on top of</em> TCP (HTTP/1.1, HTTP/2) or QUIC/UDP (HTTP/3).</p>
+
+  <h3>HTTP Request — Complete Anatomy</h3>
+  <div class="code-block">
+    <div class="code-header"><span>HTTP/1.1 Request</span></div>
+    <pre><span class="kw">POST</span> <span class="str">/api/users</span> <span class="fn">HTTP/1.1</span>        <span class="cm">← Method, Path, Version</span>
+<span class="fn">Host</span>: api.example.com              <span class="cm">← Required in HTTP/1.1</span>
+<span class="fn">Content-Type</span>: application/json     <span class="cm">← Format of the body</span>
+<span class="fn">Content-Length</span>: <span class="num">47</span>                 <span class="cm">← Size of body in bytes</span>
+<span class="fn">Authorization</span>: Bearer eyJhbG...    <span class="cm">← Auth token</span>
+<span class="fn">Accept</span>: application/json           <span class="cm">← What formats I accept back</span>
+<span class="fn">User-Agent</span>: curl/8.1.2             <span class="cm">← Who's calling</span>
+<span class="fn">Connection</span>: keep-alive             <span class="cm">← Reuse TCP connection</span>
+                                    <span class="cm">← Empty line separates headers from body</span>
+{<span class="str">"name"</span>: <span class="str">"Alice"</span>, <span class="str">"email"</span>: <span class="str">"<a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="335273511d505c5e">[email&#160;protected]</a>"</span>}</pre>
+  </div>
+
+  <h3>HTTP Response — Complete Anatomy</h3>
+  <div class="code-block">
+    <div class="code-header"><span>HTTP/1.1 Response</span></div>
+    <pre><span class="fn">HTTP/1.1</span> <span class="num">201</span> <span class="str">Created</span>              <span class="cm">← Status code + reason phrase</span>
+<span class="fn">Content-Type</span>: application/json
+<span class="fn">Content-Length</span>: <span class="num">82</span>
+<span class="fn">Location</span>: /api/users/42            <span class="cm">← URL of the newly created resource</span>
+<span class="fn">Cache-Control</span>: no-cache
+<span class="fn">X-Request-Id</span>: abc-123-def          <span class="cm">← Custom header for tracing</span>
+
+{<span class="str">"id"</span>: <span class="num">42</span>, <span class="str">"name"</span>: <span class="str">"Alice"</span>, <span class="str">"email"</span>: <span class="str">"<a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="fc9dbc9ed29f9391">[email&#160;protected]</a>"</span>, <span class="str">"created_at"</span>: <span class="str">"2026-03-28T12:00:00Z"</span>}</pre>
+  </div>
+
+  <h3>HTTP Methods</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Method</th><th>Meaning</th><th>Idempotent?</th><th>Has Body?</th></tr></thead>
+      <tbody>
+        <tr><td><code>GET</code></td><td>Retrieve a resource</td><td>Yes</td><td>No (usually)</td></tr>
+        <tr><td><code>POST</code></td><td>Create a new resource / submit data</td><td>No</td><td>Yes</td></tr>
+        <tr><td><code>PUT</code></td><td>Replace a resource entirely</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td><code>PATCH</code></td><td>Partially update a resource</td><td>No*</td><td>Yes</td></tr>
+        <tr><td><code>DELETE</code></td><td>Remove a resource</td><td>Yes</td><td>Rare</td></tr>
+        <tr><td><code>OPTIONS</code></td><td>Describe allowed methods (CORS preflight)</td><td>Yes</td><td>No</td></tr>
+        <tr><td><code>HEAD</code></td><td>Same as GET but no body (check existence/headers)</td><td>Yes</td><td>No</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>HTTP Status Codes</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Range</th><th>Category</th><th>Common Codes</th></tr></thead>
+      <tbody>
+        <tr><td><code>1xx</code></td><td>Informational</td><td><code>100 Continue</code>, <code>101 Switching Protocols</code> (WebSocket upgrade)</td></tr>
+        <tr><td><code>2xx</code></td><td>Success</td><td><code>200 OK</code>, <code>201 Created</code>, <code>204 No Content</code></td></tr>
+        <tr><td><code>3xx</code></td><td>Redirection</td><td><code>301 Moved Permanently</code>, <code>302 Found</code>, <code>304 Not Modified</code></td></tr>
+        <tr><td><code>4xx</code></td><td>Client Error</td><td><code>400 Bad Request</code>, <code>401 Unauthorized</code>, <code>403 Forbidden</code>, <code>404 Not Found</code>, <code>429 Too Many Requests</code></td></tr>
+        <tr><td><code>5xx</code></td><td>Server Error</td><td><code>500 Internal Server Error</code>, <code>502 Bad Gateway</code>, <code>503 Service Unavailable</code>, <code>504 Gateway Timeout</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>HTTP/1.1 vs HTTP/2 vs HTTP/3</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Feature</th><th>HTTP/1.1</th><th>HTTP/2</th><th>HTTP/3</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Transport</strong></td><td>TCP</td><td>TCP</td><td>QUIC (over UDP)</td></tr>
+        <tr><td><strong>Multiplexing</strong></td><td>No — 1 request per connection at a time</td><td>Yes — multiple streams on 1 connection</td><td>Yes — independent streams, no HOL blocking</td></tr>
+        <tr><td><strong>Header Compression</strong></td><td>None</td><td>HPACK</td><td>QPACK</td></tr>
+        <tr><td><strong>Server Push</strong></td><td>No</td><td>Defined, but largely unused</td><td>Defined, but largely unused</td></tr>
+        <tr><td><strong>Connection Setup</strong></td><td>TCP + TLS = 2–3 RTTs</td><td>TCP + TLS = 2–3 RTTs</td><td>QUIC = 1 RTT (0-RTT with resumption)</td></tr>
+        <tr><td><strong>Head-of-Line Blocking</strong></td><td>Yes (per connection)</td><td>Partially (TCP-level HOL)</td><td>No (independent QUIC streams)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">HTTP/3 and QUIC — The Big Shift</div>
+    <p>HTTP/3 runs on <strong>QUIC</strong>, a transport protocol built on UDP. Why? TCP's head-of-line blocking: if one packet is lost, every stream sharing that TCP connection can stall behind it. QUIC gives each stream independent loss recovery. It also integrates TLS 1.3 directly, reducing connection setup to <strong>1 RTT</strong> (or 0-RTT for resumed connections). Large operators such as Meta have published substantial QUIC adoption, while Cloudflare's published traffic data shows HTTP/3 growing quickly but HTTP/2 still carrying a larger share across much of the web. <a href="#ref3" style="color:var(--orange);font-family:var(--mono);font-size:12px;">[3]</a> <a href="#ref6" style="color:var(--orange);font-family:var(--mono);font-size:12px;">[6]</a> <a href="#ref7" style="color:var(--orange);font-family:var(--mono);font-size:12px;">[7]</a></p>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Server Push Reality Check</div>
+    <p>Server Push exists in the protocol history, but it never became a mainstream browser optimization. Chrome removed HTTP/2 Server Push support in Chrome 106, so treat it as historical context, not a default performance technique. <a href="#ref8" style="color:var(--purple);font-family:var(--mono);font-size:12px;">[8]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 9: MEMORY MAP ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Memory Map — Encapsulation in RAM</h2>
+
+  <p>Here's what a single HTTP request looks like as it's wrapped layer by layer into a complete network packet ready to go on the wire.</p>
+
+  <div class="memory-map"><span class="h">APPLICATION LAYER — HTTP (your actual data)</span>
+<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
+<span class="d">│</span> <span class="str">POST /api/users HTTP/1.1\r\n</span>                                 <span class="d">│</span>
+<span class="d">│</span> <span class="str">Host: api.example.com\r\n</span>                                    <span class="d">│</span>
+<span class="d">│</span> <span class="str">Content-Type: application/json\r\n</span>                           <span class="d">│</span>
+<span class="d">│</span> <span class="str">\r\n</span>                                                         <span class="d">│</span>
+<span class="d">│</span> <span class="str">{"name":"Alice"}</span>                                             <span class="d">│</span>
+<span class="d">└──────────────────────────────────────────────────────────────┘</span>
+                    <span class="d">│  TCP wraps it</span>
+                    <span class="d">▼</span>
+<span class="h">TRANSPORT LAYER — TCP segment</span>
+<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
+<span class="d">│</span> <span class="b">TCP HEADER</span> (20 bytes)                                        <span class="d">│</span>
+<span class="d">│</span>  src_port:<span class="num">52431</span> dst_port:<span class="num">443</span> seq:<span class="num">0x00A3</span> ack:<span class="num">0x00F2</span>            <span class="d">│</span>
+<span class="d">│</span>  flags:<span class="str">PSH,ACK</span>  window:<span class="num">65535</span>  checksum:<span class="num">0xB1C2</span>                 <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="str">[HTTP data from above — now encrypted via TLS]</span>                <span class="d">│</span>
+<span class="d">└──────────────────────────────────────────────────────────────┘</span>
+                    <span class="d">│  IP wraps it</span>
+                    <span class="d">▼</span>
+<span class="h">NETWORK LAYER — IP packet</span>
+<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
+<span class="d">│</span> <span class="b">IP HEADER</span> (20 bytes)                                         <span class="d">│</span>
+<span class="d">│</span>  ver:<span class="num">4</span> ttl:<span class="num">64</span> proto:<span class="num">6</span>(TCP)                                    <span class="d">│</span>
+<span class="d">│</span>  src:<span class="num">192.168.1.42</span>  dst:<span class="num">142.250.80.46</span>                          <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="str">[TCP segment from above]</span>                                      <span class="d">│</span>
+<span class="d">└──────────────────────────────────────────────────────────────┘</span>
+                    <span class="d">│  Ethernet wraps it</span>
+                    <span class="d">▼</span>
+<span class="h">LINK LAYER — Ethernet frame</span>
+<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
+<span class="d">│</span> <span class="b">ETH HEADER</span> (14 bytes)                                        <span class="d">│</span>
+<span class="d">│</span>  dst_mac:<span class="num">AA:BB:CC:DD:EE:FF</span>  src_mac:<span class="num">11:22:33:44:55:66</span>       <span class="d">│</span>
+<span class="d">│</span>  type:<span class="num">0x0800</span> (IPv4)                                            <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="str">[IP packet from above]</span>                                        <span class="d">│</span>
+<span class="d">├──────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span> <span class="b">ETH TRAILER</span> (4 bytes)  CRC/FCS checksum                      <span class="d">│</span>
+<span class="d">└──────────────────────────────────────────────────────────────┘</span>
+                    <span class="d">│</span>
+                    <span class="d">▼</span>
+        <span class="v">═══ BITS ON THE WIRE ═══</span></div>
+
+  <div class="callout green">
+    <div class="callout-label">The Total Overhead</div>
+    <p>For a tiny 16-byte JSON body (<code class="inline">{"name":"Alice"}</code>), the total on the wire is: <strong>Ethernet 14B</strong> + <strong>IP 20B</strong> + <strong>TCP 20B</strong> + <strong>TLS ~40B</strong> + <strong>HTTP headers ~200B</strong> + <strong>16B body</strong> + <strong>Ethernet CRC 4B</strong> ≈ <strong>314 bytes</strong>. Your 16 bytes of actual data is only ~5% of the packet. This overhead is why protocols like HTTP/2 compress headers and why batching small requests matters.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 10: TERMINAL DEMOS ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <p>See each protocol layer in action. Run these yourself to build real intuition.</p>
+  <p>Exact output will vary by OS, network path, DNS answers, and protocol negotiation. Where macOS and Linux differ, both variants are called out explicitly.</p>
+
+  <h3>Demo 1: Inspect IP Packets with <code class="inline">traceroute</code></h3>
+  <p>Watch IP's hop-by-hop routing in real time. Each line is a router that decremented your TTL.</p>
+  <div class="code-block">
+    <div class="code-header"><span>Trace the IP route to Google</span></div>
+    <pre><span class="cm"># Each hop is a router. * = no response (firewall/timeout)</span>
+$ <span class="fn">traceroute</span> google.com
+
+ <span class="num">1</span>  <span class="num">192.168.1.1</span>     <span class="cm">1.2ms   ← your home router</span>
+ <span class="num">2</span>  <span class="num">10.0.0.1</span>        <span class="cm">5.8ms   ← ISP gateway</span>
+ <span class="num">3</span>  <span class="num">72.14.215.85</span>    <span class="cm">12.3ms  ← ISP backbone</span>
+ <span class="num">4</span>  <span class="num">108.170.250.33</span>  <span class="cm">11.8ms  ← Google's edge</span>
+ <span class="num">5</span>  <span class="num">142.250.80.46</span>   <span class="cm">12.1ms  ← google.com</span>
+
+<span class="cm"># How it works: traceroute sends packets with TTL=1, TTL=2, TTL=3...</span>
+<span class="cm"># Each router decrements TTL. When TTL hits 0, router sends back</span>
+<span class="cm"># an ICMP "Time Exceeded" message, revealing its IP address.</span>
+<span class="cm"># This is pure IP-layer mechanics in action.</span></pre>
+  </div>
+
+  <h3>Demo 2: Watch the TCP Handshake with <code class="inline">tcpdump</code></h3>
+  <p>Capture actual TCP SYN/SYN-ACK/ACK packets on your machine.</p>
+  <div class="code-block">
+    <div class="code-header"><span>Terminal 1 — Capture TCP packets</span></div>
+    <pre><span class="cm"># Run as root. Filter for port 80, show TCP flags.</span>
+<span class="cm"># macOS: capture on your active interface (often en0 for Wi-Fi)</span>
+$ <span class="fn">sudo tcpdump</span> <span class="kw">-i en0</span> <span class="kw">-nn</span> <span class="str">port 80</span> <span class="kw">-c 10</span>
+
+<span class="cm"># Linux: "any" captures across all interfaces</span>
+$ <span class="fn">sudo tcpdump</span> <span class="kw">-i any</span> <span class="kw">-nn</span> <span class="str">port 80</span> <span class="kw">-c 10</span>
+
+<span class="cm"># In another terminal, trigger a connection:</span>
+$ <span class="fn">curl</span> <span class="str">http://httpbin.org/get</span>
+
+<span class="cm"># tcpdump output (annotated):</span>
+<span class="num">192.168.1.42.52431</span> > <span class="num">34.199.75.4.80</span>: Flags [<span class="b">S</span>]   <span class="cm">← SYN</span>
+<span class="num">34.199.75.4.80</span> > <span class="num">192.168.1.42.52431</span>: Flags [<span class="b">S.</span>]  <span class="cm">← SYN-ACK</span>
+<span class="num">192.168.1.42.52431</span> > <span class="num">34.199.75.4.80</span>: Flags [<span class="b">.</span>]   <span class="cm">← ACK (handshake done!)</span>
+<span class="num">192.168.1.42.52431</span> > <span class="num">34.199.75.4.80</span>: Flags [<span class="b">P.</span>]  <span class="cm">← PSH+ACK (HTTP GET sent)</span>
+<span class="num">34.199.75.4.80</span> > <span class="num">192.168.1.42.52431</span>: Flags [<span class="b">P.</span>]  <span class="cm">← PSH+ACK (HTTP response)</span>
+<span class="num">192.168.1.42.52431</span> > <span class="num">34.199.75.4.80</span>: Flags [<span class="b">F.</span>]  <span class="cm">← FIN (close)</span>
+
+<span class="cm"># Flags: S=SYN  .=ACK  P=PSH  F=FIN  R=RST</span>
+<span class="cm"># You just saw the entire TCP lifecycle: connect → data → close</span></pre>
+  </div>
+
+  <h3>Demo 3: Full HTTP Headers with <code class="inline">curl -v</code></h3>
+  <div class="code-block">
+    <div class="code-header"><span>See every HTTP header sent and received</span></div>
+    <pre><span class="cm"># -v = verbose: shows request headers (>) and response headers (<)</span>
+<span class="cm"># --http1.1 makes the example deterministic across curl builds</span>
+$ <span class="fn">curl</span> <span class="kw">-v</span> <span class="str">https://httpbin.org/post</span> \
+    <span class="kw">--http1.1</span> \
+    <span class="kw">-X POST</span> \
+    <span class="kw">-H</span> <span class="str">"Content-Type: application/json"</span> \
+    <span class="kw">-d</span> <span class="str">'{"name":"Alice"}'</span>
+
+<span class="cm">* Connected to httpbin.org (34.199.75.4) port 443</span>
+<span class="cm">* SSL connection using TLSv1.3</span>
+<span class="b">> POST /post HTTP/1.1</span>
+<span class="b">> Host: httpbin.org</span>
+<span class="b">> Content-Type: application/json</span>
+<span class="b">> Content-Length: 16</span>
+<span class="b">></span>
+<span class="v">< HTTP/1.1 200 OK</span>
+<span class="v">< Content-Type: application/json</span>
+<span class="v">< Content-Length: 432</span>
+<span class="v"><</span>
+{ <span class="str">"data"</span>: <span class="str">"{\"name\":\"Alice\"}"</span>, <span class="str">"headers"</span>: { ... } }</pre>
+  </div>
+
+  <h3>Demo 4: Compare TCP vs UDP with <code class="inline">nc</code></h3>
+  <div class="code-block">
+    <div class="code-header"><span>TCP (reliable) vs UDP (fire-and-forget)</span></div>
+    <pre><span class="cm"># TCP server (default) — connection-oriented</span>
+$ <span class="fn">nc</span> <span class="kw">-l</span> <span class="num">9001</span>            <span class="cm"># Terminal 1: listen</span>
+$ <span class="fn">nc</span> <span class="num">127.0.0.1</span> <span class="num">9001</span>    <span class="cm"># Terminal 2: connect → handshake happens</span>
+Hello TCP!                <span class="cm"># Type → appears in Terminal 1. Reliable.</span>
+
+<span class="cm"># UDP server — no connection, no handshake</span>
+$ <span class="fn">nc</span> <span class="kw">-u -l</span> <span class="num">9002</span>        <span class="cm"># Terminal 1: listen (UDP mode)</span>
+$ <span class="fn">nc</span> <span class="kw">-u</span> <span class="num">127.0.0.1</span> <span class="num">9002</span><span class="cm"> # Terminal 2: send (no handshake!)</span>
+Hello UDP!                <span class="cm"># Type → appears in Terminal 1. No guarantee.</span>
+
+<span class="cm"># Key difference: Kill Terminal 1 mid-session.</span>
+<span class="cm"># TCP client: immediately gets "Connection reset" error.</span>
+<span class="cm"># UDP client: keeps sending happily. No idea server is gone.</span></pre>
+  </div>
+
+  <h3>Demo 5: Inspect IP Packet Headers with <code class="inline">tcpdump</code></h3>
+  <div class="code-block">
+    <div class="code-header"><span>Decode IP + TCP headers from a real packet</span></div>
+    <pre><span class="cm"># -X = hex + ASCII dump. See the actual bytes.</span>
+<span class="cm"># macOS</span>
+$ <span class="fn">sudo tcpdump</span> <span class="kw">-i en0 -nn -X</span> <span class="str">port 80</span> <span class="kw">-c 1</span>
+
+<span class="cm"># Linux</span>
+$ <span class="fn">sudo tcpdump</span> <span class="kw">-i any -nn -X</span> <span class="str">port 80</span> <span class="kw">-c 1</span>
+
+<span class="cm"># Trigger a request:</span>
+$ <span class="fn">curl</span> <span class="str">http://httpbin.org/get</span>
+
+<span class="cm"># Output (annotated):</span>
+<span class="num">0x0000</span>:  <span class="b">4500 003c</span> 1a2b 4000 <span class="v">4006</span> b1c2    <span class="cm">← IP header</span>
+         <span class="cm">│         │         │    │</span>
+         <span class="cm">│         │         │    └─ checksum</span>
+         <span class="cm">│         │         └─ TTL=64, proto=6(TCP)</span>
+         <span class="cm">│         └─ ID=0x1a2b, Flags=DF</span>
+         <span class="cm">└─ Version=4, IHL=5, Total Len=60</span>
+
+<span class="num">0x000c</span>:  <span class="b">c0a8 012a</span> <span class="v">8efa 4c2e</span>              <span class="cm">← IPs</span>
+         <span class="cm">│         └─ dst: 142.250.76.46</span>
+         <span class="cm">└─ src: 192.168.1.42</span>
+
+<span class="num">0x0014</span>:  <span class="b">ccaf 0050</span> 00a3 f1b2 ...          <span class="cm">← TCP header</span>
+         <span class="cm">│    │    └─ seq number</span>
+         <span class="cm">│    └─ dst port: 80</span>
+         <span class="cm">└─ src port: 52431</span></pre>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Why These Demos Matter</div>
+    <p>Most engineers learn protocols from textbooks and never see the actual bytes. Running <code class="inline">tcpdump -X</code> and mapping hex bytes to IP/TCP header fields is the fastest way to make it stick. In production debugging, <code class="inline">tcpdump</code> is how you diagnose "why is this connection hanging?" or "is the server actually sending a RST?"</p>
+  </div>
+</section>
+
+<!-- ============ MINI-PROJECT ============ -->
+<section class="section" id="s10b">
+  <div class="section-num">10b</div>
+  <h2>Mini-Project: Build a Protocol Inspector</h2>
+
+  <p>Theory and terminal demos are great — but <strong>building something</strong> cements it. Here are two runnable mini-projects. Copy, run, and experiment.</p>
+
+  <h3>Project 1: Python TCP Echo Server + Header Logger</h3>
+  <p>Build a raw TCP server from scratch using Python's <code class="inline">socket</code> module — no frameworks. This shows you <em>exactly</em> what happens at the socket layer: binding, listening, accepting connections, reading bytes.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>tcp_inspector.py — save this file and run it</span></div>
+    <pre><span class="kw">import</span> socket
+<span class="kw">import</span> threading
+
+<span class="kw">def</span> <span class="fn">handle_client</span>(conn, addr):
+    <span class="str">"""Handle one client connection — log everything we receive."""</span>
+    <span class="fn">print</span>(<span class="str">f"\n{'='*60}"</span>)
+    <span class="fn">print</span>(<span class="str">f"[TCP] Connection from <span class="num">{addr[0]}</span>:<span class="num">{addr[1]}</span>"</span>)
+    <span class="fn">print</span>(<span class="str">f"[TCP] Server socket: <span class="num">{conn.getsockname()}</span>"</span>)
+    <span class="fn">print</span>(<span class="str">f"{'='*60}"</span>)
+
+    data = conn.<span class="fn">recv</span>(<span class="num">4096</span>)  <span class="cm"># Read up to 4KB from the TCP stream</span>
+    <span class="fn">print</span>(<span class="str">f"\n[RAW BYTES] ({<span class="fn">len</span>(data)} bytes):"</span>)
+    <span class="fn">print</span>(data)
+
+    <span class="cm"># Try to decode as text (HTTP requests are text)</span>
+    <span class="fn">print</span>(<span class="str">f"\n[DECODED]:"</span>)
+    <span class="fn">print</span>(data.<span class="fn">decode</span>(<span class="str">'utf-8'</span>, errors=<span class="str">'replace'</span>))
+
+    <span class="cm"># Parse the HTTP request line</span>
+    lines = data.<span class="fn">decode</span>().<span class="fn">split</span>(<span class="str">'\r\n'</span>)
+    <span class="kw">if</span> lines:
+        <span class="fn">print</span>(<span class="str">f"\n[PARSED]"</span>)
+        <span class="fn">print</span>(<span class="str">f"  Request Line: <span class="v">{lines[0]}</span>"</span>)
+        <span class="kw">for</span> line <span class="kw">in</span> lines[<span class="num">1</span>:]:
+            <span class="kw">if</span> <span class="str">':'</span> <span class="kw">in</span> line:
+                key, val = line.<span class="fn">split</span>(<span class="str">':'</span>, <span class="num">1</span>)
+                <span class="fn">print</span>(<span class="str">f"  Header: <span class="b">{key.strip()}</span> = <span class="v">{val.strip()}</span>"</span>)
+
+    <span class="cm"># Send back a proper HTTP response</span>
+    body = <span class="str">'{"status":"ok","message":"Protocol inspector received your request!"}'</span>
+    response = (
+        <span class="str">f"HTTP/1.1 200 OK\r\n"</span>
+        <span class="str">f"Content-Type: application/json\r\n"</span>
+        <span class="str">f"Content-Length: {<span class="fn">len</span>(body)}\r\n"</span>
+        <span class="str">f"X-Server: tcp-inspector/1.0\r\n"</span>
+        <span class="str">f"\r\n"</span>
+        <span class="str">f"{body}"</span>
+    )
+    conn.<span class="fn">sendall</span>(response.<span class="fn">encode</span>())
+    conn.<span class="fn">close</span>()
+    <span class="fn">print</span>(<span class="str">f"\n[TCP] Connection closed."</span>)
+
+<span class="cm"># Create a TCP socket (AF_INET = IPv4, SOCK_STREAM = TCP)</span>
+server = socket.<span class="fn">socket</span>(socket.<span class="num">AF_INET</span>, socket.<span class="num">SOCK_STREAM</span>)
+server.<span class="fn">setsockopt</span>(socket.<span class="num">SOL_SOCKET</span>, socket.<span class="num">SO_REUSEADDR</span>, <span class="num">1</span>)
+server.<span class="fn">bind</span>((<span class="str">'127.0.0.1'</span>, <span class="num">7777</span>))
+server.<span class="fn">listen</span>(<span class="num">5</span>)
+<span class="fn">print</span>(<span class="str">"[TCP Inspector] Listening on 127.0.0.1:7777"</span>)
+<span class="fn">print</span>(<span class="str">"[TCP Inspector] Try: curl -v http://localhost:7777/anything"</span>)
+<span class="fn">print</span>(<span class="str">"[TCP Inspector] Or open http://localhost:7777 in your browser\n"</span>)
+
+<span class="kw">while</span> <span class="num">True</span>:
+    conn, addr = server.<span class="fn">accept</span>()
+    threading.<span class="fn">Thread</span>(target=handle_client, args=(conn, addr)).<span class="fn">start</span>()</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Run it, then hit it with curl</span></div>
+    <pre><span class="cm"># Terminal 1: Start the inspector</span>
+$ <span class="fn">python3</span> tcp_inspector.py
+
+<span class="cm"># Terminal 2: Send different types of requests and watch the server log</span>
+
+<span class="cm"># Simple GET</span>
+$ <span class="fn">curl</span> <span class="str">http://localhost:7777/users</span>
+
+<span class="cm"># POST with JSON body</span>
+$ <span class="fn">curl</span> <span class="kw">-X POST</span> <span class="str">http://localhost:7777/api/data</span> \
+    <span class="kw">-H</span> <span class="str">"Content-Type: application/json"</span> \
+    <span class="kw">-d</span> <span class="str">'{"sensor":"temp","value":23.5}'</span>
+
+<span class="cm"># PUT with custom headers</span>
+$ <span class="fn">curl</span> <span class="kw">-X PUT</span> <span class="str">http://localhost:7777/config</span> \
+    <span class="kw">-H</span> <span class="str">"Authorization: Bearer my-secret-token"</span> \
+    <span class="kw">-H</span> <span class="str">"X-Request-Id: abc-123"</span> \
+    <span class="kw">-d</span> <span class="str">'{"theme":"dark"}'</span>
+
+<span class="cm"># Open in browser — you'll see the browser sends a LOT of headers</span>
+<span class="cm"># (User-Agent, Accept-Language, Accept-Encoding, Connection, etc.)</span></pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">What You'll Learn</div>
+    <p>The server logs the <strong>raw bytes</strong> received over TCP before any framework parses them. You'll see the literal HTTP request text: the request line (<code class="inline">GET /users HTTP/1.1</code>), each header as a key-value pair, and the body. This is what Nginx, Apache, and Express see before they turn it into a nice <code class="inline">req</code> object. The <code class="inline">socket.AF_INET</code> + <code class="inline">SOCK_STREAM</code> call maps directly to "IPv4 + TCP" from our protocol stack.</p>
+  </div>
+
+  <h3>Project 2: UDP vs TCP Reliability Test</h3>
+  <p>Send 100 messages over TCP and UDP side by side. Watch TCP deliver all 100 reliably. Watch UDP potentially drop some (especially under load).</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>udp_vs_tcp.py — reliability comparison</span></div>
+    <pre><span class="kw">import</span> socket, threading, time
+
+received_tcp = []
+received_udp = []
+
+<span class="kw">def</span> <span class="fn">tcp_server</span>():
+    s = socket.<span class="fn">socket</span>(socket.AF_INET, socket.<span class="num">SOCK_STREAM</span>)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, <span class="num">1</span>)
+    s.bind((<span class="str">'127.0.0.1'</span>, <span class="num">9010</span>)); s.listen(<span class="num">1</span>)
+    conn, _ = s.accept()
+    <span class="kw">while True</span>:
+        data = conn.recv(<span class="num">1024</span>)
+        <span class="kw">if not</span> data: <span class="kw">break</span>
+        received_tcp.append(data.decode())
+    conn.close(); s.close()
+
+<span class="kw">def</span> <span class="fn">udp_server</span>():
+    s = socket.<span class="fn">socket</span>(socket.AF_INET, socket.<span class="num">SOCK_DGRAM</span>)
+    s.bind((<span class="str">'127.0.0.1'</span>, <span class="num">9011</span>))
+    s.settimeout(<span class="num">2.0</span>)
+    <span class="kw">try</span>:
+        <span class="kw">while True</span>:
+            data, _ = s.recvfrom(<span class="num">1024</span>)
+            received_udp.append(data.decode())
+    <span class="kw">except</span> socket.timeout: <span class="kw">pass</span>
+    s.close()
+
+<span class="cm"># Start servers</span>
+threading.Thread(target=tcp_server, daemon=<span class="num">True</span>).start()
+threading.Thread(target=udp_server, daemon=<span class="num">True</span>).start()
+time.sleep(<span class="num">0.3</span>)
+
+<span class="cm"># TCP client: send 100 numbered messages</span>
+tcp_c = socket.socket(socket.AF_INET, socket.<span class="num">SOCK_STREAM</span>)
+tcp_c.connect((<span class="str">'127.0.0.1'</span>, <span class="num">9010</span>))
+<span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">100</span>):
+    tcp_c.sendall(<span class="str">f"msg-{i}|"</span>.encode())
+tcp_c.close()
+
+<span class="cm"># UDP client: send 100 numbered messages</span>
+udp_c = socket.socket(socket.AF_INET, socket.<span class="num">SOCK_DGRAM</span>)
+<span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">100</span>):
+    udp_c.sendto(<span class="str">f"msg-{i}"</span>.encode(), (<span class="str">'127.0.0.1'</span>, <span class="num">9011</span>))
+udp_c.close()
+
+time.sleep(<span class="num">3</span>)
+
+<span class="cm"># Results</span>
+tcp_msgs = <span class="str">'|'</span>.join(received_tcp).split(<span class="str">'|'</span>)
+tcp_msgs = [m <span class="kw">for</span> m <span class="kw">in</span> tcp_msgs <span class="kw">if</span> m]
+print(<span class="str">f"\n{'='*50}"</span>)
+print(<span class="str">f"<span class="b">TCP</span>: Received <span class="num">{len(tcp_msgs)}</span>/100 messages  <span class="v">{'✓ ALL' if len(tcp_msgs)==100 else '✗ LOST'}</span>"</span>)
+print(<span class="str">f"<span class="b">UDP</span>: Received <span class="num">{len(received_udp)}</span>/100 messages <span class="v">{'✓ ALL' if len(received_udp)==100 else '(some may be lost)'}</span>"</span>)
+print(<span class="str">f"{'='*50}\n"</span>)</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Expected output</span></div>
+    <pre>$ <span class="fn">python3</span> udp_vs_tcp.py
+
+<span class="str">==================================================</span>
+<span class="b">TCP</span>: Received <span class="num">100</span>/100 messages  <span class="v">✓ ALL</span>
+<span class="b">UDP</span>: Received <span class="num">100</span>/100 messages <span class="v">✓ ALL</span>
+<span class="str">==================================================</span>
+
+<span class="cm"># On localhost, UDP rarely drops. But try adding a small sleep(0.01) between</span>
+<span class="cm"># sends, or sending 10,000 messages, or testing over a real network</span>
+<span class="cm"># with packet loss — UDP WILL drop. TCP never will.</span>
+<span class="cm">#</span>
+<span class="cm"># Key insight: SOCK_STREAM (TCP) = reliable byte stream</span>
+<span class="cm">#              SOCK_DGRAM  (UDP) = unreliable individual datagrams</span></pre>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">Experiments to Try</div>
+    <p><strong>1.</strong> In the TCP inspector, open <code class="inline">http://localhost:7777</code> in Chrome vs Firefox — compare the headers each browser sends. Chrome sends far more.<br>
+    <strong>2.</strong> Send a request with <code class="inline">curl -H "Connection: close"</code> vs <code class="inline">keep-alive</code> — watch how the TCP connection behaves differently.<br>
+    <strong>3.</strong> Modify the UDP test to send 10,000 messages — on most machines you'll start seeing drops.<br>
+    <strong>4.</strong> Run <code class="inline">sudo tcpdump -i lo0 port 7777</code> on macOS or <code class="inline">sudo tcpdump -i lo port 7777</code> on Linux while hitting the TCP inspector — see the SYN/ACK/FIN lifecycle live.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 11: PRODUCTION EXAMPLE 1 ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Production Example 1: Google Search</h2>
+
+  <p>When you type "system design" into Google and press Enter, a representative modern request path looks like this. Exact protocol negotiation can vary by browser, network, and whether HTTP/3 is available.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Protocol Stack in a Google Search</span></div>
+    <pre><span class="h">1. DNS (UDP, port 53)</span>
+   Your browser → DNS resolver: "What's the IP for www.google.com?"
+   One possible response: <span class="num">142.250.80.46</span> (an edge IP returned by the resolver)
+
+<span class="h">2. QUIC + TLS 1.3 (UDP, port 443)</span>
+   If HTTP/3 is available, the browser opens a QUIC connection to <span class="num">142.250.80.46:443</span>
+   TLS 1.3 is carried inside QUIC: <span class="str">1-RTT</span> setup (<span class="str">0-RTT</span> only on resumed sessions)
+
+<span class="h">3. HTTP/3 (Application Layer)</span>
+   :method = <span class="kw">GET</span>
+   :path = /search?q=system+design
+   :authority = www.google.com
+   cookie: session + preferences
+
+<span class="h">4. Server Processing</span>
+   Google's edge tier fans the request out to internal search, cache,
+   and ranking systems. Multiple backend services may participate in parallel.
+
+<span class="h">5. HTTP Response</span>
+   :status = <span class="num">200</span>
+   content-type: text/html; charset=utf-8
+   content-encoding: br or gzip
+   Follow-on requests for CSS, JS, suggestions, and ads can reuse the same connection.
+
+<span class="h">Total time: ~200ms (perceived instant)</span></pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Insight</div>
+    <p>A single user-visible request crosses multiple protocol boundaries: DNS for name resolution, QUIC/TLS for the secure transport, HTTP semantics for the request itself, and internal service-to-service communication behind the edge. The exact external transport may be HTTP/2 or HTTP/3, but the mental model is the same: each boundary is chosen deliberately to balance latency, reliability, and operational simplicity.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 12: PRODUCTION EXAMPLE 2 ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>Production Example 2: Discord Voice Chat</h2>
+
+  <p>Discord is a perfect example of TCP and UDP working together in the same application.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Discord's Protocol Split</span></div>
+    <pre><span class="h">TEXT MESSAGES — TCP (via WebSocket)</span>
+<span class="cm">Messages MUST arrive. Order matters. Loss is unacceptable.</span>
+   Browser ↔ WebSocket (TCP:443) ↔ Discord Gateway
+   Protocol: JSON over WebSocket
+   Guarantees: every message delivered, in order
+
+<span class="h">VOICE/VIDEO — UDP</span>
+<span class="cm">Speed is everything. A dropped audio frame is inaudible.</span>
+<span class="cm">A retransmitted frame arriving 200ms late causes stutter.</span>
+   Client ↔ UDP:random_port ↔ Discord Voice Server
+   Protocol: RTP (Real-time Transport Protocol) over UDP
+   Codec: Opus (audio), VP8/H.264 (video)
+
+<span class="cm">Why not TCP for voice?</span>
+   TCP packet lost → TCP retransmits → 200ms delay
+   Human ear tolerates ~20ms gaps, not 200ms
+   UDP packet lost → play silence/interpolate → imperceptible
+
+<span class="h">SIGNALING — HTTPS (TCP)</span>
+<span class="cm">Before voice starts, needs reliable setup:</span>
+   POST /api/voice/connect → server allocates voice channel
+   Response: { server_ip, port, encryption_key }
+   Then client switches to UDP for actual audio</pre>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">The Pattern</div>
+    <p>TCP for <strong>control plane</strong> (setup, text, signaling — must be reliable). UDP for <strong>data plane</strong> (audio, video, game state — must be fast). This TCP+UDP split is standard in real-time applications: Zoom, Google Meet, Twitch, online gaming, and VoIP all follow the same pattern.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 13: EDGE CASES ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Edge Cases & Gotchas</h2>
+
+  <h3>1. TCP Head-of-Line Blocking</h3>
+  <p>In HTTP/2 over TCP, all streams share one TCP connection. If <strong>one</strong> packet is lost, TCP stalls <strong>all</strong> streams until the retransmit succeeds — even streams whose data arrived fine. This is why HTTP/3 switched to QUIC (UDP): each stream has independent loss recovery.</p>
+
+  <h3>2. TCP TIME_WAIT Exhaustion</h3>
+  <p>After closing a TCP connection, the socket enters <code class="inline">TIME_WAIT</code> state for 2×MSL (~60 seconds). High-traffic servers making many short-lived connections can exhaust available ports. Fix: connection pooling, <code class="inline">SO_REUSEADDR</code>, or longer-lived connections (keep-alive, HTTP/2 multiplexing).</p>
+
+  <h3>3. MTU / Fragmentation Problems</h3>
+  <p>If a packet exceeds the path MTU (typically 1500 bytes) and the DF (Don't Fragment) flag is set, routers will <strong>drop</strong> the packet and send back an ICMP "Fragmentation Needed" message. If ICMP is blocked by firewalls (common!), the sender never learns the packet was dropped — a "black hole." Fix: Path MTU Discovery, or clamp MSS in TCP to stay under 1500.</p>
+
+  <h3>4. UDP Amplification Attacks (DDoS)</h3>
+  <p>UDP has no handshake, so the source IP can be <strong>spoofed</strong>. Attacker sends tiny DNS queries with the victim's IP as source. DNS servers send back large responses to the victim. A 60-byte query can produce a 3,000-byte response — 50× amplification. This is how some of the largest DDoS attacks work.</p>
+
+  <h3>5. Nagle's Algorithm + Delayed ACK Deadlock</h3>
+  <p>Nagle's algorithm buffers small TCP writes to combine them. Delayed ACK waits ~200ms before ACKing in hopes of piggybacking. Together, they can cause a <strong>200ms latency</strong> on small messages. Fix: <code class="inline">TCP_NODELAY</code> socket option (disables Nagle). Critical for low-latency applications like games and trading systems.</p>
+
+  <h3>6. TLS Version Mismatch</h3>
+  <p>Client supports only TLS 1.3, server only TLS 1.2 → handshake fails. Or server has an expired/untrusted certificate → client rejects connection. These are application-visible failures that look like "connection timeout" or "SSL error" but are actually protocol negotiation failures.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story</div>
+    <p>Cloudflare documented a real production incident where Path MTU Discovery broke under ECMP routing, causing a subset of traffic to fail until mitigations were rolled out. The lesson: network-layer issues (IP fragmentation, MTU, ICMP handling) can surface as application-layer outages that are extremely hard to diagnose. <a href="#ref9" style="color:var(--red);font-family:var(--mono);font-size:12px;">[9]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 14: INTERVIEW Q&A ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Interview Questions & Answers</h2>
+  <p>Click to reveal answers. These are real FAANG-level questions.</p>
+
+  <div class="qa">
+    <div class="qa-q">Q1: Explain the difference between TCP and UDP. When would you use each?</div>
+    <div class="qa-a">
+      <p><strong>TCP</strong> is connection-oriented, reliable, ordered, with flow/congestion control. 20+ byte header. Uses handshake. Best for: HTTP/HTTPS (web), SSH, database connections, file transfers — anything where <em>every byte must arrive correctly</em>.</p>
+      <p><strong>UDP</strong> is connectionless, unreliable, unordered. 8-byte header. Fire and forget. Best for: DNS lookups, video/voice streaming, online gaming, IoT telemetry — anything where <em>speed trumps completeness</em> or the application handles its own reliability.</p>
+      <p>The deeper answer: <strong>UDP isn't "worse" TCP.</strong> It's a different tradeoff. Modern protocols like QUIC build custom reliability on top of UDP that's <em>better</em> than TCP for their use case (independent stream recovery, 0-RTT connection setup). Choosing UDP gives you control over the reliability/latency tradeoff that TCP's one-size-fits-all approach doesn't.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: What is an IP packet? What are the most important fields in the header?</div>
+    <div class="qa-a">
+      <p>An IP packet is the fundamental unit of data on the internet. It has a <strong>header</strong> (20–60 bytes) and a <strong>payload</strong>. The header contains routing information; the payload contains the data (typically a TCP segment or UDP datagram).</p>
+      <p>Most important fields: <strong>Source IP</strong> and <strong>Destination IP</strong> (the addressing that makes routing possible), <strong>TTL</strong> (prevents infinite loops — decremented at each hop, dropped at 0), <strong>Protocol</strong> (tells the receiver what's in the payload: 6=TCP, 17=UDP), and <strong>Total Length</strong> (packet size). The <strong>Flags/Fragment Offset</strong> fields handle fragmentation when packets exceed the link MTU.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: Walk me through the TCP 3-way handshake. Why 3 steps and not 2?</div>
+    <div class="qa-a">
+      <p><strong>SYN:</strong> Client sends SYN with its initial sequence number (ISN). <strong>SYN-ACK:</strong> Server responds with its own ISN and acknowledges the client's ISN+1. <strong>ACK:</strong> Client acknowledges the server's ISN+1.</p>
+      <p>Why not 2? A 2-way handshake only confirms one direction. The third step (ACK) confirms to the server that the client received the server's sequence number. Without it: if the SYN-ACK was lost, the server thinks a connection exists but the client doesn't. The server allocates resources for a ghost connection. The 3-way handshake ensures both sides confirm both send and receive paths work, and both sequence numbers are known. It also prevents <strong>old duplicate SYN packets</strong> from creating false connections (the client can reject stale SYN-ACKs because the sequence numbers won't match).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: What is HTTP/3 and why does it use UDP instead of TCP?</div>
+    <div class="qa-a">
+      <p>HTTP/3 uses <strong>QUIC</strong>, a transport protocol built on UDP, instead of TCP. The primary reason: <strong>head-of-line blocking</strong>. In HTTP/2 over TCP, all multiplexed streams share one TCP connection. If one packet is lost, TCP's ordered delivery stalls <em>all</em> streams until the retransmit completes. QUIC gives each stream independent loss recovery — a loss in stream A doesn't affect stream B.</p>
+      <p>Additional benefits: <strong>0-RTT connection setup</strong> (for resumed connections, QUIC can send data in the very first packet — TCP+TLS needs 2-3 round trips), <strong>connection migration</strong> (QUIC connections are identified by a Connection ID, not IP+port, so they survive network changes like switching from WiFi to cellular), and <strong>built-in encryption</strong> (TLS 1.3 is mandatory, unlike TCP where it's optional).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: How does TCP guarantee reliable delivery?</div>
+    <div class="qa-a">
+      <p>Four mechanisms: <strong>(1) Sequence numbers:</strong> Every byte in the stream gets a sequence number. The receiver knows exactly which bytes it has and which are missing. <strong>(2) Acknowledgments:</strong> The receiver sends ACKs telling the sender "I've received everything up to byte X." <strong>(3) Retransmission:</strong> If the sender doesn't receive an ACK within an RTO (Retransmission Timeout), it resends the data. Modern TCP also uses <strong>Fast Retransmit</strong> — if it receives 3 duplicate ACKs for the same byte, it retransmits immediately without waiting for the timeout. <strong>(4) Checksums:</strong> The TCP checksum covers the entire segment (header + payload), detecting corruption.</p>
+      <p>Together, these ensure: no data loss, no corruption, and correct ordering. The cost: latency (retransmits take time), bandwidth (ACKs are overhead), and complexity (congestion control, window management).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: What are HTTP status codes? Name the most important ones.</div>
+    <div class="qa-a">
+      <p>Status codes are 3-digit integers in the response indicating the result. <strong>2xx = Success:</strong> 200 OK, 201 Created, 204 No Content. <strong>3xx = Redirect:</strong> 301 Moved Permanently (SEO-safe), 302 Found (temporary), 304 Not Modified (use cached version). <strong>4xx = Client Error:</strong> 400 Bad Request, 401 Unauthorized (auth required), 403 Forbidden (auth present but insufficient), 404 Not Found, 409 Conflict, 429 Too Many Requests (rate limited). <strong>5xx = Server Error:</strong> 500 Internal Server Error, 502 Bad Gateway (upstream failed), 503 Service Unavailable (server overloaded/maintenance), 504 Gateway Timeout.</p>
+      <p>In interviews, knowing 429 and the difference between 401/403 shows depth. 429 is critical for rate limiting discussions. 502 vs 504 matters when designing load balancer behavior.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q7: What happens at the network level when a TCP connection is idle for a long time?</div>
+    <div class="qa-a">
+      <p>By default, nothing — TCP has no built-in idle detection. The connection stays "open" even if both sides are silent. This creates problems: <strong>(1)</strong> If one side crashes without sending FIN, the other side doesn't know. It'll wait forever (or until it tries to send data and gets no ACK). <strong>(2)</strong> NAT gateways and firewalls have timeout tables. An idle connection's NAT entry may expire (typically 5-30 minutes), silently breaking the connection.</p>
+      <p>Solutions: <strong>TCP Keep-Alive</strong> — the OS sends tiny probe packets every N seconds (Linux default: 7200s = 2 hours, configurable). If no response after several probes, the connection is declared dead. <strong>Application-level heartbeats</strong> — WebSocket ping/pong, gRPC keepalive, HTTP/2 PING frames. These are more responsive than TCP keep-alive. <strong>Shorter timeouts</strong> — configure <code>tcp_keepalive_time</code>, <code>tcp_keepalive_intvl</code>, <code>tcp_keepalive_probes</code> in the kernel.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SECTION 15: CHEAT SHEET ============ -->
+<section class="section" id="s15">
+  <div class="section-num">15</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 12 Things You Must Know</div>
+    <p><strong>1.</strong> A protocol is an agreed-upon set of rules for communication format, order, and error handling.<br>
+    <strong>2.</strong> IP is best-effort, connectionless. Routes packets from source to dest. No reliability guarantees.<br>
+    <strong>3.</strong> An IP packet = header (20B: src IP, dst IP, TTL, protocol) + payload (TCP/UDP segment).<br>
+    <strong>4.</strong> TCP adds reliability on top of IP: connections, sequence numbers, ACKs, retransmission, flow control.<br>
+    <strong>5.</strong> TCP 3-way handshake: SYN → SYN-ACK → ACK. Both sides confirm bidirectional communication.<br>
+    <strong>6.</strong> UDP is connectionless and unreliable. 8-byte header. Used when speed > completeness.<br>
+    <strong>7.</strong> HTTP is an application-layer protocol on top of TCP. Request (method, path, headers, body) → Response (status code, headers, body).<br>
+    <strong>8.</strong> HTTP methods: GET (read), POST (create), PUT (replace), PATCH (partial update), DELETE (remove).<br>
+    <strong>9.</strong> Encapsulation: HTTP data → TCP segment → IP packet → Ethernet frame → wire. Reversed on receive.<br>
+    <strong>10.</strong> HTTP/2 adds multiplexing over TCP. HTTP/3 uses QUIC (over UDP) to eliminate head-of-line blocking.<br>
+    <strong>11.</strong> Real systems mix protocols: TCP for reliable control plane, UDP for fast data plane (voice, video, gaming).<br>
+    <strong>12.</strong> Key debugging tools: <code class="inline">tcpdump</code> (packet capture), <code class="inline">traceroute</code> (IP routing), <code class="inline">curl -v</code> (HTTP), <code class="inline">nc</code> (raw TCP/UDP).</p>
+  </div>
+
+  <div class="callout yellow">
+    <div class="callout-label">What to Study Next</div>
+    <p>With protocols covered, the next natural topics are: <strong>Storage</strong> (disk vs memory, databases, file systems), <strong>Latency & Throughput</strong> (measuring performance, bottlenecks, napkin math), and <strong>Availability</strong> (nines, redundancy, failover).</p>
+  </div>
+</section>
+
+<!-- MENTAL MODEL -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Packet Journey Under Congestion</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs><marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker></defs>
+      <!-- HTTP data -->
+      <rect x="20" y="30" width="140" height="40" rx="6" fill="#222734" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="90" y="55" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#a78bfa" font-weight="600">HTTP Data</text>
+      <path d="M90 70 L90 95" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <!-- TCP -->
+      <rect x="10" y="100" width="160" height="40" rx="6" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="90" y="125" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#60a5fa" font-weight="600">TCP: seq + ack + flags</text>
+      <path d="M90 140 L90 165" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <!-- IP -->
+      <rect x="0" y="170" width="180" height="40" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="90" y="195" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">IP: src/dst addr + TTL</text>
+      <path d="M90 210 L90 235" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <!-- Wire -->
+      <rect x="0" y="240" width="180" height="30" rx="6" fill="none" stroke="#5c6580" stroke-width="1" stroke-dasharray="4 3"/>
+      <text x="90" y="260" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">WIRE</text>
+      <!-- Encapsulation label -->
+      <text x="200" y="165" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">each layer wraps</text>
+      <text x="200" y="180" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">the one above ↑</text>
+      <!-- Congestion zone -->
+      <rect x="330" y="30" width="400" height="250" rx="12" fill="#1a1015" stroke="#f87171" stroke-width="1" stroke-dasharray="6 4"/>
+      <text x="530" y="55" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#f87171" font-weight="600">CONGESTION ZONE — WHAT BREAKS</text>
+      <text x="350" y="85" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ <tspan fill="#fb923c" font-weight="600">Packet loss</tspan>: router buffer full → packet dropped</text>
+      <text x="350" y="108" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">  TCP detects via missing ACK → retransmits (adds latency)</text>
+      <text x="350" y="131" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">  UDP: packet gone forever. App never knows.</text>
+      <text x="350" y="161" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ <tspan fill="#fb923c" font-weight="600">TCP head-of-line</tspan>: one lost packet stalls ALL</text>
+      <text x="350" y="184" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">  streams on that connection (HTTP/2 over TCP)</text>
+      <text x="350" y="207" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">  QUIC fix: independent streams, loss isolated</text>
+      <text x="350" y="237" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ <tspan fill="#fb923c" font-weight="600">Congestion window shrinks</tspan>: TCP slows down</text>
+      <text x="350" y="260" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">  throughput drops non-linearly as loss increases</text>
+    </svg>
+    <div class="diagram-caption">Protocol encapsulation with congestion failure modes annotated</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Every protocol layer adds a header and a guarantee — but also a failure mode.</strong> TCP guarantees delivery but introduces head-of-line blocking. IP routes globally but drops packets without notice. Understanding which layer is responsible for which failure — and which layer to blame when things go wrong — is the core skill of network debugging.</p>
+  </div>
+</section>
+
+<!-- REFERENCES -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References & Further Reading</h2>
+  <p>Primary RFCs and papers cited throughout this document. Each broken down into digestible takeaways.</p>
+
+  <div id="ref1" class="callout green" style="margin-top: 28px;">
+    <div class="callout-label">[1] RFC 791 — Internet Protocol (1981)</div>
+    <p><strong>Postel, J.</strong> "Internet Protocol — DARPA Internet Program Protocol Specification." IETF, September 1981.<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc791" style="color:var(--accent);" target="_blank">https://datatracker.ietf.org/doc/html/rfc791</a></p>
+    <p>• The foundational specification for IPv4 — defines the packet format (header fields, fragmentation, TTL, checksums) that every device on the internet uses today.</p>
+    <p>• Establishes IP as <strong>deliberately unreliable and connectionless</strong> — routing datagrams from source to destination with no guarantees on delivery, ordering, or duplication.</p>
+    <p>• Defines the 20-byte minimum header with source/destination IP addresses, TTL, protocol identifier, and header checksum (not payload checksum — a critical detail).</p>
+    <p>• Specifies <strong>fragmentation and reassembly</strong> when packets exceed a network link's MTU, using the Identification, Flags, and Fragment Offset fields.</p>
+    <p>• Written by Jon Postel at USC's Information Sciences Institute — a document that has governed how 5+ billion devices communicate for over 40 years.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] RFC 793 / RFC 9293 — Transmission Control Protocol</div>
+    <p><strong>Postel, J.</strong> "Transmission Control Protocol." IETF, September 1981. Obsoleted by <strong>Eddy, W.</strong> RFC 9293, August 2022.<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc9293" style="color:var(--blue);" target="_blank">https://datatracker.ietf.org/doc/html/rfc9293</a> (modern consolidated version)</p>
+    <p>• Defines reliable, ordered, byte-stream delivery over unreliable IP — the 3-way handshake, sequence numbers, ACKs, retransmission, and flow control via sliding window.</p>
+    <p>• The TCP header's 32-bit sequence numbers enable <strong>byte-level tracking</strong> of a stream — the receiver knows exactly which bytes are missing and can reassemble out-of-order segments.</p>
+    <p>• RFC 9293 (2022) consolidates 40+ years of TCP extensions into a single spec, incorporating congestion control (from RFC 5681), SACK (RFC 2018), timestamps, and modern security fixes.</p>
+    <p>• Introduces the concept of <strong>sockets</strong> (IP:port pairs) as connection endpoints — the programming abstraction that every server framework is built on.</p>
+    <p>• Defines TCP flags (SYN, ACK, FIN, RST, PSH, URG) that appear in every <code class="inline">tcpdump</code> output — understanding these is essential for production debugging.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] RFC 9000 — QUIC: A UDP-Based Multiplexed and Secure Transport (2021)</div>
+    <p><strong>Iyengar, J. (Fastly) & Thomson, M. (Mozilla).</strong> IETF Standards Track, May 2021.<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc9000" style="color:var(--orange);" target="_blank">https://datatracker.ietf.org/doc/html/rfc9000</a></p>
+    <p>• Defines QUIC — the transport protocol that replaces TCP for HTTP/3. Built on UDP, it provides <strong>multiplexed streams with independent loss recovery</strong>, eliminating TCP's head-of-line blocking.</p>
+    <p>• Integrates <strong>TLS 1.3 directly into the transport</strong>, reducing connection setup to 1 RTT (or 0-RTT for resumed sessions) compared to TCP+TLS's 2-3 RTTs.</p>
+    <p>• Introduces <strong>Connection IDs</strong> that survive network changes — a QUIC connection persists when you switch from WiFi to cellular, unlike TCP which is bound to IP:port.</p>
+    <p>• QUIC began as an experimental Google transport before the IETF standardized interoperable QUIC v1. Modern HTTP/3 uses QUIC as its transport substrate, but the transport and the HTTP mapping are specified separately.</p>
+    <p>• Designed to resist <strong>protocol ossification</strong> — encrypted headers and greased fields prevent middleboxes from making assumptions about the protocol, enabling future evolution.</p>
+  </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] Saltzer, Reed & Clark — "End-to-End Arguments in System Design" (1984)</div>
+    <p><strong>J.H. Saltzer, D.P. Reed, D.D. Clark.</strong> ACM Transactions on Computer Systems, Vol. 2, No. 4, Nov 1984, pp. 277–288.<br>
+    <a href="https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf" style="color:var(--purple);" target="_blank">https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf</a></p>
+    <p>• The design principle that explains <em>why</em> the protocol stack is layered the way it is: reliability, encryption, and ordering belong at the <strong>endpoints</strong>, not in the network core.</p>
+    <p>• IP is deliberately "dumb" by design — it moves packets without guaranteeing anything. TCP adds reliability at the endpoints where the application has full context about what "correct" means.</p>
+    <p>• The argument extends beyond networking: any function that can only be completely implemented with application-level knowledge should live at the application level, not in shared infrastructure.</p>
+    <p>• Explains the philosophical trade-off: lower-level implementations are justified only as <strong>performance enhancements</strong>, not as substitutes for end-to-end guarantees.</p>
+    <p>• One of the most cited papers in CS. Understanding it gives you a mental model for every layering decision in protocol design, microservices, and distributed systems.</p>
+  </div>
+
+  <div id="ref5" class="callout yellow">
+    <div class="callout-label">[5] RFC 2616 / RFC 9110 — HTTP Semantics</div>
+    <p><strong>Fielding, R., et al.</strong> "HTTP Semantics." IETF RFC 9110, June 2022. (Replaces HTTP/1.1 spec RFC 2616.)<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc9110" style="color:var(--yellow);" target="_blank">https://datatracker.ietf.org/doc/html/rfc9110</a></p>
+    <p>• The modern, version-independent specification for HTTP semantics — methods (GET, POST, PUT, DELETE, PATCH), status codes, headers, and content negotiation.</p>
+    <p>• Separates <strong>semantics</strong> (what HTTP means) from <strong>transport</strong> (how bytes move) — allowing the same HTTP to work over TCP (HTTP/1.1, HTTP/2) or QUIC (HTTP/3).</p>
+    <p>• Defines <strong>idempotency</strong> formally: GET, PUT, DELETE are idempotent (repeating them has the same effect); POST is not. This distinction is critical for retry and error-handling logic.</p>
+    <p>• Formalizes <strong>conditional requests</strong> (If-None-Match, If-Modified-Since) that enable efficient caching — the mechanism behind 304 Not Modified responses.</p>
+    <p>• The successor to the original RFC 2616 (1999). Understanding the evolution from monolithic spec → modular RFCs 9110–9114 shows how protocol standards mature.</p>
+  </div>
+
+  <div id="ref6" class="callout blue">
+    <div class="callout-label">[6] Cloudflare — HTTP RFCs Have Evolved: A View of HTTP Usage Trends (2022)</div>
+    <p><strong>Pardue, L. & Belson, D.</strong> Cloudflare Blog, June 2022.<br>
+    <a href="https://blog.cloudflare.com/cloudflare-view-http3-usage/" style="color:var(--blue);" target="_blank">https://blog.cloudflare.com/cloudflare-view-http3-usage/</a></p>
+    <p>• Cloudflare's traffic analysis showed <strong>HTTP/3 growing steadily</strong> after standardization, but <strong>HTTP/2 still comprised the majority</strong> of request traffic across Cloudflare customer content at the time.</p>
+    <p>• The post is useful operational context: browser support and protocol negotiation may favor HTTP/3 when available, but global deployment is not uniform.</p>
+    <p>• This is the right corrective to hand-wavy claims like "the whole web already moved to QUIC" — adoption is real, but mixed.</p>
+  </div>
+
+  <div id="ref7" class="callout green">
+    <div class="callout-label">[7] Meta — How Facebook Is Bringing QUIC to Billions (2020)</div>
+    <p><strong>Engineering at Meta.</strong> October 2020.<br>
+    <a href="https://engineering.fb.com/2020/10/21/networking-traffic/how-facebook-is-bringing-quic-to-billions/" style="color:var(--accent);" target="_blank">https://engineering.fb.com/2020/10/21/networking-traffic/how-facebook-is-bringing-quic-to-billions/</a></p>
+    <p>• Meta reported that <strong>more than 75% of its internet traffic</strong> was already using QUIC and HTTP/3 together at the time of publication.</p>
+    <p>• The article is valuable because it gives a concrete operator perspective: QUIC improved request errors, tail latency, and media delivery under real production conditions.</p>
+    <p>• It also shows why adoption claims must be scoped carefully: one operator may have deep QUIC rollout even while the broader web remains mixed.</p>
+  </div>
+
+  <div id="ref8" class="callout purple">
+    <div class="callout-label">[8] Chrome for Developers — Remove HTTP/2 Server Push from Chrome (2022)</div>
+    <p><strong>Pollard, B.</strong> Chrome for Developers, August 2022.<br>
+    <a href="https://developer.chrome.com/blog/removing-push" style="color:var(--purple);" target="_blank">https://developer.chrome.com/blog/removing-push</a></p>
+    <p>• Chrome disabled HTTP/2 Server Push by default in Chrome 106 after years of weak adoption and mixed performance results.</p>
+    <p>• The post explicitly notes that Server Push was difficult to realize safely in practice and often produced no clear net gain.</p>
+    <p>• For interview prep and system design discussions, this means Server Push is best treated as historical background, not a default optimization strategy.</p>
+  </div>
+
+  <div id="ref9" class="callout red">
+    <div class="callout-label">[9] Cloudflare — Path MTU Discovery in Practice (2015)</div>
+    <p><strong>Majkowski, M.</strong> Cloudflare Blog, February 2015.<br>
+    <a href="https://blog.cloudflare.com/path-mtu-discovery-in-practice/" style="color:var(--red);" target="_blank">https://blog.cloudflare.com/path-mtu-discovery-in-practice/</a></p>
+    <p>• Cloudflare documented a production incident where Path MTU Discovery broke under ECMP routing and certain user traffic became unreachable.</p>
+    <p>• The write-up is a strong real-world example of how ICMP handling, MTU assumptions, and routing behavior can combine into a hard-to-diagnose outage.</p>
+    <p>• It is a good reference whenever you want to justify why PMTU, MSS clamping, and black-hole detection matter in production.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals · built for deep understanding
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+</body>
+</html>
