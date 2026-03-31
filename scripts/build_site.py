@@ -62,6 +62,14 @@ GRAPH_LAYOUT = {
         "deps": ["storage", "latency-and-throughput"],
         "orbit_rotation": 24,
     },
+    "proxies": {
+        "x": 1040,
+        "y": 620,
+        "cluster": "Foundations",
+        "tone": "foundation",
+        "deps": ["client-server-model", "network-protocols"],
+        "orbit_rotation": 18,
+    },
     "availability": {
         "x": 620,
         "y": 160,
