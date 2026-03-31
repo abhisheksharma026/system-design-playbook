@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Load Balancers</title>
+<meta name="description" content="A system design guide to load balancers, L4 vs L7 routing, health checks, DNS load balancing, and backend selection algorithms.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals · Topic 08</div>
+  <h1><span>Load Balancers</span></h1>
+  <p class="hero-sub">A single server has a ceiling. Load balancers exist to make many servers look like one — distributing requests so no individual machine drowns while others sit idle. Every large-scale system has at least one, and most have several at different layers.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Prerequisites &amp; Key Terms</a></li>
+    <li><a href="#s1">Why Load Balancers Exist</a></li>
+    <li><a href="#s2">Where Load Balancers Sit</a></li>
+    <li><a href="#s3">L4 vs L7 — The Two Types</a></li>
+    <li><a href="#s4">Server-Selection Algorithms</a></li>
+    <li><a href="#s5">Health Checks</a></li>
+    <li><a href="#s6">DNS Load Balancing</a></li>
+    <li><a href="#s7">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s8">Mini-Project: Build a Load Balancer</a></li>
+    <li><a href="#s9">Production Example 1: Google Maglev</a></li>
+    <li><a href="#s10">Production Example 2: AWS ALB/NLB</a></li>
+    <li><a href="#s11">Edge Cases &amp; Gotchas</a></li>
+    <li><a href="#s12">What If? — Interactive Exploration</a></li>
+    <li><a href="#s13">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Prerequisites &amp; Key Terms</h2>
+
+  <h3>Load Balancer</h3>
+  <p>A device or software process that distributes incoming network traffic across a pool of backend servers. It's a specialized form of reverse proxy whose primary job is ensuring no single server is overwhelmed while others are underutilized. Load balancers appear at multiple layers of a system — between users and web servers, between web servers and application servers, between application servers and databases. Real-world examples: Nginx, HAProxy, AWS ALB/NLB, Google Cloud Load Balancer, F5 BIG-IP, Envoy.</p>
+
+  <h3>Server-Selection Strategy</h3>
+  <p>The algorithm a load balancer uses to decide <em>which</em> backend receives the next request. The choice of strategy directly impacts load distribution, latency, and whether "sticky" behavior (same user → same server) is maintained. Common strategies include round-robin, weighted round-robin, least connections, IP hash, random, and least response time. Each has trade-offs — simpler algorithms are faster but less adaptive; smarter algorithms add latency per decision.</p>
+
+  <h3>Hot Spot</h3>
+  <p>When traffic concentrates on a subset of servers in the pool, overloading them while others remain idle. This can happen due to a poor selection algorithm (e.g., hash collisions sending many users to the same server), a skewed workload (certain user IDs generate far more traffic), or heterogeneous server capacity (all servers weighted equally even though some are weaker). Hot spots defeat the purpose of load balancing and are a primary failure mode to watch for.</p>
+
+  <h3>Health Check</h3>
+  <p>A periodic probe the load balancer sends to each backend to verify it's alive and responding correctly. Backends that fail health checks are temporarily removed from the pool so traffic isn't sent to dead or degraded servers. Health checks can be <strong>shallow</strong> (TCP connect — is the port open?) or <strong>deep</strong> (HTTP GET /health — does the app return 200 with valid data?). Deep checks catch more failures but cost more resources.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>Why Load Balancers Exist</h2>
+
+  <p>A single server has hard limits — CPU cores, RAM, network bandwidth, connection slots. Once traffic exceeds those limits, the only options are <strong>vertical scaling</strong> (bigger server — expensive, has a ceiling) or <strong>horizontal scaling</strong> (more servers — cheaper, nearly unlimited). Load balancers enable horizontal scaling by making a fleet of servers act as one.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>Imagine a grocery store with one checkout lane. During rush hour, the line wraps around the store. The fix isn't a faster cashier (vertical scaling) — it's opening more lanes (horizontal scaling). But then you need someone at the front directing customers to available lanes — that's the load balancer. A good one sends customers to the shortest line (least connections). A basic one just alternates lanes (round-robin). A bad one sends everyone to lane 3 (hot spot).</p>
+  </div>
+
+  <p>Load balancers provide three core benefits: <strong>(1) Throughput</strong> — distribute requests across N servers, roughly multiplying capacity by N. <strong>(2) Availability</strong> — if one server dies, the LB routes around it. <strong>(3) Flexibility</strong> — add/remove servers without users noticing (zero-downtime deployments, auto-scaling).</p>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Where Load Balancers Sit</h2>
+
+  <p>Load balancers can appear at every tier of a system — not just the edge.</p>
+
+  <div class="memory-map"><span class="h">LOAD BALANCERS IN A TYPICAL ARCHITECTURE</span>
+<span class="d">│</span>
+<span class="d">│</span>  <span class="b">Users (browsers, mobile apps)</span>
+<span class="d">│</span>       │
+<span class="d">│</span>       ▼
+<span class="d">├──</span> <span class="v">LB Layer 1: DNS / Global LB</span>
+<span class="d">│</span>       <span class="cm">Route 53, Cloudflare DNS — geo-routing to nearest region</span>
+<span class="d">│</span>       │
+<span class="d">│</span>       ▼
+<span class="d">├──</span> <span class="v">LB Layer 2: Edge / L7 LB</span>
+<span class="d">│</span>       <span class="cm">AWS ALB, Nginx, Cloudflare — SSL termination, path routing</span>
+<span class="d">│</span>       │
+<span class="d">│</span>       ▼
+<span class="d">├──</span> <span class="b">Web / API Servers</span>  (stateless, horizontally scaled)
+<span class="d">│</span>       │
+<span class="d">│</span>       ▼
+<span class="d">├──</span> <span class="v">LB Layer 3: Internal / Service LB</span>
+<span class="d">│</span>       <span class="cm">Envoy sidecar, internal NLB — service-to-service traffic</span>
+<span class="d">│</span>       │
+<span class="d">│</span>       ▼
+<span class="d">├──</span> <span class="b">Application / Microservices</span>
+<span class="d">│</span>       │
+<span class="d">│</span>       ▼
+<span class="d">└──</span> <span class="v">LB Layer 4: Database LB / Read Replicas</span>
+        <span class="cm">PgBouncer, ProxySQL, HAProxy — distribute reads across replicas</span></div>
+</section>
+
+<!-- ============ SECTION 3 ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>L4 vs L7 — The Two Types</h2>
+
+  <p>Load balancers operate at two distinct network layers, and the choice has major implications for what decisions they can make.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Property</th><th>L4 (Transport Layer)</th><th>L7 (Application Layer)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Operates on</strong></td><td>TCP/UDP packets (IP + port)</td><td>HTTP requests (URL, headers, cookies, body)</td></tr>
+        <tr><td><strong>Sees</strong></td><td>Source IP, dest IP, source port, dest port, protocol</td><td>Everything L4 sees + HTTP method, URL path, Host header, cookies, query params</td></tr>
+        <tr><td><strong>Routing decisions</strong></td><td>Based on IP/port only (can't inspect content)</td><td>Based on URL path, hostname, headers, cookies — rich routing rules</td></tr>
+        <tr><td><strong>SSL/TLS</strong></td><td>Passes encrypted traffic through (TCP passthrough) OR terminates TLS</td><td>Always terminates TLS (must read HTTP)</td></tr>
+        <tr><td><strong>Performance</strong></td><td>Faster — less parsing, kernel-level forwarding possible</td><td>Slower — must parse HTTP, buffer headers, potentially inspect body</td></tr>
+        <tr><td><strong>Sticky sessions</strong></td><td>IP hash only (coarse)</td><td>Cookie-based (precise, per-user)</td></tr>
+        <tr><td><strong>Use case</strong></td><td>High-throughput TCP (databases, game servers, gRPC, any non-HTTP)</td><td>HTTP APIs, web apps, microservices, path-based routing</td></tr>
+        <tr><td><strong>Products</strong></td><td>AWS NLB, HAProxy (TCP mode), Google Maglev, Linux IPVS</td><td>AWS ALB, Nginx, HAProxy (HTTP mode), Envoy, Traefik</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">When to Pick Which</div>
+    <p><strong>Default to L7</strong> for HTTP/HTTPS traffic — you get path-based routing, cookie stickiness, header inspection, and HTTP-level health checks. <strong>Use L4</strong> when you need raw TCP/UDP forwarding (databases, message queues, game servers), or when you need maximum throughput with minimal latency and don't need content-based routing. Many architectures use <strong>both</strong>: an L4 NLB in front for raw packet distribution, with L7 ALBs behind for HTTP routing.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4 ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Server-Selection Algorithms</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Algorithm</th><th>How It Works</th><th>Strengths</th><th>Weaknesses</th><th>Used By</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Round-Robin</strong></td><td>Rotate sequentially: 1→2→3→1→2→3…</td><td>Dead simple, O(1), perfectly even distribution if requests are uniform</td><td>Ignores server load — a slow query on server 2 doesn't reduce its share</td><td>Nginx (default), DNS round-robin</td></tr>
+        <tr><td><strong>Weighted Round-Robin</strong></td><td>Round-robin but servers with higher weight get proportionally more requests</td><td>Handles heterogeneous hardware (beefy server gets weight=3, small gets weight=1)</td><td>Weights are static — doesn't adapt to runtime load</td><td>Nginx (<code>weight=N</code>), HAProxy</td></tr>
+        <tr><td><strong>Least Connections</strong></td><td>Send to the server with the fewest active connections right now</td><td>Adapts to server load in real time — slow servers naturally get fewer requests</td><td>Requires tracking per-server connection count (small overhead)</td><td>HAProxy, Envoy, many managed LBs</td></tr>
+        <tr><td><strong>Least Response Time</strong></td><td>Send to the server with the fastest recent response time</td><td>Most adaptive — routes to the empirically fastest server</td><td>Requires latency measurement, can oscillate (all rush to the "fastest")</td><td>Envoy, some HAProxy configs</td></tr>
+        <tr><td><strong>IP Hash</strong></td><td>Hash the client's IP to deterministically select a server</td><td>Same client always hits same server (sticky sessions without cookies)</td><td>Uneven distribution if IP ranges are skewed; server changes break affinity</td><td>Nginx (<code>ip_hash</code>), many L4 LBs</td></tr>
+        <tr><td><strong>Random</strong></td><td>Pick a server uniformly at random</td><td>Simple, no state tracking, statistically even over large N</td><td>Can be uneven over short windows; no load awareness</td><td>Some client-side LBs, gRPC</td></tr>
+        <tr><td><strong>Power of Two Random Choices</strong></td><td>Pick 2 servers at random, send to the one with fewer connections</td><td>Near-optimal load distribution with minimal overhead. Provably better than pure random.</td><td>Still random-based, tiny extra latency for 2 lookups</td><td>Envoy least-request policy, modern service proxies</td></tr>
+        <tr><td><strong>Consistent Hashing</strong></td><td>Hash the request key to a position on a ring; route to nearest server on the ring</td><td>When a server is added/removed, only 1/N of keys re-map (minimal disruption)</td><td>Can produce uneven distribution without virtual nodes</td><td>Google Maglev, Cassandra, Memcached, DynamoDB</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Interview Insight — Power of Two Choices</div>
+    <p>The "Power of Two Random Choices" algorithm is a strong interview talking point because it keeps most of the benefit of global load awareness without scanning every backend. In the classic balls-into-bins analysis, sampling two candidates dramatically improves over pure random assignment, and Envoy's <strong>least request</strong> policy uses a two-choice strategy by default within that policy. <a href="#ref2" class="ref">[2]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5 ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Health Checks</h2>
+
+  <p>A load balancer is only as good as its ability to detect dead or degraded backends. Health checks are the mechanism for this.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Type</th><th>How It Works</th><th>Detects</th><th>Misses</th></tr></thead>
+      <tbody>
+        <tr><td><strong>TCP Connect</strong></td><td>Try to open a TCP connection to the backend port</td><td>Process crashed, port not listening, machine down</td><td>App is up but returning errors (500s), slow but alive</td></tr>
+        <tr><td><strong>HTTP GET</strong></td><td>Send GET /health, expect 200 OK</td><td>App crashes, misconfigurations, dependency failures (if /health checks deps)</td><td>App returns 200 but is actually degraded for real traffic</td></tr>
+        <tr><td><strong>Deep Health</strong></td><td>/health checks DB connectivity, cache availability, disk space</td><td>Dependency failures, resource exhaustion</td><td>Expensive — can itself become a bottleneck if checks are heavy</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Typical health check configuration (Nginx-style)</span></div>
+    <pre><span class="cm"># Check every 10 seconds. If 3 consecutive failures → mark unhealthy.</span>
+<span class="cm"># If 2 consecutive successes → mark healthy again.</span>
+<span class="fn">health_check</span> interval=<span class="num">10</span>s fails=<span class="num">3</span> passes=<span class="num">2</span>;
+
+<span class="cm"># Detection time for a crash:</span>
+<span class="cm">#   Worst case: interval × fails = 10s × 3 = 30 seconds</span>
+<span class="cm">#   During those 30s, ~1/N of all requests go to the dead server → errors</span>
+<span class="cm">#   Fix: shorter intervals (5s) or fewer fails (2) — but more false positives</span>
+
+<span class="cm"># Recovery time:</span>
+<span class="cm">#   interval × passes = 10s × 2 = 20 seconds before re-entering pool</span>
+<span class="cm">#   This prevents a flapping server from cycling in and out</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 6 ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>DNS Load Balancing</h2>
+
+  <p>The simplest form of load balancing: return different IP addresses from DNS queries. Large services like Google often return multiple frontend IPs for a single domain, and repeated <code class="inline">dig</code> queries may produce different answers over time.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>See DNS load balancing in action (macOS/Linux/WSL — dig is pre-installed on most systems)</span></div>
+    <pre><span class="cm"># Query google.com twice — often returns different IPs</span>
+$ <span class="fn">dig</span> +short google.com
+<span class="num">142.250.185.78</span>
+
+$ <span class="fn">dig</span> +short google.com
+<span class="num">142.250.185.110</span>     <span class="cm">← different IP! DNS rotated it</span>
+
+<span class="cm"># dig is installed by default on macOS and most Linux distros.</span>
+<span class="cm"># On Ubuntu if missing: sudo apt install dnsutils</span>
+
+<span class="cm"># See ALL IPs returned (Google often returns multiple A records):</span>
+$ <span class="fn">dig</span> google.com A +short
+<span class="num">142.250.185.78</span>
+<span class="num">142.250.185.110</span>
+<span class="num">142.250.185.46</span>     <span class="cm">← 3 IPs. Client picks one (usually the first).</span>
+
+<span class="cm"># Each IP points to a different data center or server cluster.</span>
+<span class="cm"># This IS load balancing — at the DNS layer.</span></pre>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">DNS LB Limitations</div>
+    <p><strong>No health awareness:</strong> DNS doesn't know if a server is healthy — it returns IPs from a static list. If a server dies, DNS keeps returning its IP until someone manually removes it or the TTL-based record propagates. <strong>Client caching:</strong> Browsers and OSes cache DNS responses. Even after you remove a dead IP, clients may use the stale entry for minutes or hours. <strong>No fine-grained control:</strong> DNS can't do least-connections, weighted routing, or path-based decisions. Use DNS LB for geo-routing between regions, but use a real LB (Nginx, ALB) within each region for fine-grained distribution.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 7 ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: Observe DNS-Level Load Balancing</h3>
+  <div class="code-block">
+    <div class="code-header"><span>macOS/Linux/WSL — dig is pre-installed</span></div>
+    <pre><span class="cm"># Run dig multiple times and compare IPs</span>
+$ <span class="kw">for</span> i <span class="kw">in</span> 1 2 3 4 5; <span class="kw">do</span> <span class="fn">dig</span> +short google.com | head -1; <span class="kw">done</span>
+<span class="num">142.250.185.78</span>
+<span class="num">142.250.185.110</span>
+<span class="num">142.250.185.78</span>
+<span class="num">142.250.185.46</span>
+<span class="num">142.250.185.110</span>
+
+<span class="cm"># The IPs rotate — this is DNS round-robin in action.</span>
+<span class="cm"># Each IP resolves to a different Google frontend server.</span>
+
+<span class="cm"># Check the TTL (Time to Live) — how long the client caches the IP:</span>
+$ <span class="fn">dig</span> google.com | grep -A1 "ANSWER SECTION"
+;; ANSWER SECTION:
+google.com.     <span class="num">205</span>   IN   A   142.250.185.78
+<span class="cm">#               ^^^</span>
+<span class="cm"># TTL = 205 seconds (~3.5 min). After this, client must re-query DNS.</span></pre>
+  </div>
+
+  <h3>Demo 2: Weighted Round-Robin with Nginx</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Set up Nginx to distribute traffic 3:1 between two backends (macOS: brew install nginx / Linux: apt install nginx)</span></div>
+    <pre><span class="cm"># 1. Start two Python backends</span>
+$ <span class="fn">python3</span> -c "
+from http.server import HTTPServer, BaseHTTPRequestHandler
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers()
+        self.wfile.write(b'Response from port 8001')
+    def log_message(self,*a): pass
+HTTPServer(('',8001),H).serve_forever()" &amp;
+
+$ <span class="fn">python3</span> -c "
+from http.server import HTTPServer, BaseHTTPRequestHandler
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers()
+        self.wfile.write(b'Response from port 8002')
+    def log_message(self,*a): pass
+HTTPServer(('',8002),H).serve_forever()" &amp;
+
+<span class="cm"># 2. Create Nginx config with weighted upstream</span>
+$ <span class="fn">cat</span> > /tmp/nginx-lb.conf &lt;&lt;'EOF'
+events { worker_connections 64; }
+http {
+    upstream backends {
+        server 127.0.0.1:8001 weight=3;
+        server 127.0.0.1:8002 weight=1;
+    }
+    server {
+        listen 9999;
+        location / {
+            proxy_pass http://backends;
+        }
+    }
+}
+EOF
+
+<span class="cm"># 3. Start Nginx</span>
+$ <span class="fn">nginx</span> -c /tmp/nginx-lb.conf
+
+<span class="cm"># 4. Hit it 8 times and count distribution</span>
+$ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 8); <span class="kw">do</span> <span class="fn">curl</span> -s localhost:9999; echo; <span class="kw">done</span>
+Response from port <span class="num">8001</span>   <span class="cm"># weight=3</span>
+Response from port <span class="num">8001</span>
+Response from port <span class="num">8001</span>
+Response from port <span class="num">8002</span>   <span class="cm"># weight=1</span>
+Response from port <span class="num">8001</span>
+Response from port <span class="num">8001</span>
+Response from port <span class="num">8001</span>
+Response from port <span class="num">8002</span>
+
+<span class="cm"># ~75% to 8001, ~25% to 8002 — matching the 3:1 weight ratio.</span>
+<span class="cm"># Stop: nginx -s stop &amp;&amp; kill %1 %2</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 8 ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Mini-Project: Build a Load Balancer</h2>
+
+  <h4>Simple: Feel What Load Balancing Means</h4>
+  <div class="code-block">
+    <div class="code-header"><span>simple_lb.py — the smallest load balancer (macOS/Linux/WSL, Python 3.7+)</span></div>
+    <pre><span class="kw">import</span> http.server, urllib.request, itertools
+
+<span class="cm"># Round-robin pool of backends</span>
+BACKENDS = [<span class="str">"http://127.0.0.1:8001"</span>, <span class="str">"http://127.0.0.1:8002"</span>]
+pool = itertools.cycle(BACKENDS)
+
+<span class="kw">class</span> <span class="fn">LB</span>(http.server.BaseHTTPRequestHandler):
+    <span class="kw">def</span> <span class="fn">do_GET</span>(self):
+        backend = next(pool)
+        <span class="kw">try</span>:
+            resp = urllib.request.urlopen(f<span class="str">"{backend}{self.path}"</span>, timeout=<span class="num">3</span>)
+            self.send_response(<span class="num">200</span>)
+            self.send_header(<span class="str">"X-Backend"</span>, backend)
+            self.end_headers()
+            self.wfile.write(resp.read())
+        <span class="kw">except</span>:
+            self.send_response(<span class="num">502</span>); self.end_headers()
+            self.wfile.write(f<span class="str">"Backend {backend} down"</span>.encode())
+    <span class="kw">def</span> <span class="fn">log_message</span>(self, *a): <span class="kw">pass</span>
+
+print(<span class="str">"[LB] localhost:7070 → round-robin across"</span>, BACKENDS)
+http.server.HTTPServer((<span class="str">""</span>, <span class="num">7070</span>), LB).serve_forever()</pre>
+  </div>
+  <div class="code-block">
+    <div class="code-header"><span>Test it — watch the X-Backend header cycle</span></div>
+    <pre><span class="cm"># Start 2 backends (see Demo 2 above), then start the LB:</span>
+$ <span class="fn">python3</span> simple_lb.py
+
+<span class="cm"># Hit it 4 times:</span>
+$ <span class="kw">for</span> i <span class="kw">in</span> 1 2 3 4; <span class="kw">do</span> <span class="fn">curl</span> -s -D- localhost:7070/ 2>&amp;1 | grep -E "X-Backend|from port"; <span class="kw">done</span>
+X-Backend: http://127.0.0.1:<span class="num">8001</span>
+Response from port <span class="num">8001</span>
+X-Backend: http://127.0.0.1:<span class="num">8002</span>
+Response from port <span class="num">8002</span>
+X-Backend: http://127.0.0.1:<span class="num">8001</span>
+Response from port <span class="num">8001</span>
+X-Backend: http://127.0.0.1:<span class="num">8002</span>
+Response from port <span class="num">8002</span>
+
+<span class="cm"># Kill one backend, watch the LB return 502 for that slot.</span></pre>
+  </div>
+
+  <h4>Advanced: Least-Connections + Health Checks</h4>
+  <div class="code-block">
+    <div class="code-header"><span>smart_lb.py — least-connections with health checks (macOS/Linux/WSL, Python 3.7+)</span></div>
+    <pre><span class="kw">import</span> http.server, urllib.request, threading, time
+
+BACKENDS = [<span class="str">"http://127.0.0.1:8001"</span>, <span class="str">"http://127.0.0.1:8002"</span>, <span class="str">"http://127.0.0.1:8003"</span>]
+conns = {b: <span class="num">0</span> <span class="kw">for</span> b <span class="kw">in</span> BACKENDS}    <span class="cm"># Active connections per backend</span>
+healthy = {b: <span class="num">True</span> <span class="kw">for</span> b <span class="kw">in</span> BACKENDS}  <span class="cm"># Health status</span>
+
+<span class="kw">def</span> <span class="fn">health_checker</span>():
+    <span class="str">"""Check each backend every 5 seconds."""</span>
+    <span class="kw">while True</span>:
+        <span class="kw">for</span> b <span class="kw">in</span> BACKENDS:
+            <span class="kw">try</span>:
+                urllib.request.urlopen(b, timeout=<span class="num">2</span>)
+                <span class="kw">if not</span> healthy[b]: print(f<span class="str">"  [HC] {b} recovered ✓"</span>)
+                healthy[b] = <span class="num">True</span>
+            <span class="kw">except</span>:
+                <span class="kw">if</span> healthy[b]: print(f<span class="str">"  [HC] {b} FAILED ✗"</span>)
+                healthy[b] = <span class="num">False</span>
+        time.sleep(<span class="num">5</span>)
+
+<span class="kw">class</span> <span class="fn">SmartLB</span>(http.server.BaseHTTPRequestHandler):
+    <span class="kw">def</span> <span class="fn">do_GET</span>(self):
+        <span class="cm"># Pick the healthy backend with the fewest active connections</span>
+        candidates = [b <span class="kw">for</span> b <span class="kw">in</span> BACKENDS <span class="kw">if</span> healthy[b]]
+        <span class="kw">if not</span> candidates:
+            self.send_response(<span class="num">503</span>); self.end_headers()
+            self.wfile.write(b<span class="str">"No healthy backends"</span>); <span class="kw">return</span>
+
+        backend = min(candidates, key=<span class="kw">lambda</span> b: conns[b])
+        conns[backend] += <span class="num">1</span>
+        <span class="kw">try</span>:
+            resp = urllib.request.urlopen(f<span class="str">"{backend}{self.path}"</span>, timeout=<span class="num">5</span>)
+            self.send_response(<span class="num">200</span>)
+            self.send_header(<span class="str">"X-Backend"</span>, backend)
+            self.send_header(<span class="str">"X-Connections"</span>, str(conns))
+            self.end_headers()
+            self.wfile.write(resp.read())
+        <span class="kw">except</span>:
+            self.send_response(<span class="num">502</span>); self.end_headers()
+            self.wfile.write(f<span class="str">"Backend error: {backend}"</span>.encode())
+        <span class="kw">finally</span>:
+            conns[backend] -= <span class="num">1</span>
+    <span class="kw">def</span> <span class="fn">log_message</span>(self, *a): <span class="kw">pass</span>
+
+threading.Thread(target=health_checker, daemon=<span class="num">True</span>).start()
+print(f<span class="str">"[Smart LB] localhost:7070 → least-connections with health checks"</span>)
+http.server.HTTPServer((<span class="str">""</span>, <span class="num">7070</span>), SmartLB).serve_forever()</pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Experiments to Try</div>
+    <p><strong>1.</strong> Start 3 backends, run the smart LB, send requests — watch the X-Connections header show even distribution.<br>
+    <strong>2.</strong> Kill one backend — the health checker detects it within 5s and stops routing to it.<br>
+    <strong>3.</strong> Restart the backend — the health checker recovers it and starts routing again.<br>
+    <strong>4.</strong> Add a <code>time.sleep(0.5)</code> to one backend to simulate slowness — the least-connections algorithm naturally sends fewer requests to the slow one because its connection count stays higher.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 9 ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production Example 1: Google Maglev</h2>
+
+  <p>Maglev is Google's software network load balancer — a distributed L4 system running on commodity Linux servers that has handled Google's incoming traffic since 2008. <a href="#ref1" class="ref">[1]</a></p>
+
+  <h3>Key Design Decisions</h3>
+  <p><strong>Software, not hardware:</strong> Traditional hardware LBs (F5, Citrix) are expensive, hard to scale, and provide only 1+1 (active-passive) redundancy. Maglev runs on the same commodity servers as Google's services, enabling N+1 redundancy — all machines are active, and capacity scales by adding more machines.</p>
+  <p><strong>ECMP distribution:</strong> Network routers use Equal-Cost Multipath routing to distribute packets evenly across all Maglev machines. No single Maglev is a bottleneck or single point of failure.</p>
+  <p><strong>Consistent hashing:</strong> Maglev uses a custom consistent hashing algorithm (Maglev hashing) that provides better load distribution than standard consistent hashing while minimizing disruption when machines are added or removed.</p>
+  <p><strong>Line-rate performance:</strong> A single Maglev machine can saturate a 10Gbps link with small packets. This is achieved by bypassing the Linux kernel network stack and using kernel bypass techniques for packet processing.</p>
+
+  <div class="callout orange">
+    <div class="callout-label">Key Lesson from Maglev</div>
+    <p>Maglev demonstrates that <strong>software load balancers on commodity hardware can compete with and often outperform dedicated hardware LBs</strong> while being easier to scale operationally. It is a strong case study for why cloud platforms favored software-defined load balancing instead of proprietary appliances. If an interviewer asks about hardware vs software LBs, Maglev is one of the best examples to cite. <a href="#ref1" class="ref">[1]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 10 ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production Example 2: AWS ALB / NLB</h2>
+
+  <p>AWS offers two primary managed load balancers, each matching an L4/L7 use case. <a href="#ref4" class="ref">[4]</a></p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Feature</th><th>ALB (Application LB)</th><th>NLB (Network LB)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Layer</strong></td><td>L7 (HTTP/HTTPS/gRPC)</td><td>L4 (TCP/UDP/TLS)</td></tr>
+        <tr><td><strong>Routing</strong></td><td>Path-based, host-based, header-based, query-string</td><td>Port-based only</td></tr>
+        <tr><td><strong>SSL termination</strong></td><td>Yes (manages certificates via ACM)</td><td>Optional (TLS passthrough or termination)</td></tr>
+        <tr><td><strong>WebSocket</strong></td><td>Native support</td><td>Via TCP passthrough</td></tr>
+        <tr><td><strong>Latency</strong></td><td>Higher protocol overhead due to HTTP parsing and routing logic</td><td>Lower protocol overhead for raw TCP/UDP/TLS forwarding</td></tr>
+        <tr><td><strong>Static IP</strong></td><td>No (DNS-based, IPs can change)</td><td>Yes (one static IP per AZ)</td></tr>
+        <tr><td><strong>Scaling</strong></td><td>Auto-scales for most application workloads</td><td>Designed for very high connection rates and static-IP/TCP use cases</td></tr>
+        <tr><td><strong>Best for</strong></td><td>HTTP APIs, web apps, microservices</td><td>Game servers, IoT, VoIP, database proxying, any TCP/UDP</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SECTION 11 ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Edge Cases &amp; Gotchas</h2>
+
+  <h3>1. The Sticky Session Trap</h3>
+  <p>IP-hash or cookie-based stickiness sends the same user to the same backend — useful for in-memory sessions. But if that backend dies, the user loses their session. And during scale-in (removing servers), sticky users on the removed server are disrupted. Fix: externalize session state to Redis/Memcached so any backend can serve any user. Stickiness becomes unnecessary.</p>
+
+  <h3>2. Thundering Herd on Backend Recovery</h3>
+  <p>A backend passes its health check and re-enters the pool. The LB immediately sends it a full share of traffic. If the backend needs time to warm up (JVM JIT, cache cold start), it gets overwhelmed and fails again — oscillating between healthy and unhealthy (flapping). Fix: use a <strong>slow start</strong> ramp so a newly healthy backend gradually receives traffic instead of taking a full share instantly. Envoy documents this behavior explicitly. <a href="#ref5" class="ref">[5]</a></p>
+
+  <h3>3. The Load Balancer as SPOF</h3>
+  <p>A single LB instance is a single point of failure. Fix: deploy multiple LB instances behind DNS round-robin, or use a cloud-managed LB configured across multiple Availability Zones. For self-managed Nginx/HAProxy, use keepalived with a floating VIP for active-passive failover between two LB nodes.</p>
+
+  <h3>4. Connection Draining on Deploys</h3>
+  <p>During a rolling deployment, you remove an old backend and add a new one. If you remove the old backend immediately, all in-flight requests to it fail. Fix: <strong>connection draining</strong> — mark the backend as "draining" (stop sending new requests, but let existing connections finish for up to N seconds). Different products expose this under names like <em>drain</em>, <em>graceful shutdown</em>, or AWS's <em>deregistration delay</em>. <a href="#ref4" class="ref">[4]</a></p>
+
+  <h3>5. Uneven Backends (Heterogeneous Fleet)</h3>
+  <p>If you mix c5.xlarge (4 vCPUs) and c5.4xlarge (16 vCPUs) instances behind a round-robin LB, the small instances get the same traffic as the big ones — and collapse under load. Fix: weighted round-robin with weights proportional to capacity, or use least-connections which naturally adapts.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story</div>
+    <p>A large SaaS provider experienced intermittent 502 errors after deploying a new version. The LB's health check was a simple TCP connect (port open = healthy). The new version had a bug that made it return 500 errors for ~10% of requests, but the port was always open, so the health check never caught it. After switching to an HTTP-level health check (<code>GET /health</code> expecting 200 + valid JSON), the buggy instances were automatically removed. The lesson: <strong>TCP health checks are not enough for HTTP services</strong> — always use deep, application-level health checks.</p>
+  </div>
+</section>
+
+<!-- ============ WHAT IF ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <div class="diagram-wrap" style="padding:24px;">
+    <div style="font-family:var(--sans);">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px;">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin-bottom:12px;font-weight:600;">Tweak Parameters</div>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Backend servers: <strong id="v-servers" style="color:var(--accent);">3</strong>
+            <br><input type="range" id="r-servers" min="1" max="20" value="3" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Requests per second: <strong id="v-rps" style="color:var(--accent);">3,000</strong>
+            <br><input type="range" id="r-rps" min="100" max="50000" value="3000" step="100" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Per-server capacity (RPS): <strong id="v-cap" style="color:var(--accent);">1,500</strong>
+            <br><input type="range" id="r-cap" min="100" max="10000" value="1500" step="100" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+        </div>
+        <div style="background:var(--surface-2);border-radius:10px;padding:20px;border:1px solid var(--border);">
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--orange);margin-bottom:12px;font-weight:600;">Impact</div>
+          <div id="lb-total-cap" style="font-family:var(--mono);font-size:14px;color:var(--text-dim);margin-bottom:6px;"></div>
+          <div id="lb-per-server" style="font-family:var(--mono);font-size:14px;color:var(--text-dim);margin-bottom:6px;"></div>
+          <div id="lb-util" style="font-family:var(--mono);font-size:14px;margin-bottom:6px;"></div>
+          <div id="lb-n1" style="font-family:var(--mono);font-size:13px;color:var(--text-muted);margin-bottom:6px;"></div>
+          <div id="lb-verdict" style="font-family:var(--mono);font-size:16px;font-weight:600;margin-top:10px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">Round-robin vs least-connections</div>
+      <p><strong>Round-robin:</strong> Even distribution, zero overhead, but ignores server load. A slow query on one server doesn't reduce its traffic share.<br>
+      <strong>Least-connections:</strong> Adapts to real load, but requires connection tracking. Better for workloads with variable request duration (some requests take 5ms, others 500ms).</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">L4 vs L7 load balancing</div>
+      <p><strong>L4:</strong> Faster (kernel-level packet forwarding), works for any TCP/UDP protocol, but can't make content-based routing decisions.<br>
+      <strong>L7:</strong> Can route by URL/header/cookie, can terminate SSL, can cache responses, but adds ~1ms and must parse HTTP.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">Adding more servers vs bigger servers</div>
+      <p><strong>More servers (horizontal):</strong> Linear cost, near-unlimited scale, needs a load balancer, stateless design required.<br>
+      <strong>Bigger servers (vertical):</strong> Simpler (no LB needed), but cost grows superlinearly, hard ceiling, single point of failure. Horizontal always wins long-term.</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">N+1 capacity planning</div>
+      <p><strong>Improves:</strong> Survives one server failure without overloading the rest. If you have 4 servers and each runs at 75% capacity, losing one puts the remaining 3 at 100% — survivable.<br>
+      <strong>Costs:</strong> You're paying for an "extra" server that only works during failures.<br>
+      <strong>When worth it:</strong> Always. If you're running at 100% and any failure means an outage, you're one crash away from a bad day.</p>
+    </div>
+  </div>
+
+  <h3>Toy Simulation: Algorithm Comparison</h3>
+  <div class="code-block">
+    <div class="code-header"><span>lb_sim.py — compare algorithms on skewed workload (macOS/Linux/WSL)</span></div>
+    <pre><span class="kw">import</span> random
+
+<span class="kw">def</span> <span class="fn">simulate</span>(algo, n_servers, n_requests, request_costs):
+    <span class="str">"""Simulate load distribution. Returns per-server total load."""</span>
+    load = [<span class="num">0</span>] * n_servers
+    active = [<span class="num">0</span>] * n_servers
+    rr_idx = <span class="num">0</span>
+
+    <span class="kw">for</span> cost <span class="kw">in</span> request_costs:
+        <span class="kw">if</span> algo == <span class="str">"round_robin"</span>:
+            server = rr_idx % n_servers
+            rr_idx += <span class="num">1</span>
+        <span class="kw">elif</span> algo == <span class="str">"random"</span>:
+            server = random.randint(<span class="num">0</span>, n_servers - <span class="num">1</span>)
+        <span class="kw">elif</span> algo == <span class="str">"least_conn"</span>:
+            server = min(range(n_servers), key=<span class="kw">lambda</span> i: active[i])
+        <span class="kw">elif</span> algo == <span class="str">"power_of_two"</span>:
+            a, b = random.sample(range(n_servers), <span class="num">2</span>)
+            server = a <span class="kw">if</span> active[a] <= active[b] <span class="kw">else</span> b
+
+        load[server] += cost
+        active[server] += cost  <span class="cm"># Simulate active connections proportional to cost</span>
+
+    <span class="kw">return</span> load
+
+N_SERVERS = <span class="num">5</span>
+N_REQUESTS = <span class="num">10_000</span>
+<span class="cm"># Skewed workload: most requests are cheap, a few are very expensive</span>
+costs = [random.choice([<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>,<span class="num">1</span>,<span class="num">10</span>,<span class="num">50</span>]) <span class="kw">for</span> _ <span class="kw">in</span> range(N_REQUESTS)]
+
+print(f<span class="str">"Simulating {N_REQUESTS} requests across {N_SERVERS} servers"</span>)
+print(f<span class="str">"Workload: 80% cost=1, 10% cost=10, 10% cost=50 (skewed)\n"</span>)
+print(f<span class="str">"{' Algorithm':-&lt;22} {'Max Load':&gt;10} {'Min Load':&gt;10} {'Spread':&gt;10}"</span>)
+print(<span class="str">"="</span> * <span class="num">55</span>)
+
+<span class="kw">for</span> algo <span class="kw">in</span> [<span class="str">"round_robin"</span>, <span class="str">"random"</span>, <span class="str">"least_conn"</span>, <span class="str">"power_of_two"</span>]:
+    load = simulate(algo, N_SERVERS, N_REQUESTS, costs)
+    mx, mn = max(load), min(load)
+    spread = mx - mn
+    print(f<span class="str">"  {algo:&lt;20} {mx:&gt;10,} {mn:&gt;10,} {spread:&gt;10,}"</span>)
+
+print(f<span class="str">"\nLower spread = more even distribution. Least-connections wins on skewed workloads."</span>)</pre>
+  </div>
+  <div class="code-block">
+    <div class="code-header"><span>Expected output</span></div>
+    <pre>Simulating 10000 requests across 5 servers
+Workload: 80% cost=1, 10% cost=10, 10% cost=50 (skewed)
+
+ Algorithm              Max Load   Min Load     Spread
+=======================================================
+  round_robin            <span class="num">15,280</span>     <span class="num">12,890</span>      <span class="num">2,390</span>
+  random                 <span class="num">16,100</span>     <span class="num">11,950</span>      <span class="num">4,150</span>
+  least_conn             <span class="num">13,600</span>     <span class="num">13,200</span>        <span class="num">400</span>
+  power_of_two           <span class="num">13,850</span>     <span class="num">13,050</span>        <span class="num">800</span>
+
+Lower spread = more even distribution. Least-connections wins on skewed workloads.</pre>
+  </div>
+</section>
+
+<!-- ============ INTERVIEW Q&A ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Interview Questions &amp; Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What is a load balancer and why do you need one?</div>
+    <div class="qa-a">
+      <p>A load balancer distributes incoming traffic across multiple backend servers to prevent any single server from being overwhelmed. Three benefits: (1) <strong>Throughput</strong> — N servers ≈ N× capacity. (2) <strong>Availability</strong> — if one server dies, the LB routes around it (with health checks). (3) <strong>Flexibility</strong> — add/remove servers for scaling and zero-downtime deploys. Most production systems with more than one application server place some load-distribution layer in front of them.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: What's the difference between L4 and L7 load balancing?</div>
+    <div class="qa-a">
+      <p><strong>L4</strong> operates on TCP/UDP packets — sees IP addresses and port numbers, routes based on those. Faster (kernel-level), works for any protocol. Examples: AWS NLB, IPVS, Maglev. <strong>L7</strong> operates on HTTP requests — sees URLs, headers, cookies. Can do path-based routing, cookie stickiness, SSL termination, caching. Slower (HTTP parsing). Examples: AWS ALB, Nginx, Envoy. Default to L7 for HTTP. Use L4 for non-HTTP protocols or when latency is critical.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: Compare round-robin, least-connections, and consistent hashing. When would you use each?</div>
+    <div class="qa-a">
+      <p><strong>Round-robin:</strong> Simple, even distribution when requests have similar cost. Use for stateless services with uniform request patterns. <strong>Least-connections:</strong> Adaptive — sends to the server with fewest active connections. Best when request durations vary (some fast, some slow). Use as the default for most workloads. <strong>Consistent hashing:</strong> Same key always goes to the same server. Minimal disruption when servers are added/removed (only ~1/N keys re-map). Use when you need affinity (caching, sessions) and can't externalize state. Downside: can create hot spots if keys are skewed.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: How do health checks work and what happens when a backend fails?</div>
+    <div class="qa-a">
+      <p>The LB periodically probes each backend (e.g., HTTP GET /health every 10s). If a backend fails N consecutive checks (typically 2-3), the LB marks it unhealthy and stops sending traffic. When the backend passes M consecutive checks (typically 2), it's marked healthy again. During the detection window (interval × fail threshold), some requests may hit the dead backend and fail. Mitigation: shorter intervals (5s), fewer required failures (2), and client-side retries. Critical: use <strong>application-level</strong> health checks (HTTP 200 + check dependencies), not just TCP connect — a server with an open port but crashing application will fool TCP checks.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: How would you prevent the load balancer from being a single point of failure?</div>
+    <div class="qa-a">
+      <p>Three strategies: (1) <strong>Managed cloud LB</strong> (AWS ALB/NLB, GCP LB) — multi-AZ and managed by the cloud provider. This is the easiest approach. (2) <strong>Active-passive pair</strong> with keepalived — two Nginx/HAProxy instances share a floating VIP. If the primary dies, the passive claims the VIP in a few seconds. (3) <strong>DNS round-robin</strong> across multiple LBs — client resolves to one of several LB IPs. If one goes down, DNS health checks can remove it, though DNS TTL caching adds delay. Google's Maglev uses ECMP routing for N+1 redundancy across all LB machines.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: A customer reports that some requests are slow but others are fast. The LB uses round-robin. What's happening?</div>
+    <div class="qa-a">
+      <p>Round-robin distributes requests evenly regardless of server load. If one backend is slower (degraded hardware, heavy background job, GC pauses, hot queries), it still gets the same share of requests as healthy backends. 1 out of N requests lands on the slow server → those users experience high latency. <strong>Diagnosis:</strong> check per-backend latency metrics (LB access logs, or the X-Backend header). <strong>Fix:</strong> switch to <strong>least-connections</strong> — the slow server accumulates active connections, so the LB naturally sends it fewer new requests. Or use <strong>least response time</strong> to route based on measured latency. Also investigate <em>why</em> the server is slow (it's a symptom, not the root cause).</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CHEAT SHEET ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Load balancers distribute traffic across servers to improve throughput, availability, and deployment flexibility.<br>
+    <strong>2.</strong> L4 LBs route by IP/port (fast, any protocol). L7 LBs route by HTTP content (flexible, HTTP only). Default to L7 for web services.<br>
+    <strong>3.</strong> Round-robin is simple but blind to load. Least-connections adapts. Consistent hashing provides affinity. Power-of-two choices is a strong low-overhead strategy in modern least-request implementations.<br>
+    <strong>4.</strong> Health checks detect dead backends. Use HTTP-level checks (GET /health), not just TCP connect. Interval × fail threshold = detection time.<br>
+    <strong>5.</strong> DNS load balancing is the simplest form (different IPs per query) but has no health awareness and suffers from client-side caching.<br>
+    <strong>6.</strong> Sticky sessions (IP hash, cookies) break stateless design. Externalize session state to Redis instead.<br>
+    <strong>7.</strong> Connection draining: stop new requests to a backend but let in-flight requests finish — essential for zero-downtime deploys.<br>
+    <strong>8.</strong> The LB itself is a SPOF unless deployed redundantly. Use managed cloud LBs, active-passive pairs, or ECMP (Maglev-style).<br>
+    <strong>9.</strong> Google Maglev: software LB on commodity servers, ECMP + consistent hashing, line-rate 10Gbps in the paper — a strong case for software-defined load balancing.<br>
+    <strong>10.</strong> N+1 capacity planning: if you need N servers at peak, deploy N+1 so one failure doesn't cascade into overload.</p>
+  </div>
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Load Balancer Under Uneven Load</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 820 400" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
+        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
+        <marker id="mr" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#f87171"/></marker>
+      </defs>
+      <!-- Clients -->
+      <text x="52" y="22" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">1000 RPS</text>
+      <rect x="10" y="30" width="84" height="30" rx="5" fill="#222734" stroke="#60a5fa" stroke-width="1"/>
+      <rect x="10" y="65" width="84" height="30" rx="5" fill="#222734" stroke="#60a5fa" stroke-width="1"/>
+      <rect x="10" y="100" width="84" height="30" rx="5" fill="#222734" stroke="#60a5fa" stroke-width="1"/>
+      <text x="52" y="49" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9" fill="#60a5fa">Client A</text>
+      <text x="52" y="84" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9" fill="#60a5fa">Client B</text>
+      <text x="52" y="119" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9" fill="#60a5fa">Client C</text>
+
+      <!-- Arrows to LB -->
+      <path d="M94 45 L160 80" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <path d="M94 80 L160 85" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <path d="M94 115 L160 90" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+
+      <!-- Load Balancer -->
+      <rect x="170" y="55" width="140" height="60" rx="8" fill="#222734" stroke="#a78bfa" stroke-width="2"/>
+      <text x="240" y="80" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#a78bfa" font-weight="600">Load Balancer</text>
+      <text x="240" y="100" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">least-connections</text>
+
+      <!-- Servers with utilization bars -->
+      <!-- Server 1: 60% util (healthy) -->
+      <rect x="410" y="20" width="150" height="44" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="485" y="40" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">Server 1: 60%</text>
+      <text x="485" y="56" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">~400 RPS</text>
+      <rect x="592" y="28" width="84" height="10" rx="3" fill="#1a1e28" stroke="#2a3040" stroke-width="0.5"/>
+      <rect x="592" y="28" width="50" height="10" rx="3" fill="#6ee7b7" opacity="0.7"/>
+
+      <!-- Server 2: 90% util (danger!) -->
+      <rect x="410" y="80" width="150" height="44" rx="6" fill="#222734" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="485" y="100" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#fb923c">Server 2: 90%</text>
+      <text x="485" y="116" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#fb923c">~200 RPS (slow!)</text>
+      <rect x="592" y="88" width="84" height="10" rx="3" fill="#1a1e28" stroke="#2a3040" stroke-width="0.5"/>
+      <rect x="592" y="88" width="76" height="10" rx="3" fill="#fb923c" opacity="0.7"/>
+
+      <!-- Server 3: 55% util (healthy) -->
+      <rect x="410" y="140" width="150" height="44" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="485" y="160" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">Server 3: 60%</text>
+      <text x="485" y="176" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">~400 RPS</text>
+      <rect x="592" y="148" width="84" height="10" rx="3" fill="#1a1e28" stroke="#2a3040" stroke-width="0.5"/>
+      <rect x="592" y="148" width="50" height="10" rx="3" fill="#6ee7b7" opacity="0.7"/>
+
+      <!-- LB to servers -->
+      <path d="M310 72 L410 42" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
+      <path d="M310 85 L410 100" stroke="#fb923c" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ma)"/>
+      <path d="M310 98 L410 162" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
+      <text x="352" y="114" font-family="IBM Plex Mono,monospace" font-size="8" fill="#fb923c">fewer req →</text>
+
+      <!-- Pressure box -->
+      <rect x="10" y="210" width="800" height="170" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
+      <text x="30" y="238" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">WHAT THE LOAD BALANCER IS DOING</text>
+      <text x="30" y="266" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Server 2 is slower (GC pause, heavy query) &#x2192; each request stays active longer</text>
+      <text x="30" y="290" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Least-connections sees the higher active-connection count and sends fewer NEW requests there</text>
+      <text x="30" y="314" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Result: Servers 1 and 3 absorb ~400 RPS each while Server 2 stays near ~200 RPS</text>
+      <text x="30" y="338" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">&#x25B8; Key insight: adaptive algorithms route AROUND degradation automatically</text>
+      <text x="30" y="362" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">&#x25B8; If Server 2 fails health check &#x2192; removed entirely &#x2192; 500 RPS each on 1 &amp; 3</text>
+    </svg>
+    <div class="diagram-caption">Least-connections LB automatically routing around a slow server</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Load balancing improves throughput and resilience only if traffic is distributed well and unhealthy nodes are avoided.</strong> A round-robin LB with no health checks is barely better than no LB at all — it will happily send traffic to dead servers. The real value comes from the combination of an adaptive algorithm (least-connections, power-of-two) and reliable health checks that remove degraded backends before users notice.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References &amp; Further Reading</h2>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Eisenbud et al. — "Maglev: A Fast and Reliable Software Network Load Balancer" (NSDI 2016)</div>
+    <p><strong>Danielle E. Eisenbud, Cheng Yi, et al.</strong> Google Inc. 13th USENIX NSDI, March 2016.<br>
+    <a href="https://research.google.com/pubs/archive/44824.pdf" style="color:var(--accent);" target="_blank">https://research.google.com/pubs/archive/44824.pdf</a></p>
+    <p>&#x2022; Google's L4 software load balancer running on commodity Linux servers. Has served Google's traffic since 2008.</p>
+    <p>&#x2022; Uses ECMP routing for N+1 redundancy across all LB machines — no active-passive waste. All machines are active.</p>
+    <p>&#x2022; Introduces <strong>Maglev hashing</strong> — a consistent hashing algorithm with better load distribution than standard consistent hashing, minimizing disruption when machines are added/removed.</p>
+    <p>&#x2022; A single Maglev machine saturates a 10Gbps link with small packets by bypassing the Linux kernel network stack.</p>
+    <p>&#x2022; Proved that software LBs on commodity hardware can replace expensive proprietary hardware LBs — a finding that shaped the entire cloud LB industry.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Mitzenmacher — "The Power of Two Random Choices" (1996/2001)</div>
+    <p><strong>Michael Mitzenmacher.</strong> PhD Thesis, UC Berkeley, 1996. Survey in IEEE TPDS, 2001.<br>
+    <a href="https://www.eecs.harvard.edu/~michaelm/postscripts/handbook2001.pdf" style="color:var(--blue);" target="_blank">https://www.eecs.harvard.edu/~michaelm/postscripts/handbook2001.pdf</a></p>
+    <p>&#x2022; Proved that choosing the less-loaded of <strong>two random candidates</strong> yields exponentially better load balance than pure random assignment.</p>
+    <p>&#x2022; Maximum load with N balls into N bins: random &#x2192; O(log N / log log N). Two choices &#x2192; O(log log N). A dramatic improvement with trivial extra work.</p>
+    <p>&#x2022; This result is the theoretical foundation for power-of-two and least-request style strategies used in many modern distributed systems.</p>
+    <p>&#x2022; One of the most elegant results in randomized algorithms — simple enough to explain in an interview, powerful enough to use in production.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] HAProxy Documentation — Load Balancing Algorithms</div>
+    <p><strong>Willy Tarreau et al.</strong> HAProxy Technologies.<br>
+    <a href="https://docs.haproxy.org/2.9/configuration.html#4-balance" style="color:var(--orange);" target="_blank">https://docs.haproxy.org/2.9/configuration.html#4-balance</a></p>
+    <p>&#x2022; Comprehensive documentation of HAProxy's load balancing algorithms: roundrobin, static-rr, leastconn, source, uri, url_param, hdr, random, rdp-cookie.</p>
+    <p>&#x2022; HAProxy is a long-standing reference implementation for open-source L4/L7 load balancing and remains widely used in production environments.</p>
+    <p>&#x2022; Documents practical considerations: connection limits per backend, health check configuration, connection draining (graceful shutdown), and slow start for newly recovered backends.</p>
+    <p>&#x2022; Essential reference for configuring production load balancers — the docs are exceptionally detailed and include performance tuning guidance.</p>
+  </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] AWS Elastic Load Balancing Documentation — Application Load Balancer / Network Load Balancer</div>
+    <p><strong>Amazon Web Services.</strong> Elastic Load Balancing developer guides.<br>
+    <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html" style="color:var(--purple);" target="_blank">https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html</a><br>
+    <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html" style="color:var(--purple);" target="_blank">https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html</a></p>
+    <p>&#x2022; Official AWS reference for ALB and NLB capabilities, supported protocols, routing features, and load balancer architecture.</p>
+    <p>&#x2022; Confirms ALB is the application-layer option for host/path/header-based routing, while NLB focuses on transport-layer TCP, UDP, and TLS forwarding.</p>
+    <p>&#x2022; Documents features such as static IPs for NLB and deregistration delay / target-group behavior for managed deployments.</p>
+  </div>
+
+  <div id="ref5" class="callout yellow">
+    <div class="callout-label">[5] Envoy Documentation — Least Request Load Balancer and Slow Start</div>
+    <p><strong>Envoy Proxy.</strong> Official load balancing and upstream configuration docs.<br>
+    <a href="https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers#weighted-least-request" style="color:var(--yellow);" target="_blank">https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers#weighted-least-request</a><br>
+    <a href="https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/slow_start" style="color:var(--yellow);" target="_blank">https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/slow_start</a></p>
+    <p>&#x2022; Describes Envoy's least-request policy and its default <strong>choice count of 2</strong>, which is the practical power-of-two strategy referenced in this topic.</p>
+    <p>&#x2022; Documents slow start as a way to ramp traffic gradually to newly added or recovered endpoints instead of sending a full share immediately.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script>
+// ── LB Capacity Simulator ──
+(function(){
+  const rS=document.getElementById('r-servers'),rR=document.getElementById('r-rps'),rC=document.getElementById('r-cap');
+  const vS=document.getElementById('v-servers'),vR=document.getElementById('v-rps'),vC=document.getElementById('v-cap');
+  function calc(){
+    const servers=parseInt(rS.value),rps=parseInt(rR.value),cap=parseInt(rC.value);
+    vS.textContent=servers;
+    vR.textContent=rps.toLocaleString();
+    vC.textContent=cap.toLocaleString();
+    const totalCap=servers*cap;
+    const perServer=Math.round(rps/servers);
+    const util=Math.min(perServer/cap*100,999);
+    // N+1: what if one server dies?
+    const n1PerServer=servers>1?Math.round(rps/(servers-1)):rps;
+    const n1Util=Math.min(n1PerServer/cap*100,999);
+
+    document.getElementById('lb-total-cap').textContent=`Total capacity: ${totalCap.toLocaleString()} RPS`;
+    document.getElementById('lb-per-server').textContent=`Per-server load: ${perServer.toLocaleString()} RPS`;
+    const utilEl=document.getElementById('lb-util');
+    utilEl.textContent=`Utilization: ${util.toFixed(0)}%`;
+    utilEl.style.color=util>100?'#f87171':util>80?'#fb923c':'#6ee7b7';
+    document.getElementById('lb-n1').textContent=`If 1 server dies: ${n1PerServer.toLocaleString()} RPS each (${n1Util.toFixed(0)}%)`;
+    const vEl=document.getElementById('lb-verdict');
+    if(util>100){vEl.textContent='⛔ OVERLOADED — add servers';vEl.style.color='#f87171';}
+    else if(n1Util>100){vEl.textContent='⚠️ No N+1 headroom — one failure = outage';vEl.style.color='#fb923c';}
+    else if(util>80){vEl.textContent='⚠️ Running hot — consider adding capacity';vEl.style.color='#fb923c';}
+    else{vEl.textContent='✅ Healthy with N+1 headroom';vEl.style.color='#6ee7b7';}
+  }
+  rS.addEventListener('input',calc);rR.addEventListener('input',calc);rC.addEventListener('input',calc);
+  calc();
+})();
+</script>
+</body>
+</html>

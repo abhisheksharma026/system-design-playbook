@@ -70,6 +70,14 @@ GRAPH_LAYOUT = {
         "deps": ["client-server-model", "network-protocols"],
         "orbit_rotation": 18,
     },
+    "load-balancer": {
+        "x": 1180,
+        "y": 430,
+        "cluster": "Reliability",
+        "tone": "reliability",
+        "deps": ["proxies", "latency-and-throughput"],
+        "orbit_rotation": 22,
+    },
     "availability": {
         "x": 620,
         "y": 160,
