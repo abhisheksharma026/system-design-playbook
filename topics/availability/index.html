@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Availability</title>
+<meta name="description" content="A system design guide to availability, the nines, SLAs, SLOs, failover, redundancy, and reliability tradeoffs.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals · Topic 05</div>
+  <h1><span>Availability</span></h1>
+  <p class="hero-sub">Your system is only as valuable as the minutes it's actually working. A database that's 10× faster than the competition is worthless if it's down when your customers need it. Availability is the art of keeping systems alive — measured in nines, defended with redundancy, and promised in SLAs.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Prerequisites & Key Terms</a></li>
+    <li><a href="#s1">What Is Availability & Why It Matters</a></li>
+    <li><a href="#s2">Measuring Availability — The Nines</a></li>
+    <li><a href="#s3">SLAs, SLOs, and SLIs — The Contract</a></li>
+    <li><a href="#s4">Redundancy — The Core Strategy</a></li>
+    <li><a href="#s5">Failover Patterns</a></li>
+    <li><a href="#s6">Calculating System Availability</a></li>
+    <li><a href="#s7">What Causes Downtime?</a></li>
+    <li><a href="#s8">Availability vs Consistency — CAP Preview</a></li>
+    <li><a href="#s9">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s10">Mini-Project: Health-Check Monitor</a></li>
+    <li><a href="#s11">Production Example 1: AWS S3</a></li>
+    <li><a href="#s12">Production Example 2: Netflix Chaos</a></li>
+    <li><a href="#s13">Edge Cases & Gotchas</a></li>
+    <li><a href="#s13b">What If? — Interactive Exploration</a></li>
+    <li><a href="#s14">Interview Questions & Answers</a></li>
+    <li><a href="#s15">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References & Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Prerequisites & Key Terms</h2>
+
+  <h3>Process</h3>
+  <p>A program currently executing on a machine. In any sufficiently large distributed system, you should operate under the assumption that any process can be terminated at any moment — by hardware failure, OS kill signals, resource exhaustion, or deployment rollouts.</p>
+
+  <h3>Node / Instance / Host</h3>
+  <p>These terms are largely interchangeable — they all refer to a virtual or physical machine that runs processes. In cloud environments, an "instance" usually means a VM (like an EC2 instance), while "node" is more common in Kubernetes and cluster contexts. The word "server" often refers to the same thing.</p>
+
+  <h3>Availability</h3>
+  <p>The probability that a system is operational and responding correctly at any given moment. Expressed as a percentage — a system with 99% availability is expected to be functioning 99% of the time. The number of nines in that percentage (e.g., 99.99% = "four nines") is the standard shorthand for how reliable a system is.</p>
+
+  <h3>High Availability (HA)</h3>
+  <p>A design approach for systems that must remain operational with minimal downtime through redundancy, failover, and removal of single points of failure. The exact target varies by product: some teams call 99.9% highly available, others reserve the term for four or five nines. The important idea is architectural, not ceremonial: failures should happen without taking the whole service down.</p>
+
+  <h3>Nines</h3>
+  <p>Shorthand for the number of 9s in an availability percentage. Each additional nine reduces allowed downtime by roughly 10×:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Nines</th><th>Availability</th><th>Downtime/Year</th><th>Downtime/Month</th><th>Downtime/Day</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Two 9s</strong></td><td><code>99%</code></td><td><code>3.65 days</code></td><td><code>7.31 hours</code></td><td><code>14.4 min</code></td></tr>
+        <tr><td><strong>Three 9s</strong></td><td><code>99.9%</code></td><td><code>8.77 hours</code></td><td><code>43.8 min</code></td><td><code>1.44 min</code></td></tr>
+        <tr><td><strong>Four 9s</strong></td><td><code>99.99%</code></td><td><code>52.6 min</code></td><td><code>4.38 min</code></td><td><code>8.6 sec</code></td></tr>
+        <tr><td><strong>Five 9s</strong></td><td><code>99.999%</code></td><td><code>5.26 min</code></td><td><code>26.3 sec</code></td><td><code>0.86 sec</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Redundancy</h3>
+  <p>Duplicating critical components — servers, databases, network paths, entire data centers — so that when one fails, another takes over. Redundancy is the primary mechanism for achieving high availability. It comes at the cost of complexity and money.</p>
+
+  <h3>SLA (Service-Level Agreement)</h3>
+  <p>A formal contract between a service provider and its customers that specifies guaranteed performance levels. An SLA bundles one or more SLOs and typically includes consequences (credits, refunds) if the guarantees are breached. For example, AWS guarantees S3 at 99.9% availability; if they miss it, you get service credits.</p>
+
+  <h3>SLO (Service-Level Objective)</h3>
+  <p>A specific, measurable target within an SLA. An SLO might state: "API response time p99 will be under 200ms" or "monthly uptime will be at least 99.95%." SLOs are what engineers actually monitor and alert on — they're the operational targets that roll up into the business-level SLA.</p>
+
+  <h3>SLI (Service-Level Indicator)</h3>
+  <p>The actual measured value that an SLO is evaluated against. If the SLO says "99.9% of requests will succeed," the SLI is the real-time ratio of successful requests to total requests. SLIs are the raw metrics; SLOs are the thresholds; SLAs are the contracts.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>What Is Availability & Why It Matters</h2>
+
+  <p><strong>Availability</strong> answers one question: "if I try to use this system right now, will it work?" It's the most user-visible quality attribute of any system. Users don't notice if your database uses B-trees or LSM-trees. They absolutely notice when the page shows a 500 error.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>Think of a vending machine. <strong>Availability</strong> is the percentage of the time you walk up to it and it actually dispenses your drink. If it's out of order 1 day out of 100, that's 99% availability (two nines). If it works every single time except for 5 minutes a year, that's five nines. The engineering challenge: vending machines break. The availability challenge: making sure there's always <em>another</em> machine ready when one breaks.</p>
+  </div>
+
+  <h3>Not All Systems Need the Same Availability</h3>
+  <p>A critical insight for system design interviews: <strong>availability requirements vary by use case.</strong> Over-engineering availability wastes money. Under-engineering it loses customers. The right answer depends on what happens when the system is down:</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>System</th><th>Typical Target</th><th>Impact of Downtime</th></tr></thead>
+      <tbody>
+        <tr><td>Personal blog</td><td>~99% (two 9s)</td><td>Nobody notices. You lose a few page views.</td></tr>
+        <tr><td>Internal dashboard</td><td>~99.5%</td><td>Engineers grumble, switch to manual queries.</td></tr>
+        <tr><td>E-commerce checkout</td><td>99.95% (three-and-half 9s)</td><td>Lost sales. Every minute down = lost revenue.</td></tr>
+        <tr><td>Payment processing (Stripe)</td><td>99.99% (four 9s)</td><td>Transactions fail. Merchants lose trust.</td></tr>
+        <tr><td>AWS S3 / Core infra</td><td>99.99%+</td><td>Thousands of downstream services break.</td></tr>
+        <tr><td>911 emergency system</td><td>99.999% (five 9s)</td><td>People could die. Regulated availability.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SECTION 2: NINES ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Measuring Availability — The Nines</h2>
+
+  <p>Availability is typically measured in two ways:</p>
+
+  <p><strong>Time-based:</strong> What fraction of a given period was the system operational?<br>
+  <code class="inline">Availability = Uptime / (Uptime + Downtime)</code></p>
+
+  <p><strong>Request-based:</strong> What fraction of requests received a successful response?<br>
+  <code class="inline">Availability = Successful Requests / Total Requests</code></p>
+
+  <p>The request-based definition is more useful for modern distributed systems because a service can be "up" but returning errors to 5% of users due to a partial failure (one node down, one region degraded).</p>
+
+  <div class="callout orange">
+    <div class="callout-label">The Cost of Each Nine</div>
+    <p>Each additional nine is roughly <strong>10× harder and 10× more expensive</strong> to achieve than the previous one. Going from 99% to 99.9% might require adding a standby replica. Going from 99.9% to 99.99% might require multi-region deployment. Going from 99.99% to 99.999% might require custom hardware, redundant network paths, and a 24/7 on-call team with sub-minute response times. The engineering effort grows exponentially — pick the right target for your use case, don't blindly chase five nines.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3: SLAs ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>SLAs, SLOs, and SLIs — The Contract</h2>
+
+  <p>These three terms form a hierarchy that connects business promises to engineering metrics. Understanding them precisely matters in interviews and in real operations.</p>
+
+  <div class="memory-map"><span class="h">THE SLA/SLO/SLI HIERARCHY</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">SLA</span> (Service-Level Agreement)
+<span class="d">│</span>   <span class="cm">The business contract. "We guarantee X, or we pay you Y."</span>
+<span class="d">│</span>   <span class="cm">Example: "99.95% monthly uptime, or customer gets 10% credit."</span>
+<span class="d">│</span>   <span class="cm">Who cares: Legal, Sales, Customers.</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">SLO</span> (Service-Level Objective)
+<span class="d">│</span>   <span class="cm">The internal engineering target. Typically stricter than the SLA.</span>
+<span class="d">│</span>   <span class="cm">Example: "99.97% monthly uptime" (gives breathing room above SLA).</span>
+<span class="d">│</span>   <span class="cm">Who cares: Engineering, SRE, On-call teams.</span>
+<span class="d">│</span>
+<span class="d">└──</span> <span class="b">SLI</span> (Service-Level Indicator)
+    <span class="cm">The raw metric measured in real time.</span>
+    <span class="cm">Example: "ratio of HTTP 2xx responses to total responses, measured per minute."</span>
+    <span class="cm">Who cares: Monitoring systems, dashboards, alerting pipelines.</span>
+
+<span class="h">THE ERROR BUDGET</span>
+<span class="d">│</span>
+<span class="d">└──</span> If your SLO is <span class="num">99.95%</span>, you have a monthly error budget of:
+    <span class="num">30 days × 24h × 60m × 0.05%</span> = <span class="v">~21.6 minutes of allowed downtime</span>
+    <span class="cm">When the budget runs out → freeze deployments, fix reliability first.</span>
+    <span class="cm">This is the core mechanism of Google's SRE practice.</span> <a href="#ref1" class="ref">[1]</a></div>
+
+  <div class="callout blue">
+    <div class="callout-label">The Error Budget Concept</div>
+    <p>Google's SRE book popularized the <strong>error budget</strong>: the amount of downtime your SLO permits. If your SLO is 99.95%, your monthly error budget is ~21.6 minutes. If you've used 15 minutes already this month, you have 6.6 minutes left. When the budget is exhausted, the team shifts from feature work to reliability work — no more risky deployments until the budget refills next month. This creates a quantitative framework for balancing velocity (ship features) vs reliability (don't break things). <a href="#ref1" class="ref">[1]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4: REDUNDANCY ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Redundancy — The Core Strategy</h2>
+
+  <p>The primary mechanism for achieving high availability is <strong>redundancy</strong> — having multiple instances of every critical component so that when one fails, another is ready. Redundancy exists at every layer of the stack.</p>
+
+  <h3>Types of Redundancy</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Layer</th><th>Single Point of Failure</th><th>Redundancy Solution</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Server</strong></td><td>One app server crashes → service down</td><td>Multiple servers behind a load balancer</td></tr>
+        <tr><td><strong>Database</strong></td><td>Primary DB crashes → writes fail</td><td>Primary-replica replication with automatic failover</td></tr>
+        <tr><td><strong>Network</strong></td><td>One network switch dies → partition</td><td>Redundant switches, dual-homed NICs, BGP multi-path</td></tr>
+        <tr><td><strong>Power</strong></td><td>Power supply fails → server dies</td><td>Dual power supplies, UPS, backup generators</td></tr>
+        <tr><td><strong>Data center</strong></td><td>Fire/flood → entire DC offline</td><td>Multi-AZ (availability zone) or multi-region deployment</td></tr>
+        <tr><td><strong>DNS</strong></td><td>DNS provider down → domain unreachable</td><td>Secondary DNS provider, anycast DNS</td></tr>
+        <tr><td><strong>Load balancer</strong></td><td>LB crash → all traffic lost</td><td>Active-passive LB pair with VRRP/keepalived</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Active-Passive vs Active-Active</h3>
+  <p><strong>Active-Passive (standby):</strong> One component handles all traffic. The other sits idle, monitoring the primary. When the primary fails, the passive takes over (failover). Simpler but wastes resources — the standby is doing nothing until needed. Used for databases where only one node can accept writes.</p>
+  <p><strong>Active-Active:</strong> All components handle traffic simultaneously. When one fails, the others absorb its share. More efficient (no idle capacity) but more complex (state synchronization, split-brain risks). Used for stateless web servers behind a load balancer.</p>
+
+  <div class="callout purple">
+    <div class="callout-label">The Hidden Cost of Redundancy</div>
+    <p>Redundancy doesn't just double your hardware cost — it adds <strong>operational complexity</strong>. Replicated databases need conflict resolution. Multi-region deployments need data synchronization. Failover mechanisms need testing (does it actually work when you need it?). Netflix spends enormous engineering effort not on adding redundancy, but on <em>continuously testing</em> that their redundancy works — that's the philosophy behind Chaos Engineering. <a href="#ref3" class="ref">[3]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5: FAILOVER ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Failover Patterns</h2>
+
+  <p>Redundancy is useless without <strong>failover</strong> — the mechanism that detects failure and redirects traffic to the healthy component. The failover time directly determines how much downtime you experience.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Common Failover Patterns</span></div>
+    <pre><span class="h">1. DNS Failover</span>
+   Health check fails → DNS record updated to point to backup IP
+   <span class="v">Failover time: 30s–5min</span> (depends on DNS TTL)
+   <span class="cm">Pro: Simple. Con: Slow (TTL caching), clients may cache stale DNS.</span>
+
+<span class="h">2. Load Balancer Health Checks</span>
+   LB pings each backend every 5–10s. If 3 pings fail → mark unhealthy.
+   <span class="v">Failover time: 15–30s</span>
+   <span class="cm">Pro: Transparent to clients. Con: Detection delay = 3 × check interval.</span>
+
+<span class="h">3. Database Automatic Failover</span>
+   Primary sends heartbeats to replicas. Heartbeat stops → replica promotes.
+   <span class="v">Failover time: tens of seconds to a couple of minutes</span>
+   <span class="cm">Pro: Automatic. Con: Risk of split-brain if detection is wrong.</span>
+
+<span class="h">4. Floating IP / Virtual IP (VIP)</span>
+   Two servers share a VIP via VRRP (keepalived). Active holds the IP.
+   Active dies → passive claims the IP in <span class="num">&lt;3 seconds</span>.
+   <span class="cm">Pro: Very fast. Con: Only works within same L2 network / subnet.</span>
+
+<span class="h">5. Client-Side Failover</span>
+   Client knows multiple endpoints. First fails → try the second.
+   <span class="v">Failover time: timeout + retry = 1–5s</span>
+   <span class="cm">Pro: No infrastructure needed. Con: Client must implement retry logic.</span>
+
+<span class="h">6. Multi-Region Failover (Global)</span>
+   Route 53 / Cloudflare health checks per region. Region fails → DNS
+   routes to next-closest healthy region.
+   <span class="v">Failover time: 30s–2min</span>
+   <span class="cm">Pro: Survives entire DC/region failures. Con: Complex state sync.</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 6: MATH ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Calculating System Availability</h2>
+
+  <p>A system is a chain of components. Its overall availability depends on how those components are connected — in series (all must work) or in parallel (any one can work).</p>
+
+  <h3>Components in Series (AND)</h3>
+  <p>If your request goes through Server → Database → Cache, <strong>all three must be up</strong>. The overall availability is the product:</p>
+  <div class="code-block">
+    <div class="code-header"><span>Series: A_total = A₁ × A₂ × A₃</span></div>
+    <pre><span class="cm">Server: 99.9% | Database: 99.9% | Cache: 99.9%</span>
+Total = <span class="num">0.999</span> × <span class="num">0.999</span> × <span class="num">0.999</span> = <span class="v">0.997 = 99.7%</span>
+
+<span class="cm">Three components at three 9s → system drops to under three 9s.</span>
+<span class="cm">With 10 components in series at 99.9% each:</span>
+Total = <span class="num">0.999^10</span> = <span class="v">0.990 = 99.0%</span>  <span class="cm">← lost a full nine!</span>
+
+<span class="cm">Lesson: every dependency in the critical path REDUCES availability.</span>
+<span class="cm">This is why microservices are harder to keep available than monoliths.</span></pre>
+  </div>
+
+  <h3>Components in Parallel (OR — redundancy)</h3>
+  <p>If you have two replicas and only one needs to work, availability improves dramatically:</p>
+  <div class="code-block">
+    <div class="code-header"><span>Parallel: A_total = 1 - (1 - A₁) × (1 - A₂)</span></div>
+    <pre><span class="cm">One server at 99%: downtime = 1%</span>
+<span class="cm">Two servers in parallel, each 99%:</span>
+A = <span class="num">1</span> - (<span class="num">1 - 0.99</span>) × (<span class="num">1 - 0.99</span>) = <span class="num">1</span> - <span class="num">0.0001</span> = <span class="v">99.99%</span>
+
+<span class="cm">Two nines → four nines, just by adding one replica!</span>
+
+<span class="cm">Three servers at 99% each:</span>
+A = <span class="num">1</span> - (<span class="num">0.01</span>)³ = <span class="num">1</span> - <span class="num">0.000001</span> = <span class="v">99.9999%</span>  <span class="cm">← six nines!</span>
+
+<span class="cm">Lesson: redundancy is multiplicative when failures are independent.</span></pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">The Napkin Math for Availability</div>
+    <p>In system design interviews, you'll often need to estimate availability on the fly. The rules of thumb: <strong>Series</strong> — nines subtract (roughly). Three 9s + three 9s in series ≈ 2.7 nines. <strong>Parallel</strong> — redundancy can improve availability dramatically, but only if failures are reasonably independent. <strong>Every dependency in the critical path is a tax on availability</strong>. Every well-isolated redundant replica is a boost.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 7: CAUSES ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>What Causes Downtime?</h2>
+
+  <p>Understanding the common failure modes tells you where to invest in redundancy.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Cause</th><th>Frequency</th><th>Typical Duration</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Software bugs / bad deployments</strong></td><td>Very common</td><td>Minutes to hours</td><td>Canary deploys, rollback automation, feature flags</td></tr>
+        <tr><td><strong>Configuration errors</strong></td><td>Common</td><td>Minutes to hours</td><td>Config validation, gradual rollout, infrastructure-as-code</td></tr>
+        <tr><td><strong>Hardware failure (server)</strong></td><td>Common at scale</td><td>Minutes (with failover)</td><td>Redundant servers, auto-scaling groups</td></tr>
+        <tr><td><strong>Dependency failure</strong></td><td>Common</td><td>Varies</td><td>Circuit breakers, timeouts, graceful degradation, fallbacks</td></tr>
+        <tr><td><strong>Network partition</strong></td><td>Uncommon</td><td>Seconds to hours</td><td>Multi-path networking, retry logic, CAP-aware design</td></tr>
+        <tr><td><strong>Capacity exhaustion (overload)</strong></td><td>Common during spikes</td><td>Minutes</td><td>Auto-scaling, rate limiting, load shedding</td></tr>
+        <tr><td><strong>Disk failure</strong></td><td>Uncommon per disk</td><td>Hours (rebuild)</td><td>RAID, replicated storage, cloud managed disks</td></tr>
+        <tr><td><strong>Data center failure</strong></td><td>Rare</td><td>Hours to days</td><td>Multi-AZ / multi-region deployment</td></tr>
+        <tr><td><strong>DNS failure</strong></td><td>Rare</td><td>Minutes to hours</td><td>Redundant DNS providers, low TTLs</td></tr>
+        <tr><td><strong>Human error (accidental deletion)</strong></td><td>Uncommon</td><td>Hours to days</td><td>Backups, soft-delete, access controls</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">The #1 Cause of Outages</div>
+    <p>Across outage studies and postmortems, <strong>operator mistakes, bad changes, and configuration errors</strong> are repeatedly overrepresented compared with pure hardware failure. The most effective availability investment often isn't more servers — it's <strong>safer deployment practices</strong>: canary releases, automatic rollback, feature flags, small batch sizes, and guardrails around operational tooling. <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 8: CAP ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Availability vs Consistency — CAP Preview</h2>
+
+  <p>In distributed systems, availability doesn't exist in isolation — it's in tension with <strong>consistency</strong>. This tension is formalized by the CAP theorem. <a href="#ref2" class="ref">[2]</a></p>
+
+  <div class="callout purple">
+    <div class="callout-label">The CAP Theorem (Brewer, 2000)</div>
+    <p>In a distributed system experiencing a <strong>network partition</strong>, you can guarantee at most two of three properties: <strong>Consistency</strong> (every read gets the latest write), <strong>Availability</strong> (every request gets a response), and <strong>Partition tolerance</strong> (the system works despite network failures between nodes).</p>
+    <p>Since network partitions <em>will</em> happen in any real distributed system, the practical choice is: <strong>CP</strong> (sacrifice availability during partitions — return errors rather than stale data) or <strong>AP</strong> (sacrifice consistency during partitions — return potentially stale data rather than errors).</p>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Choice</th><th>During Partition</th><th>Example Systems</th><th>Use Case</th></tr></thead>
+      <tbody>
+        <tr><td><strong>CP</strong></td><td>Reject requests to maintain consistency</td><td>ZooKeeper, etcd, HBase, Spanner</td><td>Financial transactions, leader election, config stores</td></tr>
+        <tr><td><strong>AP</strong></td><td>Serve requests with potentially stale data</td><td>Cassandra, DynamoDB, CouchDB, DNS</td><td>Shopping carts, social feeds, session stores</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Brewer himself later clarified that CAP is <strong>not a simple binary choice</strong> — it's a spectrum, and the trade-off only applies <em>during</em> a partition. When the network is healthy, you can have all three. Modern systems like Google Spanner push the boundaries by using synchronized clocks (TrueTime) to minimize the window where the trade-off applies. <a href="#ref2" class="ref">[2]</a></p>
+</section>
+
+<!-- ============ SECTION 9: TERMINAL ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: Check a Service's Availability</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Simple uptime monitor with curl</span></div>
+    <pre><span class="cm"># Check if a service is up (HTTP 200 = alive)</span>
+$ <span class="fn">curl</span> <span class="kw">-o /dev/null -s -w</span> <span class="str">"%{http_code}"</span> <span class="str">https://api.github.com/status</span>
+<span class="num">200</span>
+
+<span class="cm"># Continuously monitor every 5 seconds with timestamps</span>
+$ <span class="kw">while true; do</span>
+    status=$(<span class="fn">curl</span> -o /dev/null -s -w "%{http_code}" https://your-api.com/health)
+    echo "$(date '+%H:%M:%S') → HTTP $status"
+    sleep 5
+  <span class="kw">done</span>
+
+<span class="num">14:23:05</span> → HTTP <span class="str">200</span>
+<span class="num">14:23:10</span> → HTTP <span class="str">200</span>
+<span class="num">14:23:15</span> → HTTP <span class="str">503</span>  <span class="cm">← service degraded!</span>
+<span class="num">14:23:20</span> → HTTP <span class="str">200</span>  <span class="cm">← recovered</span></pre>
+  </div>
+
+  <h3>Demo 2: Simulate Failover with Two Servers</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Run two Python servers, kill one, watch failover</span></div>
+    <pre><span class="cm"># Terminal 1: Start primary server on port 8001</span>
+$ <span class="fn">python3</span> -c "
+from http.server import HTTPServer, BaseHTTPRequestHandler
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers()
+        self.wfile.write(b'primary-8001')
+    def log_message(self,*a): pass
+HTTPServer(('',8001),H).serve_forever()"
+
+<span class="cm"># Terminal 2: Start backup server on port 8002</span>
+$ <span class="fn">python3</span> -c "
+from http.server import HTTPServer, BaseHTTPRequestHandler
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers()
+        self.wfile.write(b'backup-8002')
+    def log_message(self,*a): pass
+HTTPServer(('',8002),H).serve_forever()"
+
+<span class="cm"># Terminal 3: Client with failover logic</span>
+$ <span class="kw">while true; do</span>
+    resp=$(<span class="fn">curl</span> -s --max-time 1 http://localhost:8001 || \
+          <span class="fn">curl</span> -s --max-time 1 http://localhost:8002 || \
+          echo "BOTH DOWN")
+    echo "$(date +%H:%M:%S) → $resp"
+    sleep 1
+  <span class="kw">done</span>
+
+<span class="cm"># Now kill Terminal 1 (Ctrl+C) — watch the client automatically fail over!</span>
+<span class="num">14:30:01</span> → <span class="str">primary-8001</span>
+<span class="num">14:30:02</span> → <span class="str">primary-8001</span>
+<span class="num">14:30:03</span> → <span class="str">backup-8002</span>   <span class="cm">← automatic failover!</span>
+<span class="num">14:30:04</span> → <span class="str">backup-8002</span></pre>
+  </div>
+
+  <h3>Demo 3: Inspect Real Cloud Status Pages</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Check real AWS/GCP service status</span></div>
+    <pre><span class="cm"># AWS service health (current status)</span>
+$ <span class="fn">curl</span> -s <span class="str">https://status.aws.amazon.com/data.json</span> | <span class="fn">python3</span> -m json.tool | head -20
+
+<span class="cm"># Google Cloud status</span>
+$ <span class="fn">curl</span> -s <span class="str">https://status.cloud.google.com/incidents.json</span> | <span class="fn">python3</span> -m json.tool | head -20
+
+<span class="cm"># Check your own system's uptime percentage:</span>
+<span class="cm"># If you had 43 minutes of downtime this month (30 days):</span>
+$ <span class="fn">python3</span> -c "
+total_min = 30 * 24 * 60  # 43200 minutes in a month
+downtime = 43
+avail = (total_min - downtime) / total_min * 100
+print(f'Availability: {avail:.3f}%')
+print(f'Nines: {\"three 9s\" if avail >= 99.9 else \"two 9s\" if avail >= 99 else \"below two 9s\"}')"
+
+Availability: <span class="num">99.900</span>%
+Nines: <span class="str">three 9s</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 10: MINI-PROJECT ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Mini-Project: Health-Check Monitor</h2>
+
+  <p>Build a Python availability monitor that pings multiple endpoints, tracks uptime percentage, detects outages, and reports per-service SLI metrics — exactly what real monitoring tools like UptimeRobot or Datadog do at a basic level.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>availability_monitor.py</span></div>
+    <pre><span class="kw">import</span> time, urllib.request, json, sys
+<span class="kw">from</span> collections <span class="kw">import</span> defaultdict
+<span class="kw">from</span> datetime <span class="kw">import</span> datetime
+
+<span class="cm"># ── Configure endpoints to monitor ──</span>
+TARGETS = {
+    <span class="str">"GitHub API"</span>:   <span class="str">"https://api.github.com"</span>,
+    <span class="str">"Google"</span>:       <span class="str">"https://www.google.com"</span>,
+    <span class="str">"httpbin"</span>:      <span class="str">"https://httpbin.org/get"</span>,
+    <span class="str">"LocalServer"</span>:  <span class="str">"http://localhost:8001"</span>,  <span class="cm"># Will fail if nothing runs here</span>
+}
+CHECK_INTERVAL = <span class="num">5</span>  <span class="cm"># seconds between checks</span>
+
+stats = defaultdict(<span class="kw">lambda</span>: {<span class="str">"checks"</span>: <span class="num">0</span>, <span class="str">"successes"</span>: <span class="num">0</span>, <span class="str">"failures"</span>: <span class="num">0</span>, <span class="str">"last_status"</span>: <span class="str">"?"</span>})
+
+<span class="kw">def</span> <span class="fn">check</span>(name, url):
+    <span class="kw">try</span>:
+        req = urllib.request.Request(url, headers={<span class="str">"User-Agent"</span>: <span class="str">"monitor/1.0"</span>})
+        resp = urllib.request.urlopen(req, timeout=<span class="num">3</span>)
+        ok = <span class="num">200</span> <= resp.status < <span class="num">400</span>
+    <span class="kw">except</span>:
+        ok = <span class="num">False</span>
+    stats[name][<span class="str">"checks"</span>] += <span class="num">1</span>
+    stats[name][<span class="str">"successes"</span> <span class="kw">if</span> ok <span class="kw">else</span> <span class="str">"failures"</span>] += <span class="num">1</span>
+    prev = stats[name][<span class="str">"last_status"</span>]
+    stats[name][<span class="str">"last_status"</span>] = <span class="str">"UP"</span> <span class="kw">if</span> ok <span class="kw">else</span> <span class="str">"DOWN"</span>
+    <span class="cm"># Detect state transitions</span>
+    <span class="kw">if</span> prev == <span class="str">"UP"</span> <span class="kw">and not</span> ok:
+        print(f<span class="str">"  🔴 OUTAGE DETECTED: {name} is DOWN!"</span>)
+    <span class="kw">elif</span> prev == <span class="str">"DOWN"</span> <span class="kw">and</span> ok:
+        print(f<span class="str">"  🟢 RECOVERED: {name} is back UP"</span>)
+    <span class="kw">return</span> ok
+
+<span class="kw">def</span> <span class="fn">report</span>():
+    print(f<span class="str">"\n{'='*60}"</span>)
+    print(f<span class="str">"  AVAILABILITY REPORT — {datetime.now().strftime('%H:%M:%S')}"</span>)
+    print(f<span class="str">"{'='*60}"</span>)
+    <span class="kw">for</span> name, s <span class="kw">in</span> stats.items():
+        avail = (s[<span class="str">"successes"</span>] / s[<span class="str">"checks"</span>] * <span class="num">100</span>) <span class="kw">if</span> s[<span class="str">"checks"</span>] <span class="kw">else</span> <span class="num">0</span>
+        status = <span class="str">"🟢"</span> <span class="kw">if</span> s[<span class="str">"last_status"</span>] == <span class="str">"UP"</span> <span class="kw">else</span> <span class="str">"🔴"</span>
+        nines = <span class="str">"5+ nines"</span> <span class="kw">if</span> avail >= <span class="num">99.999</span> <span class="kw">else</span> <span class="str">"four 9s"</span> <span class="kw">if</span> avail >= <span class="num">99.99</span> \
+                <span class="kw">else</span> <span class="str">"three 9s"</span> <span class="kw">if</span> avail >= <span class="num">99.9</span> <span class="kw">else</span> <span class="str">"two 9s"</span> <span class="kw">if</span> avail >= <span class="num">99</span> <span class="kw">else</span> <span class="str">"< two 9s"</span>
+        print(f<span class="str">"  {status} {name:&lt;15} {avail:7.3f}% ({nines}) [{s['checks']} checks]"</span>)
+    print()
+
+print(<span class="str">"[Monitor] Checking every 5s. Ctrl+C for report.\n"</span>)
+<span class="kw">try</span>:
+    cycle = <span class="num">0</span>
+    <span class="kw">while True</span>:
+        ts = datetime.now().strftime(<span class="str">"%H:%M:%S"</span>)
+        results = []
+        <span class="kw">for</span> name, url <span class="kw">in</span> TARGETS.items():
+            ok = check(name, url)
+            results.append(f<span class="str">"{name}:{'✓' if ok else '✗'}"</span>)
+        print(f<span class="str">"  [{ts}] {' | '.join(results)}"</span>)
+        cycle += <span class="num">1</span>
+        <span class="kw">if</span> cycle % <span class="num">12</span> == <span class="num">0</span>: report()  <span class="cm"># Report every ~60 seconds</span>
+        time.sleep(CHECK_INTERVAL)
+<span class="kw">except</span> KeyboardInterrupt:
+    report()</pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Experiments to Try</div>
+    <p><strong>1.</strong> Start a local server on port 8001, let the monitor run, then kill the server — watch the outage detection trigger.<br>
+    <strong>2.</strong> Restart the server — watch the recovery detection.<br>
+    <strong>3.</strong> Let it run for 5 minutes and check the availability percentage — you'll see the LocalServer at &lt;50% while the public APIs are at 100%.<br>
+    <strong>4.</strong> Add more endpoints (your own APIs, cloud dashboards) and watch the SLIs diverge.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 11: AWS S3 ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Production Example 1: AWS S3</h2>
+
+  <p>S3 is one of the most critical pieces of internet infrastructure. AWS says S3 Standard is designed for 99.99% availability and 99.999999999% durability, while the S3 SLA offers service credits if monthly uptime drops below 99.9%. That distinction matters: product design targets and contractual SLA thresholds are related, but they are not the same thing. <a href="#ref5" class="ref">[5]</a></p>
+
+  <h3>How S3 Achieves High Availability</h3>
+  <p><strong>Replication across AZs:</strong> Every object is automatically replicated across at least 3 availability zones within a region. Each AZ is a physically separate data center with independent power, networking, and cooling.</p>
+  <p><strong>Automatic failover:</strong> If an AZ fails, requests are transparently routed to healthy AZs. Clients don't even know a failover happened.</p>
+  <p><strong>Durability vs availability:</strong> S3 distinguishes between durability (11 nines over a year, meaning objects are extraordinarily unlikely to be lost) and availability (whether requests succeed when you need them). Your data can remain intact even during a temporary availability event. <a href="#ref5" class="ref">[5]</a></p>
+
+  <div class="callout red">
+    <div class="callout-label">The 2017 S3 Outage</div>
+    <p>On February 28, 2017, an incorrectly entered parameter during S3 maintenance removed more server capacity than intended in us-east-1. Because other AWS systems and many customer applications depended on that regional S3 control path, the blast radius was large and recovery took several hours while key subsystems restarted. AWS later added stronger safeguards to the tooling and reprioritized work to improve recovery speed. The lesson: even extremely durable storage can still suffer major availability events due to operational mistakes and recovery-path bottlenecks. <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 12: NETFLIX ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>Production Example 2: Netflix Chaos Engineering</h2>
+
+  <p>Netflix pioneered <strong>chaos engineering</strong> — the practice of deliberately injecting failures into production to verify that the system's redundancy and failover mechanisms actually work. <a href="#ref3" class="ref">[3]</a></p>
+
+  <h3>The Simian Army</h3>
+  <p><strong>Chaos Monkey:</strong> Randomly kills EC2 instances in production during business hours. If your service can't survive losing a random server, Chaos Monkey will expose it before a real failure does.</p>
+  <p><strong>Chaos Kong:</strong> Simulates an entire AWS region going offline. Netflix's architecture must route all traffic to another region and continue operating. This runs periodically to verify multi-region failover works end-to-end.</p>
+  <p><strong>Latency Monkey:</strong> Injects artificial delays into network calls between services to verify timeout and circuit-breaker configurations are correct.</p>
+
+  <div class="callout green">
+    <div class="callout-label">The Netflix Philosophy</div>
+    <p>Netflix helped popularize the idea that resilient systems must be exercised under controlled failure, not just designed on whiteboards. The insight remains strong: untested redundancy isn't redundancy. If you've never actually killed a dependency and observed the failover path, you don't really know it works. Chaos engineering turns hope into evidence. <a href="#ref3" class="ref">[3]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 13: EDGE CASES ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Edge Cases & Gotchas</h2>
+
+  <h3>1. Split-Brain</h3>
+  <p>When a network partition causes two nodes to both believe they're the primary (leader). Both accept writes, creating conflicting data. When the partition heals, you have two divergent datasets. Fix: quorum-based leader election (majority must agree), fencing tokens, or STONITH (Shoot The Other Node In The Head — a real term in HA clustering).</p>
+
+  <h3>2. Cascading Failures</h3>
+  <p>Service A fails → Service B (which depends on A) starts timing out → B's thread pool exhausts → B fails → Service C (depends on B) fails → entire system collapses. Fix: circuit breakers (stop calling a failing service after N failures), bulkheads (isolate failure domains), timeouts (don't wait forever), and graceful degradation (return partial results instead of failing entirely).</p>
+
+  <h3>3. Thundering Herd After Recovery</h3>
+  <p>System recovers from an outage. All queued requests flood in simultaneously. The freshly-recovered system is immediately overwhelmed and goes back down. Fix: rate limiting on recovery, gradual traffic ramp-up (like Envoy's slow start), and jittered client retries.</p>
+
+  <h3>4. Partial Failures Are Harder Than Total Failures</h3>
+  <p>A totally dead server is easy to detect and fail over from. A server that's up but <em>slow</em> (brownout) or returning errors for <em>some</em> requests (gray failure) is much harder. Health checks pass because the server is alive, but users are suffering. Fix: deep health checks (test actual functionality, not just /health returning 200), anomaly detection on latency/error-rate, and request-level load balancing.</p>
+
+  <h3>5. The "Works on My Machine" Disaster Recovery Test</h3>
+  <p>A backup that hasn't been tested is not a backup. A failover mechanism that's never been triggered is a hope, not a guarantee. Regular disaster recovery drills are essential. Mature reliability organizations run them routinely; many teams don't, and discover their DR plan is broken during the one time they need it.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story</div>
+    <p>On October 4, 2021, Meta suffered a multi-hour outage after configuration changes on backbone routers disrupted communication between data centers. Public-facing services and many internal tools were affected at the same time, which made diagnosis and recovery harder. The lesson is broader than one company: your recovery path, control plane, and internal tooling should not all depend on the same failing layer. <a href="#ref6" class="ref">[6]</a></p>
+  </div>
+</section>
+
+<!-- ============ WHAT IF — INTERACTIVE ============ -->
+<section class="section" id="s13b">
+  <div class="section-num">13b</div>
+  <h2>What If? — Interactive Exploration</h2>
+  <p>Tweak parameters and watch availability change in real time. This builds the cause-effect intuition that interviews demand.</p>
+
+  <!-- === INTERACTIVE SIMULATION === -->
+  <div class="diagram-wrap" style="padding:24px;">
+    <div id="sim-container" style="font-family:var(--sans);">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;">
+        <!-- Controls -->
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin-bottom:12px;font-weight:600;">Tweak Parameters</div>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Components in series: <strong id="v-series" style="color:var(--accent);">3</strong>
+            <br><input type="range" id="r-series" min="1" max="12" value="3" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Per-component availability: <strong id="v-comp" style="color:var(--accent);">99.9%</strong>
+            <br><input type="range" id="r-comp" min="990" max="9999" value="999" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Redundancy (parallel replicas per component): <strong id="v-replicas" style="color:var(--accent);">1</strong>
+            <br><input type="range" id="r-replicas" min="1" max="5" value="1" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+        </div>
+        <!-- Output -->
+        <div style="background:var(--surface-2);border-radius:10px;padding:20px;border:1px solid var(--border);">
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--orange);margin-bottom:12px;font-weight:600;">System Availability</div>
+          <div id="out-avail" style="font-family:var(--mono);font-size:32px;color:var(--accent);font-weight:600;margin-bottom:8px;">99.700%</div>
+          <div id="out-nines" style="font-family:var(--mono);font-size:14px;color:var(--text-dim);margin-bottom:12px;">≈ 2.5 nines</div>
+          <div id="out-downtime" style="font-family:var(--mono);font-size:13px;color:var(--text-muted);line-height:1.6;"></div>
+        </div>
+      </div>
+      <!-- Visual: bar chart of availability -->
+      <svg id="avail-bars" viewBox="0 0 700 120" style="width:100%;height:auto;display:block;"></svg>
+    </div>
+  </div>
+
+  <!-- === TRADEOFF CARDS === -->
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">Adding a replica</div>
+      <p><strong>Improves:</strong> Availability and fault tolerance when failures are independent.<br>
+      <strong>Costs:</strong> 2× hardware spend, data sync complexity, potential stale reads (if AP), split-brain risk.<br>
+      <strong>When worth it:</strong> Your SLO is being missed, or a single failure causes total outage.</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">Multi-region deployment</div>
+      <p><strong>Improves:</strong> Survives entire DC/region failures, lower latency for global users.<br>
+      <strong>Costs:</strong> Cross-region data replication latency (+50-150ms), consistency challenges, 3-5× operational complexity.<br>
+      <strong>When worth it:</strong> You need four+ nines, or your users are geographically distributed.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">Faster failover detection</div>
+      <p><strong>Improves:</strong> Reduces downtime per incident (10s → 3s detection = 7s less per failure).<br>
+      <strong>Costs:</strong> More aggressive health checks = more false positives (flapping), increased network overhead.<br>
+      <strong>When worth it:</strong> You're within budget on total incidents but each one eats too much error budget.</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">Circuit breakers on dependencies</div>
+      <p><strong>Improves:</strong> Prevents cascading failure. Isolates blast radius. Enables graceful degradation.<br>
+      <strong>Costs:</strong> Users get partial/degraded responses during the open-circuit window. More complex error handling.<br>
+      <strong>When worth it:</strong> Always — any service calling external dependencies should have circuit breakers.</p>
+    </div>
+  </div>
+
+  <!-- === TOY SIMULATION: FAILURE CASCADE === -->
+  <h3>Toy Simulation: Failure Cascade Probability</h3>
+  <p>How likely is at least one component to fail in a system with N components, each at availability A? This is the math behind why microservices are harder to keep available than monoliths.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>failure_cascade.py — run this to see the math viscerally</span></div>
+    <pre><span class="kw">import</span> random
+
+<span class="kw">def</span> <span class="fn">simulate</span>(n_components, avail_each, n_replicas, trials=<span class="num">100_000</span>):
+    <span class="str">"""Monte Carlo simulation of system availability."""</span>
+    system_up = <span class="num">0</span>
+    <span class="kw">for</span> _ <span class="kw">in</span> range(trials):
+        all_components_ok = <span class="num">True</span>
+        <span class="kw">for</span> _ <span class="kw">in</span> range(n_components):
+            <span class="cm"># Component is up if ANY replica is up (parallel)</span>
+            component_up = <span class="kw">any</span>(
+                random.random() < avail_each <span class="kw">for</span> _ <span class="kw">in</span> range(n_replicas)
+            )
+            <span class="kw">if not</span> component_up:
+                all_components_ok = <span class="num">False</span>
+                <span class="kw">break</span>  <span class="cm"># Series: one failure = system failure</span>
+        <span class="kw">if</span> all_components_ok:
+            system_up += <span class="num">1</span>
+    <span class="kw">return</span> system_up / trials * <span class="num">100</span>
+
+<span class="cm"># ── What If scenarios ──</span>
+print(<span class="str">"SCENARIO                                 AVAILABILITY"</span>)
+print(<span class="str">"="</span> * <span class="num">58</span>)
+
+scenarios = [
+    (<span class="str">"3 components, 99.9% each, no replicas"</span>,    <span class="num">3</span>, <span class="num">0.999</span>, <span class="num">1</span>),
+    (<span class="str">"3 components, 99.9% each, 2 replicas"</span>,     <span class="num">3</span>, <span class="num">0.999</span>, <span class="num">2</span>),
+    (<span class="str">"10 components, 99.9% each, no replicas"</span>,   <span class="num">10</span>, <span class="num">0.999</span>, <span class="num">1</span>),
+    (<span class="str">"10 components, 99.9% each, 2 replicas"</span>,    <span class="num">10</span>, <span class="num">0.999</span>, <span class="num">2</span>),
+    (<span class="str">"10 components, 99% each, 3 replicas"</span>,      <span class="num">10</span>, <span class="num">0.99</span>,  <span class="num">3</span>),
+    (<span class="str">"5 components, 99.99% each, no replicas"</span>,   <span class="num">5</span>, <span class="num">0.9999</span>,<span class="num">1</span>),
+    (<span class="str">"What if one component drops to 95%?"</span>,       <span class="num">1</span>, <span class="num">0.95</span>,  <span class="num">1</span>),  <span class="cm"># weakest link</span>
+]
+
+<span class="kw">for</span> label, n, a, r <span class="kw">in</span> scenarios:
+    result = simulate(n, a, r)
+    nines = <span class="str">"five+"</span> <span class="kw">if</span> result >= <span class="num">99.999</span> <span class="kw">else</span> <span class="str">"four"</span> <span class="kw">if</span> result >= <span class="num">99.99</span> \
+            <span class="kw">else</span> <span class="str">"three"</span> <span class="kw">if</span> result >= <span class="num">99.9</span> <span class="kw">else</span> <span class="str">"two"</span> <span class="kw">if</span> result >= <span class="num">99</span> <span class="kw">else</span> <span class="str">"&lt;two"</span>
+    print(<span class="str">f"  {label:&lt;42} {result:7.3f}% ({nines} 9s)"</span>)
+
+print(<span class="str">f"\n{'='*58}"</span>)
+print(<span class="str">"KEY INSIGHT: Replicas are multiplicative force multipliers."</span>)
+print(<span class="str">"  10 components at 99% with 3 replicas each ≈ 99.999%"</span>)
+print(<span class="str">"  If failures are independent, replication can compound availability fast."</span>)</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Expected output</span></div>
+    <pre>SCENARIO                                 AVAILABILITY
+<span class="str">==========================================================</span>
+  3 components, 99.9% each, no replicas    <span class="num">99.700</span>% (<span class="str">two</span> 9s)
+  3 components, 99.9% each, 2 replicas     <span class="num">99.999</span>% (<span class="str">five+</span> 9s)
+  10 components, 99.9% each, no replicas   <span class="num">99.009</span>% (<span class="str">two</span> 9s)
+  10 components, 99.9% each, 2 replicas    <span class="num">99.999</span>% (<span class="str">five+</span> 9s)
+  10 components, 99% each, 3 replicas      <span class="num">99.999</span>% (<span class="str">five+</span> 9s)
+  5 components, 99.99% each, no replicas   <span class="num">99.950</span>% (<span class="str">three</span> 9s)
+  What if one component drops to 95%?      <span class="num">95.007</span>% (<span class="str">&lt;two</span> 9s)
+
+<span class="str">==========================================================</span>
+KEY INSIGHT: Replicas are multiplicative force multipliers.
+  10 components at 99% with 3 replicas each ≈ 99.999%
+  If failures are independent, replication can compound availability fast.</pre>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">The Weakest Link Problem</div>
+    <p>The last scenario ("one component at 95%") shows the brutal truth: <strong>your system's availability is capped by its least reliable component</strong>. It doesn't matter if 9 services are at five nines — if one dependency is at 95%, the whole system can't exceed 95%. In interviews, always ask: "what's the weakest link in this architecture?" That's where your reliability investment should go first.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 14: INTERVIEW Q&A ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Interview Questions & Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What does "five nines" availability mean and how much downtime does it allow?</div>
+    <div class="qa-a">
+      <p>Five nines means 99.999% uptime. Per year, that allows only <strong>5.26 minutes</strong> of downtime. Per month, ~26 seconds. Achieving this requires: no single points of failure, multi-AZ deployment (preferably multi-region), automated sub-minute failover, 24/7 on-call with instant response, and extreme discipline in deployment practices. Few systems outside of core infrastructure (DNS, payment rails, emergency services) genuinely need five nines. Most SaaS products target three to four nines (99.9%–99.99%).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: What's the difference between SLA, SLO, and SLI?</div>
+    <div class="qa-a">
+      <p><strong>SLI</strong> = the metric you measure (e.g., percentage of successful responses). <strong>SLO</strong> = the target for that metric (e.g., "99.95% of requests succeed per month"). <strong>SLA</strong> = the business contract that bundles SLOs and specifies consequences for breach (e.g., "if we miss 99.95%, you get 10% service credit"). SLIs feed into SLOs; SLOs compose into SLAs. Engineers focus on SLOs — if you consistently meet your SLOs, your SLA takes care of itself.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: A system has three components in series, each at 99.9%. What's the system availability?</div>
+    <div class="qa-a">
+      <p>For series (all must work): A = 0.999 × 0.999 × 0.999 = <strong>0.997 = 99.7%</strong>. That's below three nines, allowing ~26 hours of downtime per year. If you need three nines overall, each component needs to be individually higher — e.g., 99.97% each gives 0.9997³ ≈ 99.91%. Alternatively, add redundancy: putting each component behind a failover pair converts the series into a mix of series and parallel, dramatically improving the math.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: How does redundancy improve availability? Give a quantitative example.</div>
+    <div class="qa-a">
+      <p>Two servers in parallel at 99% each: A = 1 - (1 - 0.99)² = 1 - 0.0001 = <strong>99.99%</strong>. Two nines became four nines by adding one replica. Three at 99% each: A = 1 - (0.01)³ = <strong>99.9999%</strong> — six nines. The gain can be dramatic, but it depends on independence. If both servers are in the same rack, a rack failure takes both out. Real availability gains require spreading replicas across racks, AZs, or regions.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: What is the CAP theorem and how does it relate to availability?</div>
+    <div class="qa-a">
+      <p>The CAP theorem (Brewer, 2000) states that during a network partition, a distributed system must choose between Consistency and Availability. <strong>CP systems</strong> (e.g., ZooKeeper, etcd) return errors or stall rather than serve stale data — they sacrifice availability for correctness. <strong>AP systems</strong> (e.g., Cassandra, DynamoDB) continue serving requests with potentially stale data — they sacrifice consistency for availability. The choice depends on your use case: banking needs CP; a social media feed is fine with AP. Modern systems blur this line with techniques like eventual consistency, quorum reads, and CRDTs.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: How would you design a system for 99.99% availability?</div>
+    <div class="qa-a">
+      <p><strong>Eliminate single points of failure:</strong> Multiple app servers behind LB, replicated database with auto-failover, redundant load balancers. <strong>Multi-AZ deployment:</strong> Spread across 2+ availability zones so one AZ failure doesn't take you down. <strong>Health checks + automated failover:</strong> LB health checks every 5-10s, DB failover via Patroni/RDS Multi-AZ, DNS failover for the LB itself. <strong>Safe deployments:</strong> Canary releases, automatic rollback on error rate spike. <strong>Circuit breakers:</strong> Prevent cascading failures from downstream dependencies. <strong>Monitoring + alerting:</strong> SLI dashboards, error budget tracking, PagerDuty alerts. <strong>Test your failover:</strong> Run regular game days / chaos experiments to verify everything works.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q7: What is an error budget and how does Google SRE use it?</div>
+    <div class="qa-a">
+      <p>An error budget is the amount of unreliability your SLO permits. If your SLO is 99.95% monthly availability, your error budget is 0.05% of the month = ~21.6 minutes of downtime. When the budget is consumed (too many incidents), the SRE team can halt feature deployments until reliability improves. When budget is healthy, teams can deploy aggressively and take risks. This creates a quantitative feedback loop: the more reliable your system, the faster you can ship. The less reliable, the more you must slow down and fix. It turns the "reliability vs velocity" debate from an opinion war into a math problem.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SECTION 15: CHEAT SHEET ============ -->
+<section class="section" id="s15">
+  <div class="section-num">15</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Availability = P(system works when you need it). Measured as a percentage. Each "nine" = 10× less allowed downtime.<br>
+    <strong>2.</strong> Five nines (99.999%) = 5.26 min/year downtime. Three nines (99.9%) = 8.77 hours/year. Know the table.<br>
+    <strong>3.</strong> SLI (metric) → SLO (target) → SLA (contract). Error budget = allowed unreliability within the SLO.<br>
+    <strong>4.</strong> Redundancy is the primary availability mechanism. Active-passive for databases. Active-active for stateless servers.<br>
+    <strong>5.</strong> Series availability multiplies (gets worse): 99.9% × 99.9% × 99.9% = 99.7%. Every dependency is a tax.<br>
+    <strong>6.</strong> Parallel availability compounds when failures are independent: 1 - (1-0.99)² = 99.99%. Isolation matters as much as replica count.<br>
+    <strong>7.</strong> CAP theorem: during network partitions, choose Consistency (CP) or Availability (AP). Both have valid use cases.<br>
+    <strong>8.</strong> The #1 cause of outages is software changes (bad deploys), not hardware failure. Invest in safe deployment practices.<br>
+    <strong>9.</strong> Untested redundancy is hope, not a guarantee. Chaos engineering (Netflix Simian Army) turns hope into evidence.<br>
+    <strong>10.</strong> Not all systems need the same availability. A personal blog ≠ a payment system. Match nines to business impact.</p>
+  </div>
+
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Availability Under Failure</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 760 440" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
+        <marker id="mr" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#f87171"/></marker>
+        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
+      </defs>
+
+      <!-- User -->
+      <rect x="20" y="30" width="120" height="44" rx="8" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="80" y="57" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#60a5fa" font-weight="600">User Request</text>
+
+      <!-- LB -->
+      <rect x="200" y="30" width="130" height="44" rx="8" fill="#222734" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="265" y="57" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#a78bfa" font-weight="600">Load Balancer</text>
+      <path d="M140 52 L200 52" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma)"/>
+
+      <!-- Health check -->
+      <text x="248" y="92" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">health</text>
+      <text x="248" y="104" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">checks ↕</text>
+
+      <!-- Server 1 (healthy) -->
+      <rect x="120" y="120" width="110" height="44" rx="8" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="175" y="147" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">Server A ✓</text>
+
+      <!-- Server 2 (healthy) -->
+      <rect x="250" y="120" width="110" height="44" rx="8" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="305" y="147" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">Server B ✓</text>
+
+      <!-- Server 3 (DEAD) -->
+      <rect x="385" y="120" width="110" height="44" rx="8" fill="#2a1520" stroke="#f87171" stroke-width="1.5" stroke-dasharray="5 3"/>
+      <text x="440" y="142" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171" font-weight="600">Server C ✗</text>
+      <text x="440" y="156" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#f87171">CRASHED</text>
+
+      <!-- LB to servers -->
+      <path d="M230 74 L175 120" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
+      <path d="M265 74 L305 120" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
+      <path d="M300 74 L440 120" stroke="#f87171" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#mr)"/>
+      <text x="400" y="90" font-family="IBM Plex Mono,monospace" font-size="9" fill="#f87171">removed</text>
+
+      <!-- Database -->
+      <rect x="180" y="210" width="150" height="44" rx="8" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="255" y="237" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">Primary DB</text>
+      <path d="M175 164 L235 210" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <path d="M305 164 L275 210" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+
+      <!-- Replica DB -->
+      <rect x="400" y="210" width="150" height="44" rx="8" fill="#222734" stroke="#fbbf24" stroke-width="1" stroke-dasharray="5 3"/>
+      <text x="475" y="232" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24">Replica DB</text>
+      <text x="475" y="248" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">standby</text>
+      <path d="M330 232 L395 232" stroke="#fbbf24" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ma)"/>
+      <text x="365" y="224" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">replication</text>
+
+      <!-- Failover arrow -->
+      <path d="M475 254 L475 296" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#mr)"/>
+      <text x="475" y="310" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">if primary dies →</text>
+      <text x="475" y="325" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">promote to primary</text>
+
+      <!-- Response -->
+      <rect x="20" y="380" width="120" height="44" rx="8" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="80" y="407" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#6ee7b7" font-weight="600">Response ✓</text>
+      <path d="M175 164 L80 380" stroke="#6ee7b7" stroke-width="1" stroke-dasharray="6 3" marker-end="url(#mg)"/>
+
+      <!-- Annotations -->
+      <rect x="560" y="30" width="180" height="180" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
+      <text x="650" y="52" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7" font-weight="600">REDUNDANCY MAP</text>
+      <text x="575" y="75" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ LB: single (SPOF risk)</text>
+      <text x="575" y="95" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">▸ Servers: 3 (1 dead, 2 live)</text>
+      <text x="575" y="115" font-family="DM Sans,sans-serif" font-size="11" fill="#fbbf24">▸ DB: primary + hot standby</text>
+      <text x="575" y="140" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ System: still serving ✓</text>
+      <text x="575" y="160" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">▸ Risk: LB or primary DB</text>
+      <text x="575" y="175" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">  failure = total outage</text>
+    </svg>
+    <div class="diagram-caption">Availability under partial failure — one server crashed, system still serving via redundancy</div>
+  </div>
+
+  <h3>Diagram Interpretation</h3>
+  <p><strong>User Request → Load Balancer:</strong> The entry point. The LB distributes traffic and detects failed backends via health checks. If the LB itself dies, <em>everything</em> goes down — it's a single point of failure unless you have a redundant LB pair.</p>
+  <p><strong>Server C (crashed):</strong> One of three app servers is dead. The LB detected the failure (health check timeout) and removed it from the pool. Traffic automatically redistributes to Servers A and B. Users don't notice — <em>this is redundancy working</em>.</p>
+  <p><strong>Where pressure builds:</strong> Servers A and B now handle 50% more traffic each (3 servers' worth of load on 2). If they were already at 70% utilization, they're now at 105% — overloaded. This is why you need headroom. Auto-scaling would spin up a replacement.</p>
+  <p><strong>Primary DB → Replica:</strong> The database has active-passive replication. If the primary crashes, the replica promotes to primary (failover ~10-30s). During that window, writes fail. This is the bottleneck — database failover is the slowest, riskiest link.</p>
+  <p><strong>Where the real failure happens:</strong> The annotated "SPOF risk" boxes show it — the load balancer and the primary DB are the weakest links. Adding a second LB (active-passive with VRRP) and ensuring the DB replica auto-promotes are the two highest-ROI reliability investments.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Availability is determined by the weakest un-replicated component in the critical path.</strong> A system with 10 redundant app servers but a single-point-of-failure database is only as available as that one database. Find the single points of failure, add redundancy there first, and test that the failover actually works.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References & Further Reading</h2>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Beyer et al. — "Site Reliability Engineering" (Google SRE Book, 2016)</div>
+    <p><strong>Betsy Beyer, Chris Jones, Jennifer Petoff, Niall Richard Murphy.</strong> O'Reilly Media, 2016. Free online.<br>
+    <a href="https://sre.google/sre-book/table-of-contents/" style="color:var(--accent);" target="_blank">https://sre.google/sre-book/table-of-contents/</a></p>
+    <p>• Defines SLIs, SLOs, SLAs, and the <strong>error budget</strong> framework — the quantitative mechanism for balancing reliability vs feature velocity.</p>
+    <p>• Chapter 3 ("Embracing Risk") argues that 100% availability is the wrong target — it prevents all meaningful change. The right target is the minimum availability your users need.</p>
+    <p>• Chapter 4 ("Service Level Objectives") provides a concrete framework for defining SLOs: choose meaningful SLIs, set achievable targets, track error budgets, and use them to govern deployment cadence.</p>
+    <p>• Introduces the concept that SRE is "what happens when you ask a software engineer to design an operations team" — treating operations as a software engineering problem.</p>
+    <p>• The most influential book on production reliability in the last decade. Essential reading for anyone building or operating distributed systems.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Brewer — "CAP Twelve Years Later: How the 'Rules' Have Changed" (2012)</div>
+    <p><strong>Eric Brewer.</strong> IEEE Computer, Vol. 45, No. 2, February 2012, pp. 23-29.<br>
+    <a href="https://sites.cs.ucsb.edu/~rich/class/cs293b-cloud/papers/brewer-cap.pdf" style="color:var(--blue);" target="_blank">https://sites.cs.ucsb.edu/~rich/class/cs293b-cloud/papers/brewer-cap.pdf</a></p>
+    <p>• Brewer's own retrospective on the CAP theorem he introduced at PODC 2000. Clarifies that CAP is <strong>not a simple "pick 2 of 3"</strong> — the trade-off only applies during network partitions.</p>
+    <p>• Argues that modern systems should use the partition as a trigger to enter a special "partition mode" with reduced guarantees, and recover full consistency once the partition heals.</p>
+    <p>• Introduces the idea that <strong>the trade-off is a spectrum</strong>, not binary. Systems can choose different consistency levels for different operations (e.g., strong consistency for payments, eventual for social feeds).</p>
+    <p>• Discusses ACID vs BASE (Basically Available, Soft state, Eventually consistent) as opposite ends of the consistency spectrum.</p>
+    <p>• Required reading for any system design interview where CAP is discussed — knowing Brewer's update shows deeper understanding than just reciting "pick 2 of 3."</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Rosenthal et al. — "Chaos Engineering" (Netflix, 2017/2020)</div>
+    <p><strong>Casey Rosenthal, Nora Jones.</strong> O'Reilly Media, 2020. Original Netflix Tech Blog articles from 2011+.<br>
+    <a href="https://principlesofchaos.org/" style="color:var(--orange);" target="_blank">https://principlesofchaos.org/</a></p>
+    <p>• Defines chaos engineering as "the discipline of experimenting on a system in order to build confidence in the system's capability to withstand turbulent conditions in production."</p>
+    <p>• Documents Netflix's Simian Army: <strong>Chaos Monkey</strong> (random instance termination), <strong>Chaos Kong</strong> (region evacuation), <strong>Latency Monkey</strong> (artificial delays).</p>
+    <p>• Establishes the principle: <strong>"the best way to avoid failure is to fail constantly."</strong> Regular, controlled failure injection in production builds resilience that testing in staging never can.</p>
+    <p>• Provides a methodology: define steady state, hypothesize, introduce real-world events (server crashes, network degradation), observe the difference between hypothesis and reality.</p>
+    <p>• Now widely adopted beyond Netflix. AWS has FIS (Fault Injection Simulator), Google has DiRT (Disaster Recovery Testing), and Gremlin offers chaos-as-a-service.</p>
+  </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] Oppenheimer, Ganapathi & Patterson — "Why Do Internet Services Fail, and What Can Be Done About It?" (2003)</div>
+    <p><strong>David Oppenheimer, Archana Ganapathi, David A. Patterson.</strong> USENIX USITS, 2003.<br>
+    <a href="https://www.usenix.org/legacy/events/usits03/tech/full_papers/oppenheimer/oppenheimer.pdf" style="color:var(--purple);" target="_blank">https://www.usenix.org/legacy/events/usits03/tech/full_papers/oppenheimer/oppenheimer.pdf</a></p>
+    <p>• Studied real-world outages across major internet services and found that <strong>operator error</strong> was the largest single cause of failures — not hardware, not software bugs.</p>
+    <p>• Found that front-end servers failing (stateless, easily replaced) caused less downtime than back-end/state-management failures (databases, config stores) which are harder to recover.</p>
+    <p>• Recommended: redundancy at every tier, automated monitoring and restart, better operational tools, and reducing the human factors that lead to mistakes.</p>
+    <p>• An early empirical paper that shaped the field's understanding of what actually causes outages — its findings are still cited and relevant today.</p>
+  </div>
+
+  <div id="ref5" class="callout yellow">
+    <div class="callout-label">[5] Amazon S3 Documentation and Incident Summary</div>
+    <p><strong>Amazon Web Services.</strong> Official S3 docs, SLA, and the 2017 us-east-1 event summary.<br>
+    <a href="https://aws.amazon.com/s3/sla/" style="color:var(--yellow);" target="_blank">Amazon S3 SLA</a> ·
+    <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/DataDurability.html" style="color:var(--yellow);" target="_blank">S3 durability and availability docs</a> ·
+    <a href="https://aws.amazon.com/message/41926/" style="color:var(--yellow);" target="_blank">2017 S3 event summary</a></p>
+    <p>• S3 Standard is documented as designed for 99.99% availability and 11 nines of durability, while the SLA defines the service-credit threshold separately.</p>
+    <p>• The 2017 us-east-1 event is a canonical example of operational error plus recovery-path complexity producing a major availability incident.</p>
+  </div>
+
+  <div id="ref6" class="callout red">
+    <div class="callout-label">[6] Meta Engineering — October 4, 2021 Outage</div>
+    <p><strong>Meta Engineering.</strong> Official engineering write-ups on the October 4 outage.<br>
+    <a href="https://engineering.fb.com/2021/10/04/networking-traffic/outage/" style="color:var(--red);" target="_blank">Initial update</a> ·
+    <a href="https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/" style="color:var(--red);" target="_blank">Detailed follow-up</a></p>
+    <p>• Describes how backbone router configuration changes disrupted inter-datacenter communication and cascaded into a global outage.</p>
+    <p>• Useful for understanding why recovery tooling and control-plane dependencies must be isolated from the systems they manage.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script>
+// Availability Simulator
+(function(){
+  const rSeries=document.getElementById('r-series');
+  const rComp=document.getElementById('r-comp');
+  const rReplicas=document.getElementById('r-replicas');
+  const vSeries=document.getElementById('v-series');
+  const vComp=document.getElementById('v-comp');
+  const vReplicas=document.getElementById('v-replicas');
+  const outAvail=document.getElementById('out-avail');
+  const outNines=document.getElementById('out-nines');
+  const outDown=document.getElementById('out-downtime');
+  const svg=document.getElementById('avail-bars');
+
+  function calc(){
+    const n=parseInt(rSeries.value);
+    const compAvail=parseInt(rComp.value)/10000;
+    const reps=parseInt(rReplicas.value);
+    vSeries.textContent=n;
+    vComp.textContent=(compAvail*100).toFixed(compAvail>=0.9999?2:1)+'%';
+    vReplicas.textContent=reps;
+
+    // Parallel: P(component up) = 1 - (1-a)^reps
+    const pComp=1-Math.pow(1-compAvail,reps);
+    // Series: P(system up) = pComp^n
+    const sysAvail=Math.pow(pComp,n);
+    const pct=sysAvail*100;
+
+    outAvail.textContent=pct>=99.999?pct.toFixed(4)+'%':pct.toFixed(3)+'%';
+
+    // Nines
+    let nines;
+    if(pct>=99.999) nines='≈ 5+ nines (HA)';
+    else if(pct>=99.99) nines='≈ 4 nines';
+    else if(pct>=99.9) nines='≈ 3 nines';
+    else if(pct>=99) nines='≈ 2 nines';
+    else nines='< 2 nines';
+    outNines.textContent=nines;
+
+    // Downtime
+    const downYear=525960*(1-sysAvail);
+    const downMonth=downYear/12;
+    let dtStr;
+    if(downYear<1) dtStr='< 1 min/year';
+    else if(downYear<60) dtStr=downYear.toFixed(1)+' min/year';
+    else if(downYear<1440) dtStr=(downYear/60).toFixed(1)+' hours/year';
+    else dtStr=(downYear/1440).toFixed(1)+' days/year';
+    dtStr+=' · '+(downMonth<1?'< 1 min/month':downMonth<60?downMonth.toFixed(1)+' min/month':(downMonth/60).toFixed(1)+' hours/month');
+    outDown.textContent=dtStr;
+
+    // Color
+    outAvail.style.color=pct>=99.99?'#6ee7b7':pct>=99.9?'#fbbf24':pct>=99?'#fb923c':'#f87171';
+
+    // SVG bar chart: show per-component and system
+    let bars='';
+    const barW=Math.min(50,600/(n+2));
+    const gap=4;
+    for(let i=0;i<n;i++){
+      const h=pComp*100;
+      const x=10+i*(barW+gap);
+      const color=pComp>=0.9999?'#6ee7b7':pComp>=0.999?'#fbbf24':'#fb923c';
+      bars+=`<rect x="${x}" y="${100-h}" width="${barW}" height="${h}" rx="3" fill="${color}" opacity="0.7"/>`;
+      bars+=`<text x="${x+barW/2}" y="116" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">C${i+1}</text>`;
+    }
+    // System bar
+    const sysX=10+(n)*(barW+gap)+20;
+    const sysH=pct;
+    const sysColor=pct>=99.99?'#6ee7b7':pct>=99.9?'#fbbf24':pct>=99?'#fb923c':'#f87171';
+    bars+=`<rect x="${sysX}" y="${100-sysH}" width="${barW+10}" height="${sysH}" rx="3" fill="${sysColor}"/>`;
+    bars+=`<text x="${sysX+(barW+10)/2}" y="116" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#e2e6f0" font-weight="600">SYS</text>`;
+    // Reference lines
+    bars+=`<line x1="0" y1="${100-99.9}" x2="700" y2="${100-99.9}" stroke="#5c6580" stroke-width="0.5" stroke-dasharray="4 3"/>`;
+    bars+=`<text x="698" y="${100-99.9-2}" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="7" fill="#5c6580">99.9%</text>`;
+    bars+=`<line x1="0" y1="${100-99}" x2="700" y2="${100-99}" stroke="#5c6580" stroke-width="0.5" stroke-dasharray="4 3"/>`;
+    bars+=`<text x="698" y="${100-99-2}" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="7" fill="#5c6580">99%</text>`;
+    svg.innerHTML=bars;
+  }
+
+  rSeries.addEventListener('input',calc);
+  rComp.addEventListener('input',calc);
+  rReplicas.addEventListener('input',calc);
+  calc();
+})();
+</script>
+</body>
+</html>
