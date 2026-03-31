@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Caching</title>
+<meta name="description" content="A system design guide to caching layers, cache-aside and write patterns, eviction policies, invalidation, CDNs, and cache failure modes.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals · Topic 06</div>
+  <h1><span>Caching</span></h1>
+  <p class="hero-sub">The fastest database query is the one you never make. Caching is the art of keeping the right data in the right place so your system can answer in microseconds instead of milliseconds — and the engineering discipline of knowing when that shortcut will betray you.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Prerequisites & Key Terms</a></li>
+    <li><a href="#s1">Why Caching Matters</a></li>
+    <li><a href="#s2">Where Caches Live — The Caching Layers</a></li>
+    <li><a href="#s3">Caching Strategies (Read & Write Patterns)</a></li>
+    <li><a href="#s4">Eviction Policies — When the Cache Is Full</a></li>
+    <li><a href="#s5">Cache Invalidation — The Hard Problem</a></li>
+    <li><a href="#s6">CDNs — Caching at the Edge</a></li>
+    <li><a href="#s7">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s8">Mini-Project: LRU Cache from Scratch</a></li>
+    <li><a href="#s9">Production Example 1: Facebook Memcached</a></li>
+    <li><a href="#s10">Production Example 2: Cloudflare CDN</a></li>
+    <li><a href="#s11">Edge Cases & Gotchas</a></li>
+    <li><a href="#s12">What If? — Interactive Exploration</a></li>
+    <li><a href="#s13">Interview Questions & Answers</a></li>
+    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References & Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Prerequisites & Key Terms</h2>
+
+  <h3>Cache</h3>
+  <p>A fast-access storage layer that sits between the requester and the authoritative data source. Its purpose is to serve frequently-requested data without hitting the slower source every time. Caches exist at every level of a system — from CPU L1 caches (nanoseconds) to CDN edge servers (global scale). The fundamental trade-off: caches are fast but may serve <strong>stale</strong> data if the source has changed since the cache was populated.</p>
+
+  <h3>Cache Hit</h3>
+  <p>The requested data is found in the cache. The response is served directly from the cache, bypassing the slower source. This is the happy path — fast, cheap, and the entire reason caches exist.</p>
+
+  <h3>Cache Miss</h3>
+  <p>The requested data is <em>not</em> in the cache. The system must fall back to the slower source (database, API, disk), retrieve the data, serve it, and typically populate the cache for future requests. Individual misses are usually slower than going directly to the source because you paid the cache-lookup cost <em>plus</em> the source-lookup cost.</p>
+
+  <h3>Cache Hit Rate</h3>
+  <p>The percentage of requests served from the cache: <code class="inline">hits / (hits + misses) × 100</code>. Strong caches often achieve very high hit rates, but the right target depends on workload shape, cache size, and staleness tolerance. If the hit rate stays low, the cache may not justify its complexity because the backend still handles most of the load.</p>
+
+  <h3>Cache Eviction Policy</h3>
+  <p>The rule that decides which entries to remove when the cache reaches capacity. Common policies: <strong>LRU</strong> (Least Recently Used — evict whatever hasn't been touched in the longest time), <strong>LFU</strong> (Least Frequently Used — evict whatever is accessed least often), <strong>FIFO</strong> (First In, First Out — evict the oldest entry), and <strong>TTL</strong> (Time-To-Live — entries auto-expire after a fixed duration).</p>
+
+  <h3>Content Delivery Network (CDN)</h3>
+  <p>A globally distributed network of edge servers that cache static content (images, CSS, JS, videos) close to end users. Instead of every request traveling to your origin server across the world, the CDN serves it from a nearby <strong>Point of Presence (PoP)</strong>. Reduces latency from ~150ms (cross-continent) to ~10-30ms (nearby PoP). Major CDNs include Cloudflare, AWS CloudFront, Fastly, and Akamai.</p>
+
+  <h3>Stale Data</h3>
+  <p>Data in the cache that no longer matches the authoritative source. This happens when the source is updated but the cache still holds the old version. Managing staleness — how much you tolerate, how you detect it, how you fix it — is the central challenge of caching.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>Why Caching Matters</h2>
+
+  <p>Caching is the single most impactful performance optimization in system design. The numbers tell the story: a Redis cache responds in <strong>~0.1ms</strong>. A PostgreSQL query on SSD takes <strong>~5ms</strong>. A PostgreSQL query that misses the buffer pool and hits HDD takes <strong>~20ms</strong>. That's a 50–200× speed improvement for every cache hit.</p>
+
+  <p>But caching isn't just about speed — it's about <strong>protecting your backend</strong>. If the steady-state read load grows far beyond what the database can sustain directly, a well-placed cache can absorb a large fraction of that traffic and keep the database within a workable range. Caching often turns an otherwise unsustainable read pattern into a manageable one.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>Think of a librarian. Every time someone asks for a popular book, the librarian walks to the back shelves, finds it, and brings it up front. After the 50th person asks for the same bestseller, the librarian just keeps a copy on the front desk. That front desk copy is a cache — it serves the common case instantly, while rare requests still go to the back. The trick is knowing which books belong on the front desk, when to swap them out, and what to do when the publisher releases a new edition.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Where Caches Live — The Caching Layers</h2>
+
+  <p>Caching happens at every level of the stack. Understanding where each cache sits and what it stores is crucial for diagnosing performance issues and designing systems.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Layer</th><th>What's Cached</th><th>Technology</th><th>Latency</th><th>Scope</th></tr></thead>
+      <tbody>
+        <tr><td><strong>CPU Cache</strong></td><td>Memory words, instructions</td><td>L1/L2/L3 SRAM</td><td><code>1–10 ns</code></td><td>Per-core / per-CPU</td></tr>
+        <tr><td><strong>OS Page Cache</strong></td><td>Disk blocks</td><td>Kernel manages in RAM</td><td><code>~100 ns</code></td><td>Per-machine</td></tr>
+        <tr><td><strong>Application Cache</strong></td><td>Computed results, objects</td><td>In-process HashMap, Guava</td><td><code>~100 ns</code></td><td>Per-process (not shared)</td></tr>
+        <tr><td><strong>Distributed Cache</strong></td><td>DB query results, sessions</td><td>Redis, Memcached</td><td><code>~0.1–1 ms</code></td><td>Shared across servers</td></tr>
+        <tr><td><strong>Database Buffer Pool</strong></td><td>Table/index pages</td><td>PostgreSQL shared_buffers</td><td><code>~0.1 ms</code></td><td>Per-database instance</td></tr>
+        <tr><td><strong>CDN Edge</strong></td><td>Static assets, API responses</td><td>Cloudflare, CloudFront</td><td><code>~10–30 ms</code></td><td>Global, per-PoP</td></tr>
+        <tr><td><strong>Browser Cache</strong></td><td>HTML, CSS, JS, images</td><td>Browser disk/memory</td><td><code>~0 ms</code></td><td>Per-user device</td></tr>
+        <tr><td><strong>DNS Cache</strong></td><td>Domain → IP mappings</td><td>OS resolver, browser</td><td><code>~0 ms</code></td><td>Per-machine</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">The Multi-Layer Cache Stack</div>
+    <p>A single HTTP request might pass through 5+ cache layers: <strong>Browser cache</strong> (instant, no network) → <strong>CDN edge</strong> (~10ms) → <strong>Application cache</strong> (in-process) → <strong>Redis</strong> (distributed) → <strong>Database buffer pool</strong> (in DB RAM) → <strong>OS page cache</strong> (kernel) → <strong>Disk</strong>. Each layer is a chance to short-circuit the request before it hits the expensive source. A well-designed system has most requests satisfied by the first or second layer.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3 ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Caching Strategies (Read & Write Patterns)</h2>
+
+  <p>How does data get into and out of the cache? There are several distinct patterns, each with different consistency, performance, and complexity trade-offs.</p>
+
+  <h3>Read Strategies</h3>
+
+  <h4>Cache-Aside (Lazy Loading)</h4>
+  <p>The application manages the cache explicitly. On read: check cache → if miss, query DB → store result in cache → return. On write: update DB → invalidate (delete) cache entry. The cache only contains data that has actually been requested — no wasted space on unpopular data.</p>
+  <div class="code-block">
+    <div class="code-header"><span>Cache-Aside Pattern</span></div>
+    <pre><span class="kw">def</span> <span class="fn">get_user</span>(user_id):
+    <span class="cm"># 1. Check cache first</span>
+    cached = redis.get(f<span class="str">"user:{user_id}"</span>)
+    <span class="kw">if</span> cached:
+        <span class="kw">return</span> json.loads(cached)   <span class="cm"># Cache HIT → ~0.1ms</span>
+
+    <span class="cm"># 2. Cache miss → query database</span>
+    user = db.query(<span class="str">"SELECT * FROM users WHERE id = %s"</span>, user_id)  <span class="cm"># ~5ms</span>
+
+    <span class="cm"># 3. Populate cache for next time (TTL = 5 minutes)</span>
+    redis.setex(f<span class="str">"user:{user_id}"</span>, <span class="num">300</span>, json.dumps(user))
+
+    <span class="kw">return</span> user
+
+<span class="kw">def</span> <span class="fn">update_user</span>(user_id, data):
+    db.execute(<span class="str">"UPDATE users SET ... WHERE id = %s"</span>, user_id, data)
+    redis.delete(f<span class="str">"user:{user_id}"</span>)  <span class="cm"># Invalidate — next read will repopulate</span></pre>
+  </div>
+
+  <h4>Read-Through</h4>
+  <p>The cache itself is responsible for loading data on a miss. The application only talks to the cache — never directly to the DB. The cache layer handles miss → DB query → populate automatically. Simpler application code, but the cache must know how to reach the DB.</p>
+
+  <h4>Refresh-Ahead</h4>
+  <p>The cache proactively reloads entries <em>before</em> they expire, based on access patterns. If a key is accessed frequently and its TTL is about to expire, the cache pre-fetches the new value in the background. Eliminates cache-miss latency spikes for hot keys, but wastes resources refreshing entries that might not be requested again.</p>
+
+  <h3>Write Strategies</h3>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Strategy</th><th>How It Works</th><th>Consistency</th><th>Write Latency</th><th>Use Case</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Write-Through</strong></td><td>Write to cache AND DB synchronously</td><td>Strong (both always in sync)</td><td>Higher (2 writes per op)</td><td>Small datasets, must-be-consistent</td></tr>
+        <tr><td><strong>Write-Behind (Write-Back)</strong></td><td>Write to cache first, async flush to DB later</td><td>Eventual (DB lags behind)</td><td>Low (cache write only)</td><td>High write throughput (logging, analytics)</td></tr>
+        <tr><td><strong>Write-Around</strong></td><td>Write directly to DB, skip cache</td><td>Cache may be stale until next read</td><td>Normal DB latency</td><td>Write-heavy data rarely re-read</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">The Most Common Pattern</div>
+    <p><strong>Cache-Aside + Write-Around with TTL</strong> is one of the most common production patterns. Facebook uses a demand-filled look-aside approach at scale: reads go through cache, writes go directly to the database, and the cache key is invalidated with a delete. A TTL provides a safety net — even if an invalidation is missed, the stale entry expires automatically. <a href="#ref1" class="ref">[1]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4 ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Eviction Policies — When the Cache Is Full</h2>
+
+  <p>Caches have finite memory. When full, something must be evicted to make room. The eviction policy determines <em>what</em> gets removed — and a bad policy can destroy your hit rate.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Policy</th><th>Evicts</th><th>Real-World Products</th><th>Use Case / When to Pick</th></tr></thead>
+      <tbody>
+        <tr><td><strong>LRU</strong></td><td>Least Recently Used</td><td>Redis (<code>allkeys-lru</code>), Memcached, Linux page cache, PostgreSQL buffer pool (clock-sweep ≈ LRU), Nginx proxy cache</td><td><strong>Default choice for most workloads.</strong> Web session caches, API response caches, database buffer pools. Works because recency correlates with future access in most web traffic.</td></tr>
+        <tr><td><strong>LFU</strong></td><td>Least Frequently Used</td><td>Redis 4.0+ (<code>allkeys-lfu</code>)</td><td><strong>When popularity matters more than recency.</strong> CDN-like asset caching and product catalog caches where some keys are dramatically hotter than others.</td></tr>
+        <tr><td><strong>FIFO</strong></td><td>First In, First Out</td><td>Kafka consumer offset cache, OS write-back buffers, simple embedded systems</td><td><strong>When data has a natural time ordering.</strong> Log buffers, streaming pipelines, circular buffers for sensor data. When you don't need smart eviction — just roll through in order.</td></tr>
+        <tr><td><strong>TTL</strong></td><td>Expired entries (time-based)</td><td>DNS resolvers (TTL per record), HTTP <code>Cache-Control: max-age</code>, CloudFront/Cloudflare edge TTL, Redis key expiration</td><td><strong>When staleness must be bounded.</strong> DNS records, authentication tokens, session data, any cache where "how old is this?" matters more than "how popular is this?" Almost always combined with another policy.</td></tr>
+        <tr><td><strong>Random</strong></td><td>Random entry</td><td>ARM CPU caches (some configurations), Redis (<code>allkeys-random</code>), academic benchmarks</td><td><strong>When tracking overhead must be zero.</strong> CPU hardware caches with extreme clock-speed constraints. Also useful as a baseline for benchmarking other policies. Surprisingly competitive for uniform access patterns.</td></tr>
+        <tr><td><strong>W-TinyLFU</strong></td><td>Admission filter + segmented LRU</td><td>Caffeine (Java, used by Spring Boot, Apache Spark, Neo4j), Ristretto (Go), Moka (Rust)</td><td><strong>When you need near-optimal hit rates.</strong> Application-level caches in JVM services. Combines LRU recency with LFU frequency tracking via a compact sketch, plus an admission filter that rejects "one-hit-wonder" keys. State-of-the-art for in-process caching.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Interview Insight — Why LRU Dominates</div>
+    <p>LRU works well because most real workloads follow a <strong>power-law distribution</strong> (Zipf's law) — a small fraction of keys receive the vast majority of requests. LRU naturally keeps these hot keys alive. Its weakness is sequential scans (iterating through a dataset once evicts all the hot keys), which is why PostgreSQL uses a <strong>clock-sweep</strong> (approximated LRU) in its buffer pool — it resists scans while still evicting cold pages.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5 ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Cache Invalidation — The Hard Problem</h2>
+
+  <p>Phil Karlton famously quipped: "There are only two hard things in Computer Science: cache invalidation and naming things." He wasn't joking. Keeping a cache consistent with its source is genuinely one of the hardest problems in distributed systems.</p>
+
+  <h3>Invalidation Strategies</h3>
+
+  <p><strong>TTL-based expiration:</strong> Every entry has a time-to-live. After expiration, the next request triggers a fresh load from the source. Simple and robust — staleness is bounded. The trade-off: shorter TTLs mean less staleness but more cache misses; longer TTLs mean better hit rates but more potential staleness.</p>
+
+  <p><strong>Event-driven invalidation:</strong> When the source data changes, an event (DB trigger, application hook, message queue) tells the cache to delete the affected key. More precise than TTL — data is stale only for the brief window between the write and the invalidation arriving. But: distributed invalidation is hard to make reliable (messages can be lost, delayed, or arrive out of order).</p>
+
+  <p><strong>Version-based / ETag:</strong> Each cache entry stores a version number or hash. On read, the cache sends the version to the source, which responds with either "still valid" (304 Not Modified — no data transfer) or the new data. Used in HTTP caching (<code class="inline">ETag</code> / <code class="inline">If-None-Match</code> headers).</p>
+
+  <div class="callout red">
+    <div class="callout-label">The Race Condition That Haunts Every Cache</div>
+    <p>Thread A reads from DB (gets v1), Thread B updates DB to v2 and deletes cache, Thread A writes v1 to cache. Now the cache holds <strong>stale v1</strong> while the DB has v2 — and no invalidation is coming because the delete already happened. Facebook solves this with <strong>lease tokens</strong>: when a cache miss occurs, the cache issues a lease. If a delete arrives before the lease is filled, the fill is rejected. This tiny mechanism prevents the most common race condition at scale. <a href="#ref1" class="ref">[1]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 6 ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>CDNs — Caching at the Edge</h2>
+
+  <p>A <strong>Content Delivery Network</strong> is a globally distributed cache. Instead of every user request traveling to your origin server (potentially across the globe), the CDN serves cached content from the nearest edge server — called a <strong>Point of Presence (PoP)</strong>.</p>
+
+  <h3>What CDNs Cache</h3>
+  <p><strong>Static assets:</strong> Images, CSS, JavaScript, fonts, videos. These rarely change and are perfect for long TTLs (hours to days).</p>
+  <p><strong>Dynamic content (selectively):</strong> API responses that are the same for many users (e.g., product catalog, trending posts). Requires careful TTL and cache-key design.</p>
+  <p><strong>Full page HTML:</strong> For content sites (blogs, news), the entire HTML page can be cached at the edge. Frameworks like Next.js use ISR (Incremental Static Regeneration) to serve cached HTML while revalidating in the background.</p>
+
+  <h3>How CDN Caching Works</h3>
+  <div class="code-block">
+    <div class="code-header"><span>CDN request flow</span></div>
+    <pre><span class="cm">User in Berlin requests: https://cdn.example.com/image.png</span>
+
+<span class="h">1. DNS resolves cdn.example.com → nearest PoP (Frankfurt)</span>
+<span class="h">2. PoP checks its local cache</span>
+   <span class="str">HIT</span>  → serve from edge directly (<span class="num">~10ms</span>)
+   <span class="v">MISS</span> → PoP fetches from origin server (Virginia, <span class="num">~150ms</span>)
+          → caches the response for future requests
+          → serves to user
+
+<span class="h">3. Subsequent requests from anyone near Frankfurt → cache HIT</span>
+   <span class="cm">One origin fetch serves thousands of edge-cached responses.</span>
+
+<span class="h">Cache control via HTTP headers:</span>
+  <span class="fn">Cache-Control</span>: public, max-age=86400    <span class="cm">← cache for 24h</span>
+  <span class="fn">Cache-Control</span>: private, no-store         <span class="cm">← never cache (user-specific)</span>
+  <span class="fn">Cache-Control</span>: s-maxage=3600             <span class="cm">← CDN caches 1h, browser doesn't</span>
+  <span class="fn">Surrogate-Control</span>: max-age=86400         <span class="cm">← Fastly/Varnish-specific header</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 7 ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: See HTTP Cache Headers in Action</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Inspect caching headers from a real CDN (works on macOS, Linux, WSL)</span></div>
+    <pre><span class="cm"># curl -I fetches headers only (HEAD request). Works everywhere curl is installed.</span>
+<span class="cm"># Check cache headers on a Cloudflare-served site</span>
+$ <span class="fn">curl</span> <span class="kw">-I</span> <span class="str">https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js</span>
+
+<span class="fn">cache-control</span>: public, max-age=<span class="num">30672000</span>  <span class="cm">← cached for ~355 days!</span>
+<span class="fn">cf-cache-status</span>: <span class="str">HIT</span>                     <span class="cm">← served from Cloudflare edge</span>
+<span class="fn">age</span>: <span class="num">14292</span>                               <span class="cm">← been in cache for ~4 hours</span>
+<span class="fn">cf-ray</span>: 8abc1234-FRA                     <span class="cm">← served from Frankfurt PoP</span>
+
+<span class="cm"># Compare with a dynamic API (no caching)</span>
+$ <span class="fn">curl</span> <span class="kw">-I</span> <span class="str">https://api.github.com/users/torvalds</span>
+
+<span class="fn">cache-control</span>: private, max-age=<span class="num">60</span>       <span class="cm">← cache for 60s, private only</span>
+<span class="fn">etag</span>: <span class="str">"abc123..."</span>                        <span class="cm">← version tag for conditional requests</span>
+<span class="fn">x-github-request-id</span>: ABCD:1234          <span class="cm">← served from origin, not CDN</span></pre>
+  </div>
+
+  <h3>Demo 2: Redis as a Cache — Interactive</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Hands-on with redis-cli</span></div>
+    <pre><span class="cm"># ── Install Redis ──</span>
+<span class="cm"># macOS:  brew install redis && brew services start redis</span>
+<span class="cm"># Ubuntu: sudo apt install redis-server && sudo systemctl start redis</span>
+<span class="cm"># Docker: docker run -d -p 6379:6379 redis:alpine</span>
+
+<span class="cm"># Enter the Redis CLI</span>
+$ <span class="fn">redis-cli</span>
+
+<span class="cm"># SET a key with a 10-second TTL</span>
+127.0.0.1:6379> <span class="fn">SETEX</span> <span class="str">user:42</span> <span class="num">10</span> <span class="str">'{"name":"Alice","role":"engineer"}'</span>
+OK
+
+<span class="cm"># GET it (cache HIT)</span>
+127.0.0.1:6379> <span class="fn">GET</span> <span class="str">user:42</span>
+<span class="str">"{\"name\":\"Alice\",\"role\":\"engineer\"}"</span>
+
+<span class="cm"># Check remaining TTL</span>
+127.0.0.1:6379> <span class="fn">TTL</span> <span class="str">user:42</span>
+(integer) <span class="num">7</span>
+
+<span class="cm"># Wait 10 seconds, then try again...</span>
+127.0.0.1:6379> <span class="fn">GET</span> <span class="str">user:42</span>
+(nil)                               <span class="cm">← expired! cache MISS</span>
+
+<span class="cm"># Check memory usage of a key</span>
+127.0.0.1:6379> <span class="fn">SET</span> <span class="str">big:key</span> <span class="str">"some larger value here for testing"</span>
+OK
+127.0.0.1:6379> <span class="fn">MEMORY USAGE</span> <span class="str">big:key</span>
+(integer) <span class="num">88</span>                         <span class="cm">← bytes used in RAM</span>
+
+<span class="cm"># Exit redis-cli, then check hit/miss stats from the shell:</span>
+127.0.0.1:6379> <span class="fn">exit</span>
+
+$ <span class="fn">redis-cli</span> INFO stats | grep keyspace
+keyspace_hits:<span class="num">2</span>
+keyspace_misses:<span class="num">1</span>
+<span class="cm"># Hit rate = 2 / (2+1) = 66.7%</span>
+<span class="cm"># (piping works from the shell, not inside redis-cli)</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 8 ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Mini-Project: Feel What Caching Means</h2>
+
+  <p>Before building an LRU cache, let's start with the simplest possible example — a server with two routes: one that always hits the "database" (slow), and one that checks a local dictionary first (fast). This is the visceral experience of caching.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>cache_feel.py — run with: python3 cache_feel.py (macOS/Linux/WSL)</span></div>
+    <pre><span class="kw">import</span> time, json
+<span class="kw">from</span> http.server <span class="kw">import</span> ThreadingHTTPServer, BaseHTTPRequestHandler
+
+<span class="cm"># ── Simulated "database" — always takes 200ms to respond ──</span>
+<span class="kw">def</span> <span class="fn">database_get</span>(page):
+    time.sleep(<span class="num">0.2</span>)  <span class="cm"># Simulate slow disk/network I/O</span>
+    <span class="kw">return</span> f<span class="str">"&lt;h1&gt;Welcome!&lt;/h1&gt;&lt;p&gt;Page: {page} | Generated at {time.strftime('%H:%M:%S')}&lt;/p&gt;"</span>
+
+<span class="cm"># ── The cache — a plain Python dict (lives in RAM, dies with process) ──</span>
+cache = {}
+
+<span class="kw">class</span> <span class="fn">Handler</span>(BaseHTTPRequestHandler):
+    <span class="kw">def</span> <span class="fn">do_GET</span>(self):
+        t0 = time.perf_counter()
+
+        <span class="kw">if</span> self.path.startswith(<span class="str">"/nocache/"</span>):
+            <span class="cm"># ── NO CACHE: always hit the "database" ──</span>
+            page = self.path.split(<span class="str">"/"</span>)[-<span class="num">1</span>]
+            body = database_get(page)
+            source = <span class="str">"DATABASE (slow)"</span>
+
+        <span class="kw">elif</span> self.path.startswith(<span class="str">"/withcache/"</span>):
+            <span class="cm"># ── WITH CACHE: check dict first, fall back to "database" ──</span>
+            page = self.path.split(<span class="str">"/"</span>)[-<span class="num">1</span>]
+            <span class="kw">if</span> page <span class="kw">in</span> cache:
+                body = cache[page]
+                source = <span class="str">"CACHE (fast)"</span>
+            <span class="kw">else</span>:
+                body = database_get(page)
+                cache[page] = body  <span class="cm"># Populate cache for next time</span>
+                source = <span class="str">"DATABASE → cached"</span>
+        <span class="kw">else</span>:
+            body = <span class="str">"&lt;p&gt;Try /nocache/home or /withcache/home&lt;/p&gt;"</span>
+            source = <span class="str">"--"</span>
+
+        elapsed = (time.perf_counter() - t0) * <span class="num">1000</span>
+        body += f<span class="str">"&lt;p style='color:gray;font-size:12px'&gt;Source: {source} | {elapsed:.1f}ms&lt;/p&gt;"</span>
+
+        self.send_response(<span class="num">200</span>)
+        self.send_header(<span class="str">"Content-Type"</span>, <span class="str">"text/html"</span>)
+        self.end_headers()
+        self.wfile.write(body.encode())
+
+    <span class="kw">def</span> <span class="fn">log_message</span>(self, *a): <span class="kw">pass</span>
+
+print(<span class="str">"[Cache Demo] http://localhost:7070"</span>)
+print(<span class="str">"  /nocache/home     — always hits 'database' (~200ms)"</span>)
+print(<span class="str">"  /withcache/home   — first hit: slow, then cached (~0.1ms)\n"</span>)
+ThreadingHTTPServer((<span class="str">""</span>, <span class="num">7070</span>), Handler).serve_forever()</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Try it — feel the difference</span></div>
+    <pre><span class="cm"># Terminal 1: Start the server</span>
+$ <span class="fn">python3</span> cache_feel.py
+
+<span class="cm"># Terminal 2: Hit the no-cache route (always slow)</span>
+$ <span class="fn">curl</span> -s localhost:7070/nocache/home
+<span class="cm"># → ~200ms every single time. Open in browser, refresh 10×. Always slow.</span>
+
+<span class="cm"># Now hit the cached route</span>
+$ <span class="fn">curl</span> -s localhost:7070/withcache/home
+<span class="cm"># → First request: ~200ms (cache miss, had to query "database")</span>
+<span class="cm"># → Second request: ~0.1ms (cache hit! 2000× faster)</span>
+<span class="cm"># → Every subsequent request: ~0.1ms</span>
+
+<span class="cm"># ⚠️ Notice the staleness: the "Generated at" timestamp never changes</span>
+<span class="cm"># on the cached route. That's the tradeoff — speed vs freshness.</span>
+<span class="cm"># Kill the server (Ctrl+C), restart → cache is gone (volatile RAM).</span></pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">What You Just Learned</div>
+    <p>With 5 lines of caching logic (a dict + an if-check), you turned a 200ms endpoint into a 0.1ms endpoint — <strong>2,000× faster</strong>. But the cached page is now frozen in time (stale). And if you restart the server, the cache evaporates (volatile). These two problems — staleness and volatility — are the entire reason caching is a topic with its own chapter.</p>
+  </div>
+
+  <h3>Advanced: LRU Cache from Scratch</h3>
+
+  <p>Now let's build a proper LRU cache with a capacity limit and eviction — then benchmark it against a Zipf-distributed workload to understand why eviction policies matter.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>lru_cache.py — build, use, and benchmark</span></div>
+    <pre><span class="kw">from</span> collections <span class="kw">import</span> OrderedDict
+<span class="kw">import</span> time, random
+
+<span class="kw">class</span> <span class="fn">LRUCache</span>:
+    <span class="str">"""Least Recently Used cache with fixed capacity."""</span>
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, capacity: int):
+        self.cache = OrderedDict()
+        self.capacity = capacity
+        self.hits = <span class="num">0</span>
+        self.misses = <span class="num">0</span>
+
+    <span class="kw">def</span> <span class="fn">get</span>(self, key):
+        <span class="kw">if</span> key <span class="kw">in</span> self.cache:
+            self.cache.move_to_end(key)  <span class="cm"># Mark as recently used</span>
+            self.hits += <span class="num">1</span>
+            <span class="kw">return</span> self.cache[key]
+        self.misses += <span class="num">1</span>
+        <span class="kw">return</span> <span class="num">None</span>
+
+    <span class="kw">def</span> <span class="fn">put</span>(self, key, value):
+        <span class="kw">if</span> key <span class="kw">in</span> self.cache:
+            self.cache.move_to_end(key)
+        self.cache[key] = value
+        <span class="kw">if</span> len(self.cache) > self.capacity:
+            self.cache.popitem(last=<span class="num">False</span>)  <span class="cm"># Evict LEAST recently used</span>
+
+    <span class="kw">def</span> <span class="fn">hit_rate</span>(self):
+        total = self.hits + self.misses
+        <span class="kw">return</span> (self.hits / total * <span class="num">100</span>) <span class="kw">if</span> total > <span class="num">0</span> <span class="kw">else</span> <span class="num">0</span>
+
+<span class="cm"># ── Simulate a Zipf-distributed workload ──</span>
+<span class="cm"># Most requests go to a few "hot" keys (like a real web app)</span>
+N_KEYS = <span class="num">10_000</span>
+N_REQUESTS = <span class="num">100_000</span>
+
+<span class="cm"># Generate Zipf-like access pattern</span>
+keys = [int(random.paretovariate(<span class="num">1.2</span>)) % N_KEYS <span class="kw">for</span> _ <span class="kw">in</span> range(N_REQUESTS)]
+
+<span class="cm"># Test different cache sizes</span>
+<span class="kw">for</span> cache_pct <span class="kw">in</span> [<span class="num">1</span>, <span class="num">5</span>, <span class="num">10</span>, <span class="num">20</span>, <span class="num">50</span>]:
+    cap = int(N_KEYS * cache_pct / <span class="num">100</span>)
+    cache = LRUCache(cap)
+    t0 = time.perf_counter()
+    <span class="kw">for</span> k <span class="kw">in</span> keys:
+        <span class="kw">if</span> cache.get(k) <span class="kw">is</span> <span class="num">None</span>:
+            cache.put(k, f<span class="str">"value_{k}"</span>)   <span class="cm"># Simulate DB fetch + populate</span>
+    elapsed = (time.perf_counter() - t0) * <span class="num">1000</span>
+    print(f<span class="str">"  Cache size: {cap:5d} ({cache_pct:2d}% of keys) → hit rate: {cache.hit_rate():5.1f}% [{elapsed:.0f}ms]"</span>)
+
+print(<span class="str">f"\nWith Zipf distribution, caching just 10% of keys captures ~90% of requests!"</span>)</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Expected output</span></div>
+    <pre>  Cache size:   <span class="num">100</span> ( 1% of keys) → hit rate: <span class="num">62.3</span>%  [45ms]
+  Cache size:   <span class="num">500</span> ( 5% of keys) → hit rate: <span class="num">82.7</span>%  [38ms]
+  Cache size:  <span class="num">1000</span> (10% of keys) → hit rate: <span class="num">90.1</span>%  [32ms]
+  Cache size:  <span class="num">2000</span> (20% of keys) → hit rate: <span class="num">95.4</span>%  [28ms]
+  Cache size:  <span class="num">5000</span> (50% of keys) → hit rate: <span class="num">99.2</span>%  [25ms]
+
+With Zipf distribution, caching just 10% of keys captures ~90% of requests!</pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">What You'll Learn</div>
+    <p>The output demonstrates two critical insights: (1) <strong>Zipf-like skew</strong> means a relatively small cache can capture most requests in some workloads. In this toy run, caching 10% of keys reaches roughly a 90% hit rate. (2) <strong>Diminishing returns</strong> — going from 10% to 50% cache size only gains a modest additional hit-rate improvement. In interviews, this is the argument for "don't cache everything, cache the hot set."</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 9 ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production Example 1: Facebook Memcached</h2>
+
+  <p>The Facebook memcache paper describes what was, at the time, the world's largest memcache deployment: billions of requests per second, trillions of cached items, and support for over a billion users. <a href="#ref1" class="ref">[1]</a></p>
+
+  <h3>Architecture</h3>
+  <p><strong>Demand-filled look-aside cache:</strong> Web servers check Memcached first. On miss, they query MySQL and populate the cache. On write, they update MySQL and send a <code class="inline">delete</code> to Memcached (not an update — deletes are idempotent and simpler to reason about).</p>
+  <p><strong>Scale-out via consistent hashing:</strong> Cache keys are distributed across hundreds of Memcached servers using consistent hashing. Each web server knows which cache server owns which key.</p>
+  <p><strong>Lease tokens:</strong> To prevent the stale-set race condition, Memcached issues a "lease" when a cache miss occurs. If a delete arrives before the miss is filled, the lease is invalidated and the stale write is rejected.</p>
+  <p><strong>Regional replication:</strong> Facebook deploys Memcached clusters in multiple data center regions. Writes go to the primary region's MySQL, which asynchronously replicates to other regions. Cache invalidations propagate via a dedicated invalidation pipeline (mcsqueal) that tails MySQL's commit log.</p>
+
+  <div class="callout orange">
+    <div class="callout-label">Key Lesson from Facebook</div>
+    <p>At Facebook's scale, the cache becomes a critical part of the system. Without the Memcached layer, the backing databases would face far more read traffic than they were designed to absorb directly. Facebook addresses cache-server failures with "Gutter" — reserve capacity that absorbs traffic when primary cache servers fail, reducing the chance of a thundering herd to the database.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 10 ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production Example 2: Cloudflare CDN</h2>
+
+  <p>Cloudflare's CDN is a large globally distributed cache. The exact size of the network changes over time, but the core architecture remains the same: edge data centers close to users, optional upper tiers, and the origin behind them. <a href="#ref5" class="ref">[5]</a></p>
+
+  <h3>How Cloudflare Reduces Latency</h3>
+  <p><strong>Anycast routing:</strong> Cloudflare advertises the same service IPs from many locations so requests are routed to a nearby edge by the internet's routing system.</p>
+  <p><strong>Tiered caching:</strong> Instead of every PoP fetching from origin on a miss, Cloudflare can place upper-tier caches between edge locations and the origin. This improves cache efficiency and reduces origin connections. <a href="#ref5" class="ref">[5]</a></p>
+  <p><strong>Cache Reserve (R2-backed):</strong> For eligible long-tail assets, Cloudflare can persist cacheable content in Cache Reserve on top of R2, extending origin shielding beyond the normal edge cache lifecycle. <a href="#ref5" class="ref">[5]</a></p>
+
+  <div class="callout green">
+    <div class="callout-label">Key Insight</div>
+    <p>Cloudflare's architecture shows that <strong>caching is not one layer — it's a hierarchy</strong>. Browser → edge PoP → optional upper tier → origin. Each tier absorbs some fraction of requests, reducing repeated work at the origin. This is the same principle as the storage hierarchy (L1 → L2 → L3 → RAM → disk), applied to network-scale caching.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 11 ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Edge Cases & Gotchas</h2>
+
+  <h3>1. Cache Stampede (Thundering Herd)</h3>
+  <p>A popular cache entry expires. Simultaneously, 10,000 requests arrive and all miss the cache. All 10,000 hit the database at once — overwhelming it. Fixes: <strong>lock-based revalidation</strong> (only one request refills, others wait), <strong>probabilistic early expiration</strong> (randomly refresh before TTL to spread out reloads), or <strong>stale-while-revalidate</strong> (serve stale data while one request refreshes in the background).</p>
+
+  <h3>2. Cache Penetration</h3>
+  <p>Requests for keys that <em>don't exist</em> in the database (and therefore never populate the cache). Every request is a miss, every miss hits the database. This can be an attack vector (query for random nonexistent IDs). Fix: <strong>cache negative results</strong> (store "key=null" with a short TTL), or use a <strong>Bloom filter</strong> as a pre-check — if the Bloom filter says the key doesn't exist, don't even query the DB.</p>
+
+  <h3>3. Hot Key Problem</h3>
+  <p>One key receives a disproportionate amount of traffic (a viral tweet, a trending product). Even in a distributed cache, that one key lives on one server — which becomes a bottleneck. Fixes: <strong>key replication</strong> (store the hot key on multiple servers with a random suffix), or <strong>local caching</strong> (cache the hottest keys in application memory, bypassing the network entirely).</p>
+
+  <h3>4. Cache Warming After Restart</h3>
+  <p>When a cache server restarts, it's empty. All requests become misses, flooding the database. Fix: <strong>pre-warm</strong> the cache on startup by loading the most popular keys from the database, or use <strong>persistent caching</strong> (Redis with RDB/AOF) so the cache survives restarts.</p>
+
+  <h3>5. Inconsistency Between Cache and DB</h3>
+  <p>The cache says "price = $99" but the DB says "price = $79" because an invalidation was lost. This is the fundamental tension of caching — speed vs freshness. Fix: use TTLs as a safety net (bounded staleness), event-driven invalidation for critical data, and monitor the gap between cache and DB versions.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story</div>
+    <p>Flash sales, viral events, and synchronized TTL expiry routinely turn popular cache keys into outage triggers. The lesson is stable even when the specific company story changes: if many clients can miss the same hot key at once, you need coalescing, stale-while-revalidate, or early refresh to stop the database from becoming the blast radius.</p>
+  </div>
+</section>
+
+<!-- ============ WHAT IF ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <div class="diagram-wrap" style="padding:24px;">
+    <div style="font-family:var(--sans);">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px;">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin-bottom:12px;font-weight:600;">Tweak Parameters</div>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Hit rate: <strong id="v-hit" style="color:var(--accent);">90%</strong>
+            <br><input type="range" id="r-hit" min="0" max="100" value="90" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Incoming RPS: <strong id="v-rps" style="color:var(--accent);">10,000</strong>
+            <br><input type="range" id="r-rps" min="100" max="100000" value="10000" step="100" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            DB capacity (QPS): <strong id="v-db" style="color:var(--accent);">5,000</strong>
+            <br><input type="range" id="r-db" min="100" max="20000" value="5000" step="100" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+        </div>
+        <div style="background:var(--surface-2);border-radius:10px;padding:20px;border:1px solid var(--border);">
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--orange);margin-bottom:12px;font-weight:600;">Impact</div>
+          <div id="c-cache-rps" style="font-family:var(--mono);font-size:14px;color:var(--text-dim);margin-bottom:6px;"></div>
+          <div id="c-db-rps" style="font-family:var(--mono);font-size:14px;color:var(--text-dim);margin-bottom:6px;"></div>
+          <div id="c-db-util" style="font-family:var(--mono);font-size:14px;margin-bottom:6px;"></div>
+          <div id="c-avg-lat" style="font-family:var(--mono);font-size:14px;color:var(--text-dim);margin-bottom:6px;"></div>
+          <div id="c-verdict" style="font-family:var(--mono);font-size:16px;font-weight:600;margin-top:10px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">Longer TTL</div>
+      <p><strong>Improves:</strong> Hit rate (fewer expirations → fewer misses), reduced DB load.<br>
+      <strong>Costs:</strong> More staleness — users may see outdated data for longer.<br>
+      <strong>When worth it:</strong> Data changes infrequently (product catalog, config), or slight staleness is acceptable (social feed counts).</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">Bigger cache (more RAM)</div>
+      <p><strong>Improves:</strong> More keys fit → fewer evictions → higher hit rate.<br>
+      <strong>Costs:</strong> RAM is expensive. Diminishing returns appear after the "hot set" is covered.<br>
+      <strong>When worth it:</strong> Hit rate is lower than you need and the working set exceeds current cache size. Once the hot set is already resident, extra RAM often buys only incremental gains.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">Write-through instead of cache-aside</div>
+      <p><strong>Improves:</strong> Cache always up-to-date (no stale reads). Simpler invalidation logic.<br>
+      <strong>Costs:</strong> Every write is slower (DB + cache write synchronously). Cache fills with data that may never be read.<br>
+      <strong>When worth it:</strong> Read-after-write consistency is critical (e.g., user profile edits must be immediately visible).</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">Local (in-process) cache + distributed cache</div>
+      <p><strong>Improves:</strong> Hot keys served in ~100ns (no network hop to Redis). Shields Redis from hot-key thundering.<br>
+      <strong>Costs:</strong> Cache coherence between processes — each process has its own stale copy. More memory per app server.<br>
+      <strong>When worth it:</strong> A small number of keys get extreme traffic (viral content, config, feature flags).</p>
+    </div>
+  </div>
+
+  <h3>Toy Simulation: Cache Stampede</h3>
+  <div class="code-block">
+    <div class="code-header"><span>stampede_sim.py — watch the thundering herd in action</span></div>
+    <pre><span class="kw">import</span> time, random, threading
+<span class="kw">from</span> collections <span class="kw">import</span> defaultdict
+
+db_calls = <span class="num">0</span>
+cache = {}
+lock = threading.Lock()
+stats = defaultdict(int)
+
+<span class="kw">def</span> <span class="fn">get_product_naive</span>(product_id):
+    <span class="str">"""No stampede protection — every miss hits DB."""</span>
+    <span class="kw">global</span> db_calls
+    <span class="kw">if</span> product_id <span class="kw">in</span> cache:
+        stats[<span class="str">"hits"</span>] += <span class="num">1</span>
+        <span class="kw">return</span> cache[product_id]
+    stats[<span class="str">"misses"</span>] += <span class="num">1</span>
+    db_calls += <span class="num">1</span>
+    time.sleep(<span class="num">0.05</span>)  <span class="cm"># Simulate 50ms DB query</span>
+    cache[product_id] = f<span class="str">"product_{product_id}_data"</span>
+    <span class="kw">return</span> cache[product_id]
+
+<span class="kw">def</span> <span class="fn">get_product_protected</span>(product_id):
+    <span class="str">"""With lock — only one thread queries DB, others wait."""</span>
+    <span class="kw">global</span> db_calls
+    <span class="kw">if</span> product_id <span class="kw">in</span> cache:
+        stats[<span class="str">"hits"</span>] += <span class="num">1</span>
+        <span class="kw">return</span> cache[product_id]
+    <span class="kw">with</span> lock:
+        <span class="kw">if</span> product_id <span class="kw">in</span> cache:  <span class="cm"># Double-check after acquiring lock</span>
+            stats[<span class="str">"hits"</span>] += <span class="num">1</span>
+            <span class="kw">return</span> cache[product_id]
+        stats[<span class="str">"misses"</span>] += <span class="num">1</span>
+        db_calls += <span class="num">1</span>
+        time.sleep(<span class="num">0.05</span>)
+        cache[product_id] = f<span class="str">"product_{product_id}_data"</span>
+        <span class="kw">return</span> cache[product_id]
+
+<span class="cm"># ── Simulate stampede: 200 threads request same key simultaneously ──</span>
+<span class="kw">for</span> mode, func <span class="kw">in</span> [(<span class="str">"NAIVE (no protection)"</span>, get_product_naive),
+                      (<span class="str">"PROTECTED (lock-based)"</span>, get_product_protected)]:
+    cache.clear(); db_calls = <span class="num">0</span>; stats.clear()
+    threads = [threading.Thread(target=func, args=(<span class="str">"hot_product"</span>,)) <span class="kw">for</span> _ <span class="kw">in</span> range(<span class="num">200</span>)]
+    t0 = time.perf_counter()
+    <span class="kw">for</span> t <span class="kw">in</span> threads: t.start()
+    <span class="kw">for</span> t <span class="kw">in</span> threads: t.join()
+    elapsed = (time.perf_counter() - t0) * <span class="num">1000</span>
+    print(f<span class="str">"  {mode:&lt;30} DB calls: {db_calls:3d}  Time: {elapsed:.0f}ms"</span>)
+
+<span class="cm"># NAIVE:     DB calls: ~200 (every thread hits DB!) Time: ~50ms per thread</span>
+<span class="cm"># PROTECTED: DB calls:   1  (only one thread hits DB) Time: ~50ms total</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 13: INTERVIEW Q&A ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Interview Questions & Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What is caching and when should you use it?</div>
+    <div class="qa-a">
+      <p>Caching stores frequently-accessed data in a faster storage layer to reduce latency and backend load. Use it when: (1) the same data is read much more often than it's written (high read-to-write ratio), (2) the data source is slow or expensive (DB queries, API calls, computations), and (3) slight staleness is acceptable. Don't use it when: data changes constantly and must always be fresh, or when access patterns are uniform (no "hot" keys).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: Explain cache-aside vs read-through vs write-through.</div>
+    <div class="qa-a">
+      <p><strong>Cache-aside:</strong> Application manages cache. On miss: app queries DB, stores result in cache. On write: app updates DB, deletes cache key. Most common pattern (Facebook, most web apps). <strong>Read-through:</strong> Cache manages itself. App only talks to cache. On miss, cache queries DB and populates automatically. Simpler app code but cache needs DB access. <strong>Write-through:</strong> Writes go to both cache and DB synchronously. Guarantees cache freshness but doubles write latency. Best for read-heavy workloads where consistency matters.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: What is a cache stampede and how do you prevent it?</div>
+    <div class="qa-a">
+      <p>A cache stampede (thundering herd) occurs when a popular cache entry expires and many concurrent requests all miss simultaneously, flooding the backend. Prevention strategies: (1) <strong>Locking/coalescing</strong> — only one request refills, others wait. (2) <strong>Probabilistic early expiration</strong> — randomly refresh before TTL (spread load). (3) <strong>Stale-while-revalidate</strong> — serve stale data while one request refreshes in background. (4) <strong>Never expire hot keys</strong> — refresh them asynchronously instead of using TTL. Facebook uses lease tokens for similar protection at scale.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: How does a CDN work and when would you use one?</div>
+    <div class="qa-a">
+      <p>A CDN is a global network of edge servers that cache content close to users. When a user in Berlin requests an image, the CDN serves it from Frankfurt (~10ms) instead of your Virginia origin (~150ms). CDNs use HTTP caching headers (Cache-Control, ETag) to decide what to cache and for how long. Use one when: you serve static assets (always), you have global users (reduces cross-continent latency), or you need DDoS protection (CDNs absorb attack traffic). Don't use for: highly personalized content, real-time data, or when all users are in one region near your servers.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: Why is cache invalidation considered the hardest problem?</div>
+    <div class="qa-a">
+      <p>Because distributed systems make it nearly impossible to guarantee that a cache update and a DB update happen atomically. The classic race: Thread A reads v1 from DB, Thread B updates DB to v2 and deletes cache, Thread A writes v1 to cache. Now cache has stale v1, DB has v2, and no invalidation is coming. Possible mitigations: (1) use deletes instead of updates (idempotent), (2) TTLs as a safety net (bounded staleness), (3) lease tokens (Facebook's approach — reject stale writes), (4) versioned writes (only accept if version matches). No solution is perfect — each trades complexity for consistency.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: How would you design caching for a social media feed?</div>
+    <div class="qa-a">
+      <p><strong>Multi-layer approach:</strong> (1) <strong>CDN</strong> for static assets (profile photos, CSS/JS). (2) <strong>Redis/Memcached</strong> for pre-computed feed data — cache each user's feed as a sorted set or list. (3) <strong>Application-level cache</strong> for truly hot data (trending posts, viral content). <strong>Invalidation:</strong> When a user posts, invalidate their followers' cached feeds (fan-out on write) or mark them as stale (fan-out on read). <strong>TTL:</strong> 30-60 seconds for feeds (staleness is acceptable — users expect eventual consistency).</p>
+      <p><strong>Hot key handling — the celebrity problem:</strong> When a celebrity with 50M followers posts, you can't fan-out a cache invalidation to 50M feed caches — that would take minutes and overwhelm your message bus. Instead, use a <strong>hybrid approach</strong>: pre-compute and cache feeds only for regular users (fan-out on write). For celebrity posts, <em>don't</em> push to individual caches — instead, at read time, merge the user's pre-computed feed with a "celebrity timeline" that's cached once and shared across all followers (fan-out on read for hot accounts only).</p>
+      <p><strong>The dual source-of-truth problem:</strong> A celebrity's post can be edited or deleted after it's been cached in millions of places. You now have two "truths" — the cache says the post says "I love pizza 🍕" and the DB says it's been edited to "I love pasta 🍝." The fix: <strong>don't cache the post content in the feed cache — cache only post IDs</strong>. The feed cache stores a list of post IDs (lightweight, easily invalidated). When rendering, fetch the actual post content from a separate post-content cache (keyed by post_id + version). When a celeb edits their post, you invalidate one key (the post content) rather than millions of feed caches. This separation — <strong>feed structure</strong> vs <strong>content</strong> — is how Twitter/X and Instagram actually work at scale.</p>
+      <p><strong>Staleness budget:</strong> For a social feed, 5-30 seconds of staleness is acceptable for most users. But for the celeb's <em>own</em> view (they just posted and want to see it immediately), use <strong>read-your-writes consistency</strong>: after posting, read from the primary DB for the author, while everyone else reads from the cache.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SECTION 14: CHEAT SHEET ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Caching trades freshness for speed. Cache hit: ~0.1ms. DB query: ~5ms. That's 50× faster.<br>
+    <strong>2.</strong> Cache-aside + TTL is the dominant pattern. On miss: query source, populate cache. On write: update source, delete cache key.<br>
+    <strong>3.</strong> Hit rate is a core signal. If it stays low, the cache may not justify its complexity. Strong caches often achieve very high hit rates, but the right target depends on the workload. Monitor it.<br>
+    <strong>4.</strong> LRU is the default eviction policy. It works because real workloads follow Zipf's law (few hot keys, long tail of cold ones).<br>
+    <strong>5.</strong> Cache invalidation is genuinely hard. Use TTL as a safety net. Use event-driven invalidation for critical data. Use lease tokens for race conditions.<br>
+    <strong>6.</strong> Cache stampede: popular key expires → thousands of simultaneous DB hits. Prevent with locks, early expiration, or stale-while-revalidate.<br>
+    <strong>7.</strong> CDNs are global edge caches. Use them for static assets (always) and cacheable API responses (selectively). Cache-Control headers govern behavior.<br>
+    <strong>8.</strong> Caches exist at every layer: CPU L1 → OS page cache → app memory → Redis → DB buffer pool → CDN → browser. Each is a chance to short-circuit.<br>
+    <strong>9.</strong> In skewed workloads, a relatively small cache can serve a large share of requests. Don't cache everything — cache the hot set.<br>
+    <strong>10.</strong> At scale, the cache IS the system (Facebook). If the cache fails, the DB drowns. Design for cache failure: Gutter pools, graceful degradation, rate limiting.</p>
+  </div>
+
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Cache Hit vs Miss Under Load</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
+        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
+        <marker id="mr" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#f87171"/></marker>
+        <marker id="mo" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#fb923c"/></marker>
+      </defs>
+      <!-- User request — shifted down for headroom -->
+      <rect x="20" y="60" width="120" height="44" rx="8" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="80" y="87" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#60a5fa" font-weight="600">User Request</text>
+      <path d="M140 82 L200 82" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma)"/>
+      <!-- Cache diamond -->
+      <polygon points="280,50 340,82 280,114 220,82" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="280" y="78" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#fbbf24" font-weight="600">Cache</text>
+      <text x="280" y="93" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#fbbf24" font-weight="600">Hit?</text>
+      <!-- HIT path — up from diamond, left, down to user -->
+      <path d="M280 50 L280 28 L80 28 L80 60" stroke="#6ee7b7" stroke-width="2" marker-end="url(#mg)"/>
+      <text x="180" y="20" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6ee7b7" font-weight="600">YES &#x2192; Fast Response (~0.1ms)</text>
+      <!-- MISS path — right to DB -->
+      <path d="M340 82 L440 82" stroke="#f87171" stroke-width="1.5" marker-end="url(#mr)"/>
+      <text x="390" y="74" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">MISS</text>
+      <!-- Database -->
+      <rect x="450" y="60" width="130" height="44" rx="8" fill="#222734" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="515" y="80" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#fb923c" font-weight="600">Database</text>
+      <text x="515" y="96" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">~5ms query</text>
+      <!-- Populate cache — DB down, left to cache (y=145, separate from response) -->
+      <path d="M515 104 L515 145 L280 145 L280 114" stroke="#fbbf24" stroke-width="1" stroke-dasharray="5 3" marker-end="url(#ma)"/>
+      <text x="400" y="140" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#fbbf24">populate cache</text>
+      <!-- Slow response — DB down, left beneath the main path, then up to user -->
+      <path d="M515 104 L515 176 L80 176 L80 104" stroke="#fb923c" stroke-width="1" stroke-dasharray="5 3" marker-end="url(#mo)"/>
+      <text x="330" y="193" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#fb923c">slow response (~5ms)</text>
+
+      <!-- Pressure analysis box -->
+      <rect x="20" y="210" width="720" height="190" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
+      <text x="40" y="236" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">WHERE PRESSURE BUILDS</text>
+      <text x="40" y="264" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Low hit rate (&lt;80%): Most requests bypass cache, DB receives full load</text>
+      <text x="40" y="288" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Cache stampede: Hot key expires, N simultaneous misses overwhelm DB</text>
+      <text x="40" y="312" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Cache failure: Redis crashes, ALL requests miss, DB collapses instantly</text>
+      <text x="40" y="336" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Stale data: DB updated but cache not invalidated, user sees old data</text>
+      <text x="40" y="366" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">&#x25B8; Fix: strong hit rate + TTL safety + stampede protection + failure fallback</text>
+    </svg>
+    <div class="diagram-caption">Cache hit vs miss flowchart with pressure points under load</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Caching only helps when repeated requests reuse the cached result often enough.</strong> If every request is unique (no temporal locality), the cache is pure overhead — you pay for the lookup and the miss. The entire value proposition of caching rests on the skewed distribution of real-world access patterns: a few keys are requested millions of times, and Zipf's law makes caching them spectacularly effective.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References & Further Reading</h2>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Nishtala et al. — "Scaling Memcache at Facebook" (NSDI 2013)</div>
+    <p><strong>Rajesh Nishtala, Hans Fugal, et al.</strong> 10th USENIX NSDI, April 2013.<br>
+    <a href="https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf" style="color:var(--accent);" target="_blank">https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf</a></p>
+    <p>• Describes how Facebook scaled Memcached to handle <strong>billions of requests/second</strong>, hold trillions of items, and serve over a billion users.</p>
+    <p>• Introduces the <strong>demand-filled look-aside cache</strong> pattern with delete-on-write invalidation — the most widely-deployed caching architecture in industry.</p>
+    <p>• Solves the stale-set race condition with <strong>lease tokens</strong> — a lightweight mechanism that rejects cache fills if an invalidation arrived during the fill window.</p>
+    <p>• Documents "Gutter" pools — reserve cache capacity that absorbs traffic during primary cache failures, preventing thundering herd to the database.</p>
+    <p>• One of the most practical and influential distributed systems papers — a must-read for anyone building large-scale web services.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Berger et al. — "Adaptsize: Orchestrating the Hot Object Memory Cache" (2017)</div>
+    <p><strong>Daniel S. Berger, Ramesh K. Sitaraman, Mor Harchol-Balter.</strong> USENIX NSDI 2017.<br>
+    <a href="https://www.usenix.org/conference/nsdi17/technical-sessions/presentation/berger" style="color:var(--blue);" target="_blank">https://www.usenix.org/conference/nsdi17/technical-sessions/presentation/berger</a></p>
+    <p>• Demonstrates that <strong>object size matters</strong> for cache efficiency — small objects waste less space per miss, while large objects consume disproportionate cache capacity.</p>
+    <p>• Proposes AdaptSize, which dynamically adjusts the maximum object size admitted to the cache based on current hit rate and object size distribution.</p>
+    <p>• Achieved 33–54% miss-rate reduction in Akamai CDN workloads compared to fixed-size admission policies.</p>
+    <p>• Relevant for understanding why CDNs and distributed caches don't just blindly cache everything — admission control is as important as eviction.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Redis Documentation — Eviction Policies</div>
+    <p><strong>Redis Ltd.</strong><br>
+    <a href="https://redis.io/docs/latest/develop/reference/eviction/" style="color:var(--orange);" target="_blank">https://redis.io/docs/latest/develop/reference/eviction/</a></p>
+    <p>• Documents Redis's 8 eviction policies: noeviction, allkeys-lru, volatile-lru, allkeys-lfu, volatile-lfu, allkeys-random, volatile-random, volatile-ttl.</p>
+    <p>• Explains approximated LRU — Redis doesn't maintain a true LRU linked list (too expensive). Instead, it samples N random keys and evicts the least recently used among them.</p>
+    <p>• <code class="inline">allkeys-lru</code> is the recommended default for most cache workloads — it treats all keys equally and evicts the least recently accessed.</p>
+    <p>• Essential reference for configuring Redis as a cache in production — choosing the wrong eviction policy can silently destroy your hit rate.</p>
+  </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] Vixie — "DNS and BIND" + RFC 1035 (Domain Name System Caching)</div>
+    <p><strong>P. Mockapetris.</strong> RFC 1035, November 1987. · <strong>P. Vixie.</strong> DNS and BIND, O'Reilly.<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc1035" style="color:var(--purple);" target="_blank">https://datatracker.ietf.org/doc/html/rfc1035</a></p>
+    <p>• DNS is one of the oldest and most critical caching systems on the internet — every domain lookup is a cache query with a TTL-based expiration.</p>
+    <p>• Defines the TTL mechanism that all caching systems inherited: the authoritative source sets the expiration, and every downstream cache respects it.</p>
+    <p>• DNS caching failures (stale TTLs, negative caching) have caused major production outages — understanding DNS caching is essential for debugging "why can't users reach my site?"</p>
+    <p>• The hierarchical DNS cache (browser → OS resolver → ISP recursive → root/TLD/authoritative) is a real-world example of multi-layer caching in production.</p>
+  </div>
+
+  <div id="ref5" class="callout green">
+    <div class="callout-label">[5] Cloudflare Docs — Tiered Cache and Cache Reserve</div>
+    <p><strong>Cloudflare Documentation.</strong><br>
+    <a href="https://developers.cloudflare.com/cache/how-to/tiered-cache/" style="color:var(--accent);" target="_blank">https://developers.cloudflare.com/cache/how-to/tiered-cache/</a><br>
+    <a href="https://developers.cloudflare.com/cache/advanced-configuration/cache-reserve/" style="color:var(--accent);" target="_blank">https://developers.cloudflare.com/cache/advanced-configuration/cache-reserve/</a></p>
+    <p>• Documents Tiered Cache as an upper-tier cache topology that improves cache efficiency and reduces origin requests.</p>
+    <p>• Documents Cache Reserve as a persistent cache layer for eligible long-tail assets.</p>
+    <p>• Useful for grounding CDN caching discussions in current product behavior instead of point-in-time scale claims.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script>
+// Cache Impact Simulator
+(function(){
+  const rHit=document.getElementById('r-hit'),rRps=document.getElementById('r-rps'),rDb=document.getElementById('r-db');
+  const vHit=document.getElementById('v-hit'),vRps=document.getElementById('v-rps'),vDb=document.getElementById('v-db');
+  function calc(){
+    const hit=parseInt(rHit.value)/100,rps=parseInt(rRps.value),dbCap=parseInt(rDb.value);
+    vHit.textContent=Math.round(hit*100)+'%';
+    vRps.textContent=rps.toLocaleString();
+    vDb.textContent=dbCap.toLocaleString();
+    const cacheServed=Math.round(rps*hit);
+    const dbLoad=Math.round(rps*(1-hit));
+    const dbUtil=Math.min(dbLoad/dbCap*100,999);
+    const avgLat=hit*0.1+(1-hit)*5;
+    document.getElementById('c-cache-rps').textContent=`Cache serves: ${cacheServed.toLocaleString()} RPS`;
+    document.getElementById('c-db-rps').textContent=`DB receives: ${dbLoad.toLocaleString()} RPS`;
+    const utilEl=document.getElementById('c-db-util');
+    utilEl.textContent=`DB utilization: ${dbUtil.toFixed(0)}%`;
+    utilEl.style.color=dbUtil>100?'#f87171':dbUtil>80?'#fb923c':'#6ee7b7';
+    document.getElementById('c-avg-lat').textContent=`Avg latency: ${avgLat.toFixed(1)}ms`;
+    const vEl=document.getElementById('c-verdict');
+    if(dbUtil>100){vEl.textContent='⛔ DATABASE OVERLOADED';vEl.style.color='#f87171';}
+    else if(dbUtil>80){vEl.textContent='⚠️ DANGER ZONE (>80%)';vEl.style.color='#fb923c';}
+    else{vEl.textContent='✅ System healthy';vEl.style.color='#6ee7b7';}
+  }
+  rHit.addEventListener('input',calc);rRps.addEventListener('input',calc);rDb.addEventListener('input',calc);
+  calc();
+})();
+</script>
+</body>
+</html>
