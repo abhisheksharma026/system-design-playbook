@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Latency And Throughput</title>
+<meta name="description" content="A system design guide to latency, throughput, percentiles, Little's Law, and capacity planning.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals · Topic 04</div>
+  <h1><span>Latency</span> And <span>Throughput</span></h1>
+  <p class="hero-sub">Two numbers govern every system you'll ever build. Latency tells you how long a user stares at a spinner. Throughput tells you how many users can stare at spinners simultaneously. Master the math that connects them, and you'll never guess at capacity again — you'll calculate it.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms</a></li>
+    <li><a href="#s1">Why These Two Numbers Rule Everything</a></li>
+    <li><a href="#s2">Latency — Deep Dive</a></li>
+    <li><a href="#s3">The Latency Numbers You Must Memorize</a></li>
+    <li><a href="#s4">Throughput — Deep Dive</a></li>
+    <li><a href="#s5">Little's Law — The Missing Link</a></li>
+    <li><a href="#s6">Latency vs Throughput — The Tradeoff</a></li>
+    <li><a href="#s7">Napkin Math — Back-of-Envelope Calculations</a></li>
+    <li><a href="#s8">Percentiles — Why Averages Lie</a></li>
+    <li><a href="#s9">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s10">Mini-Project: Latency & Throughput Profiler</a></li>
+    <li><a href="#s11">Production Example 1: Google's Tail Latency</a></li>
+    <li><a href="#s12">Production Example 2: Kafka Throughput</a></li>
+    <li><a href="#s13">Edge Cases & Gotchas</a></li>
+    <li><a href="#s14">Interview Questions & Answers</a></li>
+    <li><a href="#s15">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References & Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Key Terms</h2>
+
+  <h3>Latency</h3>
+  <p>The duration between kicking off an operation and seeing its result. In web systems, this is typically the round-trip time from sending a request to receiving the full response — measured in milliseconds or seconds. These are the critical orders of magnitude to internalize:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Operation</th><th>Latency</th><th>Human Scale</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Reading 1 MB from RAM</strong></td><td><code>250 µs</code> (0.25 ms)</td><td>A camera shutter click</td></tr>
+        <tr><td><strong>Reading 1 MB from SSD</strong></td><td><code>1,000 µs</code> (1 ms)</td><td>A finger snap</td></tr>
+        <tr><td><strong>Transfer 1 MB over 1 Gbps network</strong></td><td><code>10,000 µs</code> (10 ms)</td><td>A deep breath</td></tr>
+        <tr><td><strong>Reading 1 MB from HDD</strong></td><td><code>20,000 µs</code> (20 ms)</td><td>An eye blink</td></tr>
+        <tr><td><strong>Inter-continental round trip</strong></td><td><code>150,000 µs</code> (150 ms)</td><td>Berlin → Virginia → Berlin</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Throughput</h3>
+  <p>How many operations a system can process within a given time window. For a web server, this is typically expressed as <strong>requests per second (RPS)</strong> or <strong>queries per second (QPS)</strong>. For a network link, it's bits or bytes per second. A system's throughput ceiling is determined by its most constrained resource — CPU, memory, disk I/O, or network bandwidth.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>Why These Two Numbers Rule Everything</h2>
+
+  <p>Every system design decision you'll ever make — choosing a database, designing an API, sizing a server cluster, picking a cache strategy — ultimately comes down to two questions: <strong>"how fast?"</strong> (latency) and <strong>"how much?"</strong> (throughput). They are the metrics by which all systems are judged.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition — The Highway Analogy</div>
+    <p><strong>Latency</strong> = how long it takes one car to drive from point A to point B. <strong>Throughput</strong> = how many cars can arrive at point B per hour. A country road has low latency (short distance) but low throughput (one lane). A highway has higher latency (longer on-ramp) but massive throughput (8 lanes). A system designer's job is to optimize both — build highways with fast speed limits.</p>
+  </div>
+
+  <p>Critically, <strong>they are not the same thing</strong>, and optimizing one can sometimes hurt the other. A server that batches requests to increase throughput will add latency (waiting for the batch to fill). A server that processes each request immediately has great latency but may have lower throughput (no batch efficiency). Understanding when to optimize for which — and the math that connects them — is the mark of a senior engineer.</p>
+</section>
+
+<!-- ============ SECTION 2: LATENCY ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Latency — Deep Dive</h2>
+
+  <p><strong>Latency</strong> is the time elapsed between initiating an operation and getting the result. In a client-server context: the time from when the client sends a request to when it receives the complete response. Also called <strong>response time</strong> or <strong>round-trip time (RTT)</strong>.</p>
+
+  <h3>Anatomy of a Request's Latency</h3>
+  <div class="memory-map"><span class="h">WHERE DOES THE TIME GO?</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Network latency (client → server)</span>        <span class="num">~1-150 ms</span>
+<span class="d">│</span>   <span class="cm">Speed-of-light delay + routing hops + TCP overhead</span>
+<span class="d">│</span>   <span class="cm">Same datacenter: ~0.5ms. Same continent: ~30ms. Cross-ocean: ~150ms.</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Queue wait time</span>                           <span class="num">~0-500+ ms</span>
+<span class="d">│</span>   <span class="cm">If the server is busy, the request waits in a queue</span>
+<span class="d">│</span>   <span class="cm">THIS is where latency explodes under load</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Processing time</span>                            <span class="num">~1-1000 ms</span>
+<span class="d">│</span>   <span class="cm">CPU computation, DB queries, external API calls</span>
+<span class="d">│</span>   <span class="cm">A simple key lookup: ~1ms. A complex SQL join: ~100ms+.</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">I/O wait time</span>                              <span class="num">~0-20 ms</span>
+<span class="d">│</span>   <span class="cm">Waiting for storage, cache lookup, or a downstream network call</span>
+<span class="d">│</span>   <span class="cm">In-memory cache: microseconds. SSD: ~0.1-1ms. HDD: ~5-10ms. Remote DB: ~5-50ms.</span>
+<span class="d">│</span>
+<span class="d">└──</span> <span class="b">Network latency (server → client)</span>        <span class="num">~1-150 ms</span>
+    <span class="cm">Response travels back + serialization + TLS overhead</span>
+
+<span class="h">TOTAL = Network (2×) + Queue + Processing + I/O</span>
+<span class="v">Typical API call within datacenter: 5-50 ms</span>
+<span class="v">Typical API call cross-continent: 200-500 ms</span></div>
+
+  <h3>What Causes High Latency?</h3>
+  <p><strong>Physical distance:</strong> Light travels ~200,000 km/s in fiber. NYC → London = 5,500 km ≈ ~28ms one-way minimum. You can't beat physics — this is why CDNs exist.</p>
+  <p><strong>Queueing:</strong> The #1 cause of latency spikes in production. When a server is at 80%+ utilization, queue depth grows non-linearly. At 95% utilization, a request might wait 20× its processing time.</p>
+  <p><strong>Unnecessary I/O:</strong> Reading from disk when data could be cached in RAM. Making a synchronous external API call that could be async. N+1 database query patterns.</p>
+  <p><strong>Serialization/deserialization:</strong> Converting objects to JSON (or protobuf). Large payloads take time to serialize, transmit, and deserialize.</p>
+</section>
+
+<!-- ============ SECTION 3: THE NUMBERS ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>The Latency Numbers You Must Memorize</h2>
+
+  <p>These are the "Jeff Dean numbers" — originally compiled by Jeff Dean and Peter Norvig at Google. <a href="#ref1" class="ref">[1]</a> You're expected to know them in system design interviews for napkin math.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Operation</th><th>Time</th><th>If 1 ns = 1 second…</th></tr></thead>
+      <tbody>
+        <tr><td>L1 cache reference</td><td><code>0.5 ns</code></td><td>0.5 s — one heartbeat</td></tr>
+        <tr><td>Branch mispredict</td><td><code>5 ns</code></td><td>5 s — a yawn</td></tr>
+        <tr><td>L2 cache reference</td><td><code>7 ns</code></td><td>7 s — a long yawn</td></tr>
+        <tr><td>Mutex lock/unlock</td><td><code>25 ns</code></td><td>25 s — making coffee</td></tr>
+        <tr><td><strong>Main memory (RAM) reference</strong></td><td><code>100 ns</code></td><td>100 s — brushing your teeth</td></tr>
+        <tr><td>Compress 1KB with Zippy</td><td><code>3 µs</code></td><td>50 min — a TV episode</td></tr>
+        <tr><td>Send 2KB over 1 Gbps network</td><td><code>20 µs</code></td><td>5.5 hr — lunch to end of work</td></tr>
+        <tr><td><strong>SSD random read</strong></td><td><code>16 µs</code></td><td>1.7 days — a weekend</td></tr>
+        <tr><td><strong>Read 1 MB sequentially from RAM</strong></td><td><code>250 µs</code></td><td>2.9 days — a long weekend</td></tr>
+        <tr><td>Round trip within datacenter</td><td><code>500 µs</code></td><td>5.8 days — a vacation</td></tr>
+        <tr><td><strong>Read 1 MB sequentially from SSD</strong></td><td><code>1 ms</code></td><td>11.6 days — waiting for delivery</td></tr>
+        <tr><td><strong>HDD seek</strong></td><td><code>4 ms</code></td><td>16.5 weeks — a university semester</td></tr>
+        <tr><td><strong>Read 1 MB sequentially from HDD</strong></td><td><code>20 ms</code></td><td>7.8 months — growing a human</td></tr>
+        <tr><td><strong>Inter-continental round trip</strong></td><td><code>150 ms</code></td><td>4.8 years — a university degree</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">The Key Ratios to Remember</div>
+    <p><strong>RAM is 1,000× faster than SSD</strong> for random access. <strong>SSD is 50–100× faster than HDD</strong> for random access. <strong>Network within a datacenter is ~0.5ms</strong>. <strong>Cross-continent is ~150ms</strong>. These ratios matter more than exact numbers — they tell you whether adding a cache, moving to SSD, or deploying a regional endpoint will actually help.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4: THROUGHPUT ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Throughput — Deep Dive</h2>
+
+  <p><strong>Throughput</strong> is the number of operations a system can handle per unit time. It's measured in different units depending on context:</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Context</th><th>Unit</th><th>Typical Values</th></tr></thead>
+      <tbody>
+        <tr><td>Web server</td><td><code>RPS</code> (requests per second)</td><td>1,000–100,000 RPS</td></tr>
+        <tr><td>Database</td><td><code>QPS</code> (queries per second)</td><td>1,000–50,000 QPS</td></tr>
+        <tr><td>Database (transactions)</td><td><code>TPS</code> (transactions per second)</td><td>100–10,000 TPS</td></tr>
+        <tr><td>Network</td><td><code>Gbps</code> (gigabits per second)</td><td>1–100 Gbps</td></tr>
+        <tr><td>Disk</td><td><code>MB/s</code> or <code>IOPS</code></td><td>SSD: 3,500 MB/s / 500K IOPS</td></tr>
+        <tr><td>Message queue</td><td><code>msgs/s</code></td><td>Kafka: workload-dependent; high hundreds of thousands to millions/s at cluster scale</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>What Limits Throughput?</h3>
+  <p><strong>CPU:</strong> Computation-bound tasks (encryption, compression, serialization). More cores or faster CPUs increase throughput.</p>
+  <p><strong>Memory:</strong> If the working set exceeds RAM, thrashing (swapping to disk) destroys throughput. Each swap adds milliseconds.</p>
+  <p><strong>Disk I/O:</strong> HDD at 150 IOPS is the classic bottleneck. Upgrading to SSD (500K IOPS) is often the single biggest throughput win.</p>
+  <p><strong>Network bandwidth:</strong> A 1 Gbps link can carry ~125 MB/s. If each response is 100KB, max throughput = ~1,250 RPS from bandwidth alone.</p>
+  <p><strong>External dependencies:</strong> If your server calls a downstream API with 50ms latency and 100 connections, max throughput = 100 / 0.05 = 2,000 RPS (Little's Law).</p>
+</section>
+
+<!-- ============ SECTION 5: LITTLE'S LAW ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Little's Law — The Missing Link</h2>
+
+  <p>Latency and throughput are not independent — they're connected by <strong>Little's Law</strong>, one of the most powerful equations in system design. <a href="#ref2" class="ref">[2]</a></p>
+
+  <div class="callout green">
+    <div class="callout-label">Little's Law</div>
+    <p style="font-size:20px;font-family:var(--mono);font-weight:600;color:var(--accent);margin-bottom:12px;">L = λ × W</p>
+    <p><strong>L</strong> = average number of requests in the system (concurrency)<br>
+    <strong>λ</strong> = average throughput (requests/second)<br>
+    <strong>W</strong> = average latency per request (seconds)</p>
+    <p>Rearranged: <strong>Throughput = Concurrency / Latency</strong></p>
+  </div>
+
+  <h3>Practical Examples</h3>
+
+  <div class="code-block">
+    <div class="code-header"><span>Capacity Planning with Little's Law</span></div>
+    <pre><span class="h">Example 1: How many connections do I need?</span>
+  Target throughput:  <span class="num">10,000</span> RPS
+  Average latency:    <span class="num">50</span> ms (<span class="num">0.05</span> s)
+  Concurrency needed: <span class="num">10,000</span> × <span class="num">0.05</span> = <span class="v">500 concurrent connections</span>
+  <span class="cm">→ You need a connection pool of at least 500.</span>
+  <span class="cm">→ If you only have 200 connections, max throughput = 200/0.05 = 4,000 RPS.</span>
+
+<span class="h">Example 2: What happens when latency doubles?</span>
+  Same 500 connections, but latency spikes to <span class="num">100</span> ms
+  New throughput: <span class="num">500</span> / <span class="num">0.1</span> = <span class="v">5,000 RPS</span> (halved!)
+  <span class="cm">→ Doubling latency HALVES throughput at fixed concurrency.</span>
+  <span class="cm">→ This is why latency optimization is a throughput optimization.</span>
+
+<span class="h">Example 3: How many servers do I need?</span>
+  Each server handles: <span class="num">1,000</span> RPS
+  Target total:        <span class="num">50,000</span> RPS
+  Servers needed:      <span class="num">50,000</span> / <span class="num">1,000</span> = <span class="v">50 servers</span>
+  <span class="cm">→ But add 20% headroom for spikes: 60 servers.</span>
+  <span class="cm">→ If latency per request drops from 10ms to 5ms,</span>
+  <span class="cm">   each server handles 2,000 RPS → only 25 servers needed. Half the cost!</span></pre>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Why Little's Law Is So Powerful</div>
+    <p>It works for <em>any</em> stable system, regardless of distribution, ordering, or architecture. It applies to database connection pools, thread pools, message queues, checkout lines, hospital ERs — anything with arrivals, processing, and departures. In system design interviews, it lets you do instant capacity math: "if each request takes X ms and we need Y RPS, we need Z concurrent workers."</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 6: TRADEOFF ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Latency vs Throughput — The Tradeoff</h2>
+
+  <p>Optimizing for latency and throughput often pulls in opposite directions. Understanding when to prioritize which is a key design skill.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Technique</th><th>Effect on Latency</th><th>Effect on Throughput</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Batching</strong></td><td>Increases (wait to fill batch)</td><td>Increases dramatically</td><td>Kafka producer batches messages; DB batch inserts</td></tr>
+        <tr><td><strong>Caching</strong></td><td>Decreases (RAM vs disk)</td><td>Increases (fewer I/Os)</td><td>Redis in front of Postgres; CDN for static assets</td></tr>
+        <tr><td><strong>Compression</strong></td><td>Mixed (CPU time vs transfer)</td><td>Increases (smaller payloads)</td><td>gzip HTTP responses; Snappy in Kafka</td></tr>
+        <tr><td><strong>Connection pooling</strong></td><td>Decreases (skip handshake)</td><td>Increases (reuse connections)</td><td>Database connection pools; HTTP keep-alive</td></tr>
+        <tr><td><strong>Async / non-blocking</strong></td><td>Unchanged per request</td><td>Increases (no thread blocking)</td><td>Node.js event loop; Python asyncio</td></tr>
+        <tr><td><strong>Replication (read replicas)</strong></td><td>Decreases (local reads)</td><td>Increases (more read capacity)</td><td>PostgreSQL read replicas; Redis cluster</td></tr>
+        <tr><td><strong>Sharding</strong></td><td>Decreases (smaller dataset)</td><td>Increases (parallel processing)</td><td>Cassandra partitions; MongoDB shards</td></tr>
+        <tr><td><strong>Geo-distribution</strong></td><td>Decreases (closer to user)</td><td>Depends (cross-region sync cost)</td><td>Cloudflare edge; AWS multi-region</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">The Golden Rule</div>
+    <p><strong>For user-facing systems, optimize for latency first.</strong> Users perceive latency directly — anything above 100ms feels sluggish, above 1s feels broken. <strong>For data pipelines and batch systems, optimize for throughput first.</strong> Nobody cares if a single Kafka message takes 50ms if you're processing 2 million per second.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 7: NAPKIN MATH ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Napkin Math — Back-of-Envelope Calculations</h2>
+
+  <p>System design interviews expect you to do rough calculations quickly. Here's how to think about it. <a href="#ref3" class="ref">[3]</a></p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Napkin Math Exercises</span></div>
+    <pre><span class="h">Q: How long to read a 1GB file from SSD sequentially?</span>
+  SSD sequential throughput: ~<span class="num">3.5</span> GB/s (NVMe)
+  Time: <span class="num">1</span> GB / <span class="num">3.5</span> GB/s = <span class="v">~0.3 seconds</span>
+
+<span class="h">Q: How long to send 1GB over a 1 Gbps network?</span>
+  1 Gbps = <span class="num">125</span> MB/s (bits vs bytes!)
+  Time: <span class="num">1,000</span> MB / <span class="num">125</span> MB/s = <span class="v">~8 seconds</span>
+
+<span class="h">Q: How many requests/day if we handle 1,000 RPS?</span>
+  1,000 × 86,400 (seconds/day) = <span class="v">~86.4 million requests/day</span>
+  Handy shortcut: <span class="num">1,000</span> RPS ≈ <span class="num">~100M</span> requests/day
+
+<span class="h">Q: How much RAM to store 10M user sessions of 1KB each?</span>
+  10,000,000 × 1 KB = <span class="num">10</span> GB
+  <span class="cm">→ Fits in a single Redis instance. No problem.</span>
+
+<span class="h">Q: How many servers if each handles 500 RPS and we need 50K RPS?</span>
+  50,000 / 500 = <span class="num">100</span> servers
+  <span class="cm">+ 20% headroom = 120 servers</span>
+
+<span class="h">Q: If a page has 50 resource requests and each takes 50ms, total?</span>
+  Sequential: 50 × 50ms = <span class="num">2,500</span> ms <span class="cm">(unacceptable!)</span>
+  With HTTP/2 multiplexing (6 parallel): ~50 × 50ms / 6 ≈ <span class="v">~420ms</span>
+  With CDN (80% cached, 10ms local): 40×10ms + 10×50ms = <span class="v">~900ms → ~150ms</span></pre>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">Shortcut: Powers of 2 and Time Constants</div>
+    <p><strong>2^10 = 1,024 ≈ 1 thousand.</strong> <strong>2^20 ≈ 1 million.</strong> <strong>2^30 ≈ 1 billion.</strong> <strong>86,400 seconds/day ≈ 10^5.</strong> <strong>2.6M seconds/month ≈ 2.5 × 10^6.</strong> <strong>1 Gbps = 125 MB/s.</strong> Memorize these and napkin math becomes second nature.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 8: PERCENTILES ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Percentiles — Why Averages Lie</h2>
+
+  <p>Never report <strong>average latency</strong> in a system design discussion. It hides the pain. Use <strong>percentiles</strong> instead.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Percentile</th><th>Meaning</th><th>Why It Matters</th></tr></thead>
+      <tbody>
+        <tr><td><code>p50</code> (median)</td><td>50% of requests are faster than this</td><td>The "typical" experience</td></tr>
+        <tr><td><code>p95</code></td><td>95% of requests are faster; 5% are slower</td><td>The experience for 1 in 20 users</td></tr>
+        <tr><td><code>p99</code></td><td>99% are faster; 1% are slower</td><td>The experience for 1 in 100 users</td></tr>
+        <tr><td><code>p99.9</code></td><td>99.9% are faster; 0.1% are slower</td><td>The "tail" — often 10-100× the median</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Why averages lie — a more realistic example</span></div>
+    <pre><span class="cm">Imagine 1,000 requests:</span>
+  990 requests complete in <span class="num">5 ms</span>
+  9 requests take <span class="num">120 ms</span> (cache miss / extra hop)
+  1 request takes <span class="num">5,000 ms</span> (timeout / cold path / bad retry)
+
+  Average: (<span class="num">990</span>×<span class="num">5</span> + <span class="num">9</span>×<span class="num">120</span> + <span class="num">5000</span>) / <span class="num">1000</span> = <span class="v">11.03 ms</span>  <span class="cm">← looks great!</span>
+  p50:    <span class="v">5 ms</span>                                 <span class="cm">← typical request</span>
+  p99:    <span class="v">120 ms</span>                               <span class="cm">← 1 in 100 users notices</span>
+  p99.9:  <span class="v">5,000 ms</span>                             <span class="cm">← tail event is catastrophic</span>
+
+<span class="cm">The average says "11ms, looks great!" but the tail says your slowest</span>
+<span class="cm">users are still waiting seconds. That's why p95/p99/p99.9 matter.</span></pre>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">The Tail-at-Scale Problem</div>
+    <p>Google's seminal paper <a href="#ref4" class="ref">[4]</a> showed that in fan-out architectures (where one user request touches 100+ backend servers), even small tail latencies compound. If each server has a 1% chance of being slow, and you query 100 servers, you have a <strong>63% chance that at least one is slow</strong> — and your response is as slow as the slowest server. This is why Google obsesses over p99.9 and uses techniques like hedged requests (send the same request to two servers, take the faster response).</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 9: TERMINAL DEMOS ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: Measure Network Latency</h3>
+  <div class="code-block">
+    <div class="code-header"><span>ping — the simplest latency tool</span></div>
+    <pre><span class="cm"># Latency to Google's DNS (nearby)</span>
+$ <span class="fn">ping</span> <span class="kw">-c 5</span> <span class="num">8.8.8.8</span>
+round-trip min/avg/max = <span class="num">1.2</span>/<span class="num">2.1</span>/<span class="num">4.3</span> ms
+
+<span class="cm"># Latency to a server in Tokyo from Europe</span>
+$ <span class="fn">ping</span> <span class="kw">-c 5</span> <span class="str">tokyo.example.com</span>
+round-trip min/avg/max = <span class="num">230</span>/<span class="num">242</span>/<span class="num">251</span> ms
+
+<span class="cm"># Latency to localhost (loopback — no network, pure software)</span>
+$ <span class="fn">ping</span> <span class="kw">-c 5</span> <span class="num">127.0.0.1</span>
+round-trip min/avg/max = <span class="num">0.015</span>/<span class="num">0.025</span>/<span class="num">0.040</span> ms  <span class="cm">← 25 µs!</span></pre>
+  </div>
+
+  <h3>Demo 2: Measure HTTP Latency Breakdown</h3>
+  <div class="code-block">
+    <div class="code-header"><span>curl with timing — see where every millisecond goes</span></div>
+    <pre><span class="cm"># Create a timing format file</span>
+$ <span class="fn">cat</span> > /tmp/curl-timing.txt << <span class="str">'EOF'</span>
+    <span class="str">DNS lookup:        %{time_namelookup}s</span>
+    <span class="str">TCP connect:       %{time_connect}s</span>
+    <span class="str">TLS handshake:     %{time_appconnect}s</span>
+    <span class="str">Time to first byte: %{time_starttransfer}s</span>
+    <span class="str">Total time:        %{time_total}s</span>
+    <span class="str">Download speed:    %{speed_download} bytes/s</span>
+<span class="str">EOF</span>
+
+$ <span class="fn">curl</span> <span class="kw">-o /dev/null -s -w</span> <span class="str">"@/tmp/curl-timing.txt"</span> <span class="str">https://www.google.com</span>
+
+    DNS lookup:        <span class="num">0.004</span>s
+    TCP connect:       <span class="num">0.012</span>s     <span class="cm">← 8ms for TCP handshake</span>
+    TLS handshake:     <span class="num">0.035</span>s     <span class="cm">← 23ms for TLS on top</span>
+    Time to first byte: <span class="num">0.090</span>s    <span class="cm">← 55ms server processing</span>
+    Total time:        <span class="num">0.095</span>s     <span class="cm">← 5ms to download body</span>
+
+<span class="cm"># Now try a faraway server and compare the breakdown!</span></pre>
+  </div>
+
+  <h3>Demo 3: Measure Throughput with <code class="inline">wrk</code></h3>
+  <div class="code-block">
+    <div class="code-header"><span>wrk — HTTP benchmarking tool</span></div>
+    <pre><span class="cm"># Install: brew install wrk (Mac) or apt install wrk (Linux)</span>
+
+<span class="cm"># Benchmark with 12 threads and 400 connections for 30 seconds</span>
+<span class="cm"># --latency adds percentile distribution output</span>
+$ <span class="fn">wrk</span> <span class="kw">-t12 -c400 -d30s --latency</span> <span class="str">http://localhost:8080/api/health</span>
+
+  <span class="num">12</span> threads and <span class="num">400</span> connections
+  Latency    Avg      Stdev    Max      +/- Stdev
+             <span class="num">3.21ms</span>   <span class="num">1.45ms</span>   <span class="num">52.3ms</span>   <span class="num">89.2%</span>
+  Latency Distribution
+     <span class="num">50%</span>    <span class="num">2.90ms</span>
+     <span class="num">90%</span>    <span class="num">5.10ms</span>
+     <span class="num">99%</span>   <span class="num">12.40ms</span>
+  Req/Sec    <span class="num">10.5k</span>    <span class="num">1.2k</span>     <span class="num">14.8k</span>    <span class="num">72.3%</span>
+  <span class="v">3,748,210</span> requests in 30s, <span class="num">1.2GB</span> read
+  Requests/sec: <span class="v">124,940</span>
+  Transfer/sec: <span class="num">41.2MB</span>
+
+<span class="cm"># That's latency distribution AND throughput (RPS) in one output.</span>
+<span class="cm"># Try varying -c (connections) to see Little's Law in action:</span>
+<span class="cm"># More connections → more RPS (up to a saturation point)</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 10: MINI-PROJECT ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Mini-Project: Latency & Throughput Profiler</h2>
+
+  <p>Build a Python server that measures its own latency distribution and throughput in real time, and reports p50/p95/p99 percentiles.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>latency_profiler.py — self-instrumenting HTTP server</span></div>
+    <pre><span class="kw">import</span> time, json, random, statistics
+<span class="kw">from</span> http.server <span class="kw">import</span> ThreadingHTTPServer, BaseHTTPRequestHandler
+<span class="kw">from</span> collections <span class="kw">import</span> deque
+
+latencies = deque(maxlen=<span class="num">10000</span>)  <span class="cm"># rolling window of last 10K requests</span>
+request_times = deque(maxlen=<span class="num">10000</span>)
+
+<span class="kw">def</span> <span class="fn">percentile</span>(data, p):
+    <span class="kw">if not</span> data: <span class="kw">return</span> <span class="num">0</span>
+    s = sorted(data)
+    k = int(len(s) * p / <span class="num">100</span>)
+    <span class="kw">return</span> s[min(k, len(s)-<span class="num">1</span>)]
+
+<span class="kw">class</span> <span class="fn">Handler</span>(BaseHTTPRequestHandler):
+    <span class="kw">def</span> <span class="fn">do_GET</span>(self):
+        t0 = time.perf_counter()
+        request_times.append(t0)
+
+        <span class="kw">if</span> self.path == <span class="str">"/stats"</span>:
+            <span class="cm"># Calculate throughput: requests in last 1 second</span>
+            now = time.perf_counter()
+            rps = sum(<span class="num">1</span> <span class="kw">for</span> t <span class="kw">in</span> request_times <span class="kw">if</span> now - t < <span class="num">1.0</span>)
+            lats = list(latencies)
+            stats = {
+                <span class="str">"total_requests"</span>: len(lats),
+                <span class="str">"throughput_rps"</span>: rps,
+                <span class="str">"latency_ms"</span>: {
+                    <span class="str">"p50"</span>:  round(percentile(lats, <span class="num">50</span>), <span class="num">3</span>),
+                    <span class="str">"p95"</span>:  round(percentile(lats, <span class="num">95</span>), <span class="num">3</span>),
+                    <span class="str">"p99"</span>:  round(percentile(lats, <span class="num">99</span>), <span class="num">3</span>),
+                    <span class="str">"p999"</span>: round(percentile(lats, <span class="num">99.9</span>), <span class="num">3</span>),
+                    <span class="str">"max"</span>:  round(max(lats), <span class="num">3</span>) <span class="kw">if</span> lats <span class="kw">else</span> <span class="num">0</span>,
+                }
+            }
+            body = json.dumps(stats, indent=<span class="num">2</span>)
+        <span class="kw">else</span>:
+            <span class="cm"># Simulate variable work — 95% fast, 5% slow (cache miss)</span>
+            <span class="kw">if</span> random.random() < <span class="num">0.05</span>:
+                time.sleep(random.uniform(<span class="num">0.05</span>, <span class="num">0.2</span>))  <span class="cm"># 50-200ms "disk read"</span>
+            <span class="kw">else</span>:
+                time.sleep(random.uniform(<span class="num">0.001</span>, <span class="num">0.005</span>))  <span class="cm"># 1-5ms "cache hit"</span>
+            body = <span class="str">'{"status":"ok"}'</span>
+
+        elapsed_ms = (time.perf_counter() - t0) * <span class="num">1000</span>
+        latencies.append(elapsed_ms)
+
+        self.send_response(<span class="num">200</span>)
+        self.send_header(<span class="str">"Content-Type"</span>, <span class="str">"application/json"</span>)
+        self.end_headers()
+        self.wfile.write(body.encode())
+
+    <span class="kw">def</span> <span class="fn">log_message</span>(self, *a): <span class="kw">pass</span>
+
+print(<span class="str">"[Profiler] http://localhost:9090"</span>)
+print(<span class="str">"  GET /         — simulated endpoint (95% fast, 5% slow)"</span>)
+print(<span class="str">"  GET /stats    — live p50/p95/p99 latency + throughput\n"</span>)
+ThreadingHTTPServer((<span class="str">""</span>, <span class="num">9090</span>), Handler).serve_forever()</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Run and experiment</span></div>
+    <pre><span class="cm"># Terminal 1: Start the server</span>
+$ <span class="fn">python3</span> latency_profiler.py
+
+<span class="cm"># Terminal 2: Generate load (100 requests)</span>
+$ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 100); <span class="kw">do</span> <span class="fn">curl</span> -s localhost:9090/ > /dev/null & <span class="kw">done</span>; wait
+
+<span class="cm"># Terminal 2: Check the stats</span>
+$ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python3</span> -m json.tool
+{
+  <span class="str">"total_requests"</span>: <span class="num">100</span>,
+  <span class="str">"throughput_rps"</span>: <span class="num">42</span>,
+  <span class="str">"latency_ms"</span>: {
+    <span class="str">"p50"</span>:  <span class="num">3.1</span>,       <span class="cm">← most requests are fast (cache hit)</span>
+    <span class="str">"p95"</span>:  <span class="num">112.4</span>,     <span class="cm">← 5% are slow (simulated cache miss)</span>
+    <span class="str">"p99"</span>:  <span class="num">187.2</span>,     <span class="cm">← the long tail</span>
+    <span class="str">"p999"</span>: <span class="num">198.1</span>,
+    <span class="str">"max"</span>:  <span class="num">199.8</span>
+  }
+}
+<span class="cm"># Notice: p50 is ~3ms but p99 is ~187ms — the average would hide this!</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 11: GOOGLE ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Production Example 1: Google's Tail Latency</h2>
+
+  <p>A single Google Search query fans out to <strong>hundreds of backend servers</strong> in parallel. The response time = the slowest server. <a href="#ref4" class="ref">[4]</a></p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Why tail latency matters at Google scale</span></div>
+    <pre><span class="cm">A Google search query touches ~100 index servers in parallel.</span>
+<span class="cm">Each server has p99 latency = 10ms.</span>
+<span class="cm">Probability ALL 100 are fast: 0.99^100 = 36.6%</span>
+<span class="cm">Probability at LEAST ONE is slow: 1 - 0.366 = </span><span class="v">63.4%</span>
+
+<span class="cm">So 63% of user searches are bottlenecked by tail latency!</span>
+
+<span class="h">Google's mitigations:</span>
+<span class="b">1. Hedged requests</span>:   Send request to 2 replicas, take faster response.
+                       Cost: 2× backend load. Benefit: p99 drops dramatically.
+<span class="b">2. Tied requests</span>:      Send to 2 servers but let them coordinate —
+                       when one starts, it tells the other to cancel.
+<span class="b">3. Micro-partitioning</span>: Split data into many small partitions so work
+                       can be rebalanced quickly away from slow machines.
+<span class="b">4. Background warm-up</span>: Pre-warm caches so cold misses don't cause spikes.</pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 12: KAFKA ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>Production Example 2: Kafka Throughput</h2>
+
+  <p>Apache Kafka is optimized for <strong>throughput over latency</strong> — a deliberate design choice for data pipelines. Kafka's own design docs emphasize batching, sequential disk access, compression, and zero-copy transfers as the main efficiency levers. <a href="#ref5" class="ref">[5]</a></p>
+
+  <div class="code-block">
+    <div class="code-header"><span>How Kafka is designed for high throughput</span></div>
+    <pre><span class="h">Technique 1: Batching</span>
+  Producer groups records into batches before sending them
+  linger.ms lets the producer wait briefly for a fuller batch
+  <span class="cm">→ Fewer requests, larger packets, better network and broker efficiency</span>
+
+<span class="h">Technique 2: Sequential I/O</span>
+  Kafka appends to partition logs sequentially instead of doing random updates
+  <span class="cm">→ Sequential access is much friendlier to disks and page cache than random I/O</span>
+
+<span class="h">Technique 3: Zero-copy (sendfile)</span>
+  Brokers can use sendfile-style transfer paths when serving data to consumers
+  <span class="cm">→ Fewer copies and fewer context switches on the hot path</span>
+
+<span class="h">Technique 4: Partitioning</span>
+  A topic is split into partitions, each an independent append-only log
+  <span class="cm">→ More partitions create more parallelism, subject to broker, disk, and consumer limits</span>
+
+<span class="h">Result:</span>
+  High sustained throughput for log-style workloads
+  Exact rates depend on record size, replication factor, acks, compression,
+  hardware, and whether the bottleneck is disk, CPU, or network.</pre>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">The Kafka Tradeoff</div>
+    <p>Kafka explicitly trades some per-record latency for better throughput. <code class="inline">linger.ms</code> lets the producer wait briefly for more records before sending a batch. Kafka's official producer docs note that the default is <code class="inline">5ms</code> in Kafka 4.0, and that larger batches often improve efficiency and can even keep end-to-end latency similar or lower under load. The tradeoff is still real: aggressive batching helps throughput, but it can add queueing delay for individual records. <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 13: EDGE CASES ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Edge Cases & Gotchas</h2>
+
+  <h3>1. Coordinated Omission</h3>
+  <p>Many benchmarking approaches (including naive use of <code class="inline">curl</code> in a loop) have a fatal flaw: if request 1 takes 5 seconds, request 2 doesn't start until request 1 finishes. This <strong>hides</strong> the impact of slow requests on subsequent ones. Real users don't wait — they arrive continuously. <code class="inline">wrk</code> is useful for generating load and seeing throughput/latency distributions, but <code class="inline">wrk2</code> was created specifically to maintain a constant request rate and expose coordinated omission more accurately. Gil Tene's "How NOT to Measure Latency" talk is essential viewing.</p>
+
+  <h3>2. Goodhart's Law in Latency</h3>
+  <p>"When a measure becomes a target, it ceases to be a good measure." If you optimize purely for p50 latency, you might make the tail worse (e.g., deferring garbage collection → occasional 500ms GC pauses). Always monitor p50, p95, p99, AND p99.9 together.</p>
+
+  <h3>3. Bandwidth ≠ Throughput</h3>
+  <p>A 10 Gbps network link doesn't mean 10 Gbps of useful throughput. Protocol overhead (TCP/IP headers), small packet sizes, congestion, and application-level framing all reduce effective throughput. A single TCP stream over a 100ms RTT link might only achieve ~300 Mbps due to the congestion window. You need multiple parallel streams to saturate the link.</p>
+
+  <h3>4. The "Thundering Herd" Throughput Cliff</h3>
+  <p>When a cache expires and 10,000 requests simultaneously hit the backend, throughput drops to zero while the backend is overwhelmed. Fix: cache stampede protection (only one request refills the cache, others wait), probabilistic early expiration, or stale-while-revalidate.</p>
+
+  <h3>5. Latency Spikes from GC Pauses</h3>
+  <p>JVM garbage collection (Java, Scala, Kotlin) can cause stop-the-world pauses of 50-500ms. Go's GC is better (~1ms), but still non-zero. This creates p99 latency spikes that don't show up in p50. Modern approach: use low-latency GC (ZGC, Shenandoah) or GC-free languages (Rust, C++) for latency-critical paths.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story</div>
+    <p>Large internet products have repeatedly found the same pattern: added latency hurts engagement, conversion, and perceived quality. The exact impact varies by product and user behavior, but the systems lesson is stable: <strong>speed is a feature, and latency compounds into business pain surprisingly fast.</strong></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 14: INTERVIEW Q&A ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Interview Questions & Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What's the difference between latency and throughput?</div>
+    <div class="qa-a">
+      <p><strong>Latency</strong> = how long one operation takes (time per request). <strong>Throughput</strong> = how many operations per unit time (requests per second). They're connected by Little's Law: Throughput = Concurrency / Latency. A system can have low latency but low throughput (single-threaded), or high latency but high throughput (batched processing). The goal is usually to minimize latency while maximizing throughput, but these sometimes conflict.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: You need to support 100K RPS with 10ms average latency. How many servers?</div>
+    <div class="qa-a">
+      <p>Use Little's Law: Concurrency per server = Throughput × Latency. If each server has 100 connections: Throughput per server = 100 / 0.01 = 10,000 RPS. Servers needed = 100,000 / 10,000 = <strong>10 servers</strong>. Add 20-30% headroom for spikes: <strong>12-13 servers</strong>. This assumes the bottleneck is concurrency, not CPU or memory — in practice, benchmark a single server first to find its actual capacity.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: Why should you use p99 latency instead of average?</div>
+    <div class="qa-a">
+      <p>Averages hide tail latency. A service can look healthy on average while still producing painful outliers for real users. In fan-out architectures, tail latencies compound — if a request touches 100 services, the slowest dependency often dominates the end-to-end response. That's why serious systems track p50, p95, p99, and sometimes p99.9 together instead of relying on a single average.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: How does caching reduce latency? Give specific numbers.</div>
+    <div class="qa-a">
+      <p>Caching moves data up the storage hierarchy. A disk-backed read might take milliseconds. An SSD-backed read is often sub-millisecond to low-millisecond. A Redis lookup is typically sub-millisecond, and an in-process memory cache is usually measured in microseconds. That gap is why caching is so powerful: it avoids slow storage and network round trips for hot data. The important metrics are cache hit ratio, TTL, eviction policy, and cache invalidation strategy.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: A service has 50ms latency at low load but 500ms under high load. Why?</div>
+    <div class="qa-a">
+      <p><strong>Queueing theory.</strong> At low load, requests are processed immediately. As utilization increases, requests start waiting in queues. The queueing delay grows non-linearly — at 50% utilization it's roughly equal to processing time (doubling latency), at 90% it's 9× processing time, and at 99% it's 99×. This follows the M/M/1 queue model: wait time = processing_time × (utilization / (1 - utilization)). Fixes: add more capacity (horizontal scaling), reduce processing time (optimization), or shed load (rate limiting, circuit breakers).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: State Little's Law and use it to solve a capacity problem.</div>
+    <div class="qa-a">
+      <p><strong>L = λ × W</strong>, where L = concurrency, λ = throughput, W = latency. Example: API gateway needs 50,000 RPS, each request takes 20ms (0.02s). Concurrency = 50,000 × 0.02 = 1,000. You need 1,000 concurrent connections. If your connection pool is sized at 500, max throughput = 500 / 0.02 = 25,000 RPS — you'll hit a ceiling. Solution: either increase the pool to 1,000, or reduce latency to 10ms (then 500 connections support 50,000 RPS). Little's Law shows that <strong>latency reduction is capacity creation</strong>.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q7: Name 5 techniques to reduce latency in a web application.</div>
+    <div class="qa-a">
+      <p><strong>(1) Caching</strong> — put hot data in Redis or CDN to avoid disk/network round trips. <strong>(2) Geo-distribution</strong> — serve users from nearby data centers/edge locations to reduce network RTT. <strong>(3) Connection pooling</strong> — reuse TCP/TLS connections to avoid handshake latency. <strong>(4) Async/parallel I/O</strong> — issue multiple downstream requests in parallel instead of sequentially. <strong>(5) Data locality</strong> — co-locate compute near data (same AZ, same rack) to minimize network hops. Bonus: <strong>(6) Compression</strong> — reduce payload size to reduce transfer time. <strong>(7) Protocol optimization</strong> — HTTP/2 multiplexing, HTTP/3 QUIC 0-RTT.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SECTION 15: CHEAT SHEET ============ -->
+<section class="section" id="s15">
+  <div class="section-num">15</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Latency = time per operation. Throughput = operations per time. They're connected by Little's Law: L = λ × W.<br>
+    <strong>2.</strong> Memorize: RAM ~250µs/MB, SSD ~1ms/MB, Network ~10ms/MB, HDD ~20ms/MB, cross-continent ~150ms round trip.<br>
+    <strong>3.</strong> Use percentiles (p50, p95, p99), never averages. Averages hide tail latency that hurts real users.<br>
+    <strong>4.</strong> Little's Law: Throughput = Concurrency / Latency. Halving latency doubles throughput at fixed concurrency.<br>
+    <strong>5.</strong> Queueing is the #1 cause of latency spikes. At 90% utilization, wait time ≈ 9× processing time.<br>
+    <strong>6.</strong> Caching moves data up the hierarchy: disk is milliseconds, SSD is often sub-ms to low-ms, RAM/Redis is sub-ms, local memory is microseconds.<br>
+    <strong>7.</strong> Batching trades latency for throughput. Fan-out can reduce wall-clock time, but it increases backend load and amplifies tail-latency risk.<br>
+    <strong>8.</strong> For user-facing: optimize latency. For data pipelines: optimize throughput. Know which you're designing.<br>
+    <strong>9.</strong> Tail latency compounds in fan-out: p99 of 100 services is your real latency. Use hedged requests.<br>
+    <strong>10.</strong> Napkin math is a superpower: 1,000 RPS ≈ 86M requests/day. 1 Gbps ≈ 125 MB/s. Know the shortcuts.</p>
+  </div>
+
+  <div class="callout yellow">
+    <div class="callout-label">What to Study Next</div>
+    <p>Now that you understand latency and throughput, the next topics are: <strong>Availability</strong> (SLAs, nines, redundancy — how systems stay up), <strong>Caching</strong> (the primary latency weapon), and <strong>Proxies</strong> (reverse proxies, load balancers, CDNs). The numbers from this topic will be used in every future system design discussion.</p>
+  </div>
+</section>
+
+<!-- MENTAL MODEL -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Queueing Under Saturation</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="ma-gray" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+          <path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/>
+        </marker>
+        <marker id="ma-green" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+          <path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/>
+        </marker>
+        <marker id="ma-orange" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+          <path d="M0,0 L7,2.5 L0,5" fill="#fb923c"/>
+        </marker>
+      </defs>
+      <!-- Arrival -->
+      <text x="30" y="25" font-family="IBM Plex Mono,monospace" font-size="11" fill="#60a5fa" font-weight="600">ARRIVAL RATE: 900 req/s</text>
+      <!-- Requests flowing in -->
+      <rect x="20" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.8"/><rect x="42" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.7"/><rect x="64" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.6"/><rect x="86" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.5"/><rect x="108" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.4"/>
+      <path d="M130 48 L176 48" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma-gray)"/>
+      <!-- Queue -->
+      <rect x="185" y="30" width="200" height="40" rx="6" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="285" y="55" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24" font-weight="600">Queue (wait here)</text>
+      <path d="M390 50 L426 50" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma-gray)"/>
+      <!-- Server -->
+      <rect x="435" y="30" width="140" height="40" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="505" y="55" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">Process (1ms each)</text>
+      <path d="M580 50 L635 50" stroke="#6ee7b7" stroke-width="1.2" marker-end="url(#ma-green)"/>
+      <text x="664" y="54" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">done</text>
+      <text x="505" y="20" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">CAPACITY: 1000 req/s</text>
+      <!-- Utilization graph -->
+      <text x="30" y="110" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">LATENCY vs UTILIZATION (M/M/1 model)</text>
+      <!-- Axes -->
+      <line x1="60" y1="130" x2="60" y2="340" stroke="#2a3040" stroke-width="1"/>
+      <line x1="60" y1="340" x2="720" y2="340" stroke="#2a3040" stroke-width="1"/>
+      <text x="30" y="240" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580" transform="rotate(-90,30,240)">Latency (ms)</text>
+      <text x="390" y="365" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">Utilization %</text>
+      <!-- Utilization labels -->
+      <text x="126" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">10%</text>
+      <text x="192" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">20%</text>
+      <text x="324" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">40%</text>
+      <text x="456" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">60%</text>
+      <text x="522" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">70%</text>
+      <text x="588" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">80%</text>
+      <text x="654" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">90%</text>
+      <text x="700" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">95%</text>
+      <!-- Latency labels -->
+      <text x="55" y="335" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">1ms</text>
+      <text x="55" y="315" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">2ms</text>
+      <text x="55" y="275" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">5ms</text>
+      <text x="55" y="195" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#fb923c">10ms</text>
+      <text x="55" y="140" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">20ms</text>
+      <!-- Hockey stick curve: latency = service_time / (1 - utilization) -->
+      <polyline points="126,333 192,332 258,330 324,327 390,322 456,312 522,297 555,285 588,265 621,235 654,195 675,165 690,145 700,135" stroke="#fb923c" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+      <!-- Danger zone -->
+      <rect x="630" y="130" width="90" height="210" rx="0" fill="#f87171" opacity="0.06"/>
+      <rect x="642" y="138" width="66" height="16" rx="4" fill="#191c24" opacity="0.92"/>
+      <text x="675" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171" font-weight="600">DANGER ZONE</text>
+      <!-- Annotation -->
+      <rect x="400" y="214" width="156" height="46" rx="6" fill="#191c24" opacity="0.94"/>
+      <path d="M556 238 C586 236, 615 229, 646 206" stroke="#fb923c" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ma-orange)"/>
+      <text x="412" y="233" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#fb923c">hockey-stick region</text>
+      <text x="412" y="248" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#fb923c">queueing delay takes over</text>
+    </svg>
+    <div class="diagram-caption">Latency vs utilization: the "hockey stick" — flat until ~70%, then exponential</div>
+  </div>
+
+  <h3>Diagram Interpretation</h3>
+  <p><strong>Top: the queueing model.</strong> Requests arrive at 900/s. The server processes at 1000/s capacity (1ms each). At 90% utilization, the system looks fine on paper — headroom exists. But the queue tells a different story.</p>
+  <p><strong>The curve:</strong> This is the M/M/1 queueing model. At low utilization (10-50%), latency is barely above the processing time (~1ms). At 70%, it's ~3ms. At 90%, it's ~10ms (10× processing time). At 95%, it's ~20ms. At 99%, it's ~100ms. The curve is exponential — latency doesn't degrade linearly, it <strong>explodes</strong>.</p>
+  <p><strong>The danger zone (>80%):</strong> This is where most production systems break. Traffic spikes push utilization from 70% to 90%, and latency jumps 5× in seconds. Users start seeing timeouts, retries add more load, and the system enters a death spiral. This is why capacity planning targets ~60-70% utilization — the remaining headroom absorbs spikes without entering the hockey stick.</p>
+  <p><strong>The fix:</strong> Either add capacity (more servers → lower utilization per server) or reduce processing time (optimize queries, add caching → shift the curve left). Both work, but caching is usually cheaper and faster to implement.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Latency is flat until utilization crosses ~70%, then it explodes exponentially.</strong> This is the single most important graph in system design. When someone says "the system is slow under load," this curve is why. Never run a production system above 70-80% average utilization — the remaining headroom isn't waste, it's your insurance against the hockey stick.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References & Further Reading</h2>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Jeff Dean / Peter Norvig — "Latency Numbers Every Programmer Should Know"</div>
+    <p><strong>Jeff Dean, Google.</strong> Originally presented around 2009 and widely circulated in systems courses and talks.<br>
+    <a href="https://colin-scott.github.io/personal_website/research/interactive_latency.html" style="color:var(--accent);" target="_blank">Interactive version (Colin Scott)</a> · <a href="https://github.com/sirupsen/napkin-math" style="color:var(--accent);" target="_blank">Modern update: sirupsen/napkin-math</a></p>
+    <p>• The canonical reference for memory, disk, and network latencies — L1 cache (0.5ns) through inter-continental RTT (150ms).</p>
+    <p>• The "humanized" version multiplies all times by 1 billion: RAM access = 1.5 minutes, SSD read = 1.7 days, HDD seek = 16.5 weeks.</p>
+    <p>• sirupsen/napkin-math is a practical, modern companion reference with broader benchmarking examples and cost intuition.</p>
+    <p>• These numbers are the foundation of <strong>napkin math</strong> — the back-of-envelope calculations expected in every system design interview.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Little, J.D.C. — "A Proof for the Queuing Formula: L = λW" (1961)</div>
+    <p><strong>John D.C. Little.</strong> Operations Research, Vol. 9, No. 3, 1961, pp. 383-387. DOI: 10.1287/opre.9.3.383.<br>
+    <a href="https://doi.org/10.1287/opre.9.3.383" style="color:var(--blue);" target="_blank">https://doi.org/10.1287/opre.9.3.383</a></p>
+    <p>• Proves that for any stable system: average items in system (L) = arrival rate (λ) × average time per item (W). Remarkably, this holds regardless of arrival distribution, service order, or number of servers.</p>
+    <p>• Applied to system design: <strong>Concurrency = Throughput × Latency</strong>. This single equation drives capacity planning for connection pools, thread pools, and server fleets.</p>
+    <p>• Rearranged: <strong>Throughput = Concurrency / Latency</strong>. Reducing latency by half doubles throughput at fixed concurrency — latency optimization IS capacity creation.</p>
+    <p>• Used daily by engineers at every scale — from sizing a database connection pool to planning a fleet of 10,000 servers.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] sirupsen/napkin-math — "Napkin Math: Estimate System Performance"</div>
+    <p><strong>Simon Eskildsen (former Principal Engineer, Shopify).</strong><br>
+    <a href="https://github.com/sirupsen/napkin-math" style="color:var(--orange);" target="_blank">https://github.com/sirupsen/napkin-math</a></p>
+    <p>• A practical, modern collection of latency, throughput, and cost benchmarks for back-of-the-envelope capacity reasoning.</p>
+    <p>• Numbers are benchmarked using Criterion.rs on real hardware, not estimates. Each number has a referenced source.</p>
+    <p>• Useful as a sanity-checking companion when you need rough orders of magnitude for storage, network, and cloud primitives.</p>
+    <p>• Essential reference for system design interviews where you need to estimate "how fast" and "how much" for real infrastructure.</p>
+  </div>
+
+  <div id="ref5" class="callout yellow">
+    <div class="callout-label">[5] Apache Kafka Documentation — Design and Producer Configuration</div>
+    <p><strong>Apache Kafka Project.</strong> Official documentation for Kafka's design tradeoffs and producer batching behavior.<br>
+    <a href="https://kafka.apache.org/documentation/#design_efficiency" style="color:var(--yellow);" target="_blank">Design efficiency</a> ·
+    <a href="https://kafka.apache.org/41/configuration/producer-configs/" style="color:var(--yellow);" target="_blank">Producer configs</a></p>
+    <p>• Kafka's design docs emphasize batching, sequential I/O, compression, and reduced byte-copying as the main reasons log-style workloads can achieve very high throughput.</p>
+    <p>• The producer docs explain how <code class="inline">batch.size</code> and <code class="inline">linger.ms</code> influence batching behavior and throughput.</p>
+    <p>• The official docs note that <code class="inline">linger.ms</code> defaults to <code class="inline">5</code> in Kafka 4.0, and that larger batches often improve efficiency enough to keep observed latency similar or lower under load.</p>
+  </div>
+
+  <div id="ref4" class="callout red">
+    <div class="callout-label">[4] Dean & Barroso — "The Tail at Scale" (2013)</div>
+    <p><strong>Jeffrey Dean, Luiz André Barroso.</strong> Communications of the ACM, Vol. 56, No. 2, February 2013, pp. 74-80.<br>
+    <a href="https://research.google/pubs/the-tail-at-scale/" style="color:var(--red);" target="_blank">https://research.google/pubs/the-tail-at-scale/</a></p>
+    <p>• Demonstrates that in fan-out architectures, tail latencies (p99, p99.9) dominate user experience — if one request touches 100 servers, there's a 63% chance at least one is slow.</p>
+    <p>• Introduces <strong>hedged requests</strong>: send the same request to two replicas, use whichever responds first. Reduces tail latency at the cost of 2× backend load.</p>
+    <p>• Introduces <strong>tied requests</strong>: cross-server cancellation to avoid wasting resources on the slower replica.</p>
+    <p>• Argues that reducing <strong>variability</strong> is more important than reducing average latency — a system with p50=5ms and p99=5ms beats one with p50=2ms and p99=500ms.</p>
+    <p>• One of the most important systems papers of the 2010s. Required reading for anyone building large-scale distributed services.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+</body>
+</html>
