@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Proxies</title>
+<meta name="description" content="A system design guide to forward proxies, reverse proxies, Nginx, Envoy, proxy headers, TLS termination, and service-mesh sidecars.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals · Topic 07</div>
+  <h1><span>Proxies</span></h1>
+  <p class="hero-sub">An intermediary that sits between two parties and does something useful in the middle — hiding identities, distributing load, caching responses, or terminating encryption. Proxies are so fundamental that you're probably using three of them right now without knowing it.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Prerequisites & Key Terms</a></li>
+    <li><a href="#s1">What Is a Proxy?</a></li>
+    <li><a href="#s2">Forward Proxy — Acting for the Client</a></li>
+    <li><a href="#s3">Reverse Proxy — Acting for the Server</a></li>
+    <li><a href="#s4">Forward vs Reverse — Side by Side</a></li>
+    <li><a href="#s5">What Reverse Proxies Actually Do</a></li>
+    <li><a href="#s6">Nginx — The Reverse Proxy You'll Use Most</a></li>
+    <li><a href="#s7">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s8">Mini-Project: Build a Reverse Proxy</a></li>
+    <li><a href="#s9">Production Example 1: Cloudflare</a></li>
+    <li><a href="#s10">Production Example 2: Envoy at Lyft</a></li>
+    <li><a href="#s11">Edge Cases & Gotchas</a></li>
+    <li><a href="#s12">What If? — Interactive Exploration</a></li>
+    <li><a href="#s13">Interview Questions & Answers</a></li>
+    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References & Further Reading</a></li>
+  </ol>
+</nav>
+
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Prerequisites & Key Terms</h2>
+
+  <h3>Forward Proxy</h3>
+  <p>An intermediary that sits in front of <strong>clients</strong> and makes requests to servers on their behalf. The server sees the proxy's IP address, not the client's — which is why forward proxies are used for anonymity, content filtering, and bypassing geo-restrictions. When people say "proxy" without qualification, they usually mean forward proxy. Real-world examples: corporate web filters, VPN services, Tor exit nodes, and browser-configured HTTP proxies.</p>
+
+  <h3>Reverse Proxy</h3>
+  <p>An intermediary that sits in front of <strong>servers</strong> and accepts requests from clients on the servers' behalf. The client thinks it's talking directly to the server, but it's actually talking to the proxy, which then forwards the request to the real backend. Used for load balancing, SSL termination, caching, compression, rate limiting, and hiding the backend architecture. Real-world examples: Nginx, HAProxy, Cloudflare, AWS ALB, Envoy.</p>
+
+  <h3>Nginx</h3>
+  <p>Pronounced "engine X" — an open-source, high-performance web server created by Igor Sysoev in 2004 to solve the C10K problem (handling 10,000+ concurrent connections). Uses an event-driven, non-blocking I/O architecture instead of the thread-per-connection model of Apache. Today it's one of the most widely deployed reverse proxies on the internet and a standard tool for TLS termination, HTTP routing, and static content delivery. <a href="#ref1" class="ref">[1]</a></p>
+</section>
+
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>What Is a Proxy?</h2>
+
+  <p>A <strong>proxy</strong> is any server that sits between two communicating parties and relays traffic between them, potentially modifying or inspecting it along the way. The word comes from "act on behalf of" — a proxy acts on behalf of either the client (forward proxy) or the server (reverse proxy).</p>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>Think of a personal assistant. A <strong>forward proxy</strong> is like <em>your</em> assistant — you tell them "book me a restaurant," and the restaurant only sees the assistant's name, not yours. Your identity is hidden. A <strong>reverse proxy</strong> is like the restaurant's <em>maître d'</em> — guests walk in the front door, the maître d' decides which table (which backend server) to seat them at, handles the greeting (SSL), and the guest never sees the kitchen (backend infrastructure).</p>
+  </div>
+
+  <p>The key distinction: <strong>who configured the proxy and who benefits from it?</strong> Forward proxies are configured by the client (or client's network admin) to benefit the client. Reverse proxies are configured by the server operator to benefit the server infrastructure.</p>
+</section>
+
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Forward Proxy — Acting for the Client</h2>
+
+  <p>A forward proxy intercepts outbound requests from clients and forwards them to the destination server. The server only sees the proxy's IP — the client's real IP is hidden.</p>
+
+  <h3>What Forward Proxies Do</h3>
+  <p><strong>IP masking / anonymity:</strong> The destination server sees the proxy's IP, not the user's. VPNs are essentially encrypted forward proxies. Tor chains multiple forward proxies for stronger anonymity.</p>
+  <p><strong>Content filtering:</strong> Corporate networks use forward proxies (like Squid or Zscaler) to block access to prohibited sites. The proxy inspects the URL/hostname and rejects requests to blacklisted domains.</p>
+  <p><strong>Caching:</strong> A forward proxy can cache responses (like a shared browser cache for the whole network). If 100 employees request the same npm package, the proxy fetches it once and serves the cached copy 99 times. This was huge in the days of slow internet — ISPs ran transparent forward proxies for exactly this purpose.</p>
+  <p><strong>Geo-restriction bypass:</strong> A forward proxy in another country lets you access content restricted to that region. The server thinks the request is coming from the proxy's location.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Forward proxy flow</span></div>
+    <pre><span class="b">Client (you)</span>  ──→  <span class="v">Forward Proxy</span>  ──→  <span class="b">Server (google.com)</span>
+<span class="num">192.168.1.42</span>       <span class="num">45.33.32.156</span>         <span class="num">142.250.80.46</span>
+
+<span class="cm">Server sees: request from 45.33.32.156 (proxy's IP)</span>
+<span class="cm">Server does NOT see: 192.168.1.42 (your real IP)</span>
+<span class="cm">Client configured the proxy. Client benefits from anonymity.</span></pre>
+  </div>
+</section>
+
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Reverse Proxy — Acting for the Server</h2>
+
+  <p>A reverse proxy sits in front of backend servers and accepts requests from clients on the servers' behalf. The client doesn't know (or care) that there's a proxy — it thinks it's talking directly to the service.</p>
+
+  <h3>What Reverse Proxies Do</h3>
+  <p><strong>Load balancing:</strong> Distributes incoming requests across multiple backend servers (round-robin, least connections, IP hash, etc.). This is the #1 reason reverse proxies exist in system design.</p>
+  <p><strong>SSL/TLS termination:</strong> The proxy handles the expensive TLS handshake and decryption. Backend servers receive plain HTTP — simpler, cheaper, and the CPU-intensive crypto is done once at the proxy instead of on every backend.</p>
+  <p><strong>Caching:</strong> Cache responses for frequently-requested content at the proxy layer. Static assets, API responses with <code class="inline">Cache-Control</code> headers, and even full HTML pages can be served without hitting the backend.</p>
+  <p><strong>Compression:</strong> Gzip/Brotli compression of responses at the proxy, reducing bandwidth without backend CPU cost.</p>
+  <p><strong>Rate limiting & DDoS protection:</strong> The proxy can throttle abusive clients, block suspicious IPs, and absorb volumetric attacks before they reach the backend.</p>
+  <p><strong>Request routing:</strong> Route requests to different backends based on URL path, hostname, headers, or cookies. <code class="inline">/api/*</code> goes to the API service, <code class="inline">/static/*</code> goes to the CDN, <code class="inline">/admin/*</code> goes to the admin service.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Reverse proxy flow</span></div>
+    <pre><span class="b">Client</span>  ──→  <span class="v">Reverse Proxy (Nginx)</span>  ──→  <span class="b">Backend Server 1</span>
+                                       ──→  <span class="b">Backend Server 2</span>
+                                       ──→  <span class="b">Backend Server 3</span>
+
+<span class="cm">Client sees: api.example.com (the proxy's address)</span>
+<span class="cm">Client does NOT see: 10.0.1.5, 10.0.1.6, 10.0.1.7 (backend IPs)</span>
+<span class="cm">Server operator configured the proxy. Server benefits from LB, SSL, caching.</span>
+
+<span class="cm">The proxy adds headers so the backend knows the real client IP:</span>
+<span class="fn">X-Forwarded-For</span>: 203.0.113.42      <span class="cm">← original client IP</span>
+<span class="fn">X-Forwarded-Proto</span>: https           <span class="cm">← original protocol (HTTPS)</span>
+<span class="fn">X-Real-IP</span>: 203.0.113.42            <span class="cm">← Nginx convention</span></pre>
+  </div>
+</section>
+
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Forward vs Reverse — Side by Side</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Property</th><th>Forward Proxy</th><th>Reverse Proxy</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Sits in front of</strong></td><td>Clients</td><td>Servers</td></tr>
+        <tr><td><strong>Acts on behalf of</strong></td><td>The client</td><td>The server</td></tr>
+        <tr><td><strong>Configured by</strong></td><td>Client or client's network admin</td><td>Server operator / DevOps</td></tr>
+        <tr><td><strong>Hides</strong></td><td>Client's identity (IP) from the server</td><td>Server's identity (IPs, count, architecture) from the client</td></tr>
+        <tr><td><strong>Server knows client?</strong></td><td>No — sees proxy IP only</td><td>Backend knows via X-Forwarded-For headers</td></tr>
+        <tr><td><strong>Client knows backend?</strong></td><td>Client explicitly configures the proxy</td><td>No — client thinks proxy IS the server</td></tr>
+        <tr><td><strong>Primary uses</strong></td><td>Anonymity, content filtering, geo-bypass, caching</td><td>Load balancing, SSL termination, caching, routing, security</td></tr>
+        <tr><td><strong>Real-world examples</strong></td><td>Squid, corporate VPNs, Tor, browser proxy settings, Zscaler</td><td>Nginx, HAProxy, Envoy, Cloudflare, AWS ALB/NLB, Traefik, Caddy</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">Interview Tip</div>
+    <p>When an interviewer says "proxy" without specifying, ask: "forward proxy or reverse proxy?" This shows you understand the distinction. In system design interviews, <strong>reverse proxies come up far more often</strong> than forward proxies because they are a standard building block in web architectures. Mentioning a reverse proxy is table stakes; explaining the reasons — TLS termination, load balancing, routing, caching, and security controls — is the stronger answer.</p>
+  </div>
+</section>
+
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>What Reverse Proxies Actually Do — In Detail</h2>
+
+  <h3>1. SSL/TLS Termination</h3>
+  <p>TLS handshakes are CPU-intensive. The reverse proxy handles that once, then forwards plain HTTP or internal TLS to backends depending on the trust model. This simplifies certificate management, offloads crypto from app servers, and gives you one place to manage ciphers, redirects, and certificate rotation.</p>
+
+  <h3>2. Load Balancing</h3>
+  <p>The proxy distributes incoming requests across a pool of backend servers. Common algorithms: <strong>round-robin</strong>, <strong>least connections</strong>, <strong>IP hash</strong>, and <strong>weighted balancing</strong>. We'll cover the load-balancing side in depth in the load balancers topic.</p>
+
+  <h3>3. Request Routing (L7 routing)</h3>
+  <p>Because the reverse proxy operates at Layer 7 (HTTP), it can inspect URLs, headers, and cookies to make routing decisions:</p>
+  <div class="code-block">
+    <div class="code-header"><span>Path-based routing example (Nginx-style pseudoconfig)</span></div>
+    <pre><span class="cm"># Route by URL path</span>
+<span class="fn">/api/*</span>        ──→  <span class="str">api-service:8080</span>         <span class="cm">(backend API servers)</span>
+<span class="fn">/static/*</span>     ──→  <span class="str">s3-bucket or CDN</span>         <span class="cm">(static file storage)</span>
+<span class="fn">/admin/*</span>      ──→  <span class="str">admin-service:8081</span>       <span class="cm">(restricted admin panel)</span>
+<span class="fn">/ws/*</span>         ──→  <span class="str">websocket-service:9090</span>   <span class="cm">(WebSocket upgrade)</span>
+
+<span class="cm"># Route by hostname (virtual hosting)</span>
+<span class="fn">api.example.com</span>   ──→  <span class="str">api-service</span>
+<span class="fn">app.example.com</span>   ──→  <span class="str">frontend-service</span>
+<span class="fn">docs.example.com</span>  ──→  <span class="str">docs-service</span></pre>
+  </div>
+
+  <h3>4. Header Manipulation</h3>
+  <p>The proxy can add, remove, or modify HTTP headers. It commonly adds <code class="inline">X-Forwarded-For</code>, <code class="inline">X-Forwarded-Proto</code>, and <code class="inline">X-Request-Id</code>. It can also strip or normalize headers that would otherwise leak backend details.</p>
+
+  <h3>5. Response Caching</h3>
+  <p>The proxy can cache backend responses and serve them directly for subsequent identical requests. This is how Nginx cache, Varnish, and CDN edge caches reduce backend load and improve tail latency for cacheable traffic.</p>
+</section>
+
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Nginx — The Reverse Proxy You'll Use Most</h2>
+
+  <p>Nginx, created in 2004 by Igor Sysoev, became popular because its event-driven architecture handles large numbers of concurrent connections efficiently. A single worker process can manage many connections using non-blocking I/O such as epoll on Linux or kqueue on BSD/macOS. <a href="#ref1" class="ref">[1]</a></p>
+
+  <h3>Nginx Architecture</h3>
+  <div class="memory-map"><span class="h">NGINX PROCESS MODEL</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Master Process</span> (root)
+<span class="d">│</span>   <span class="cm">Reads config, binds to ports (80, 443), manages workers</span>
+<span class="d">│</span>   <span class="cm">Does NOT handle any traffic itself</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="v">Worker Process 1</span> (non-root, one per CPU core)
+<span class="d">│</span>   <span class="cm">Event loop: epoll/kqueue for non-blocking I/O</span>
+<span class="d">│</span>   <span class="cm">Handles thousands of connections simultaneously</span>
+<span class="d">│</span>   <span class="cm">Single-threaded — no locks, no context switches</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="v">Worker Process 2</span>
+<span class="d">│</span>   <span class="cm">(same as above — each worker is independent)</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Cache Loader</span> (startup only)
+<span class="d">│</span>   <span class="cm">Loads cached metadata from disk into shared memory</span>
+<span class="d">│</span>
+<span class="d">└──</span> <span class="b">Cache Manager</span> (periodic)
+    <span class="cm">Prunes expired cache entries to stay within size limits</span>
+
+<span class="h">KEY INSIGHT: WHY NGINX IS FAST</span>
+<span class="cm">Apache: 1 thread per connection → 10K connections = 10K threads = GBs of RAM</span>
+<span class="cm">Nginx:  1 event loop per core  → 10K connections = a few workers = far less overhead</span>
+<span class="cm">This is the C10K solution — event-driven I/O multiplexing.</span></div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Reverse Proxy</th><th>Language</th><th>Architecture</th><th>Best For</th><th>Used By</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Nginx</strong></td><td>C</td><td>Event-driven workers</td><td>General-purpose web serving, reverse proxy, static files</td><td>Broadly deployed across the web</td></tr>
+        <tr><td><strong>HAProxy</strong></td><td>C</td><td>Event-driven, single-process</td><td>Pure TCP/HTTP load balancing, low-latency routing</td><td>Often used in high-traffic platforms</td></tr>
+        <tr><td><strong>Envoy</strong></td><td>C++</td><td>Event-driven, L7 service mesh</td><td>Microservice-to-microservice routing, observability</td><td>Common in service-mesh deployments</td></tr>
+        <tr><td><strong>Traefik</strong></td><td>Go</td><td>Dynamic config, auto-discovery</td><td>Kubernetes ingress, Docker-native routing</td><td>Container-first platforms</td></tr>
+        <tr><td><strong>Caddy</strong></td><td>Go</td><td>Auto-HTTPS</td><td>Developer-friendly HTTPS and simple routing</td><td>Small teams and personal deployments</td></tr>
+        <tr><td><strong>AWS ALB</strong></td><td>Managed</td><td>Cloud-native L7 LB</td><td>AWS-native HTTP routing, WAF integration</td><td>AWS-hosted web services</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: See a Reverse Proxy's Headers</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Inspect headers from a Cloudflare-fronted site (macOS/Linux/WSL)</span></div>
+    <pre><span class="cm"># curl -I sends a HEAD request and shows response headers</span>
+$ <span class="fn">curl</span> <span class="kw">-I</span> <span class="str">https://www.cloudflare.com</span>
+
+<span class="fn">server</span>: <span class="str">cloudflare</span>                  <span class="cm">← the reverse proxy identifies itself</span>
+<span class="fn">cf-ray</span>: 8f1a2b3c4d-FRA              <span class="cm">← request handled at a Cloudflare PoP</span>
+<span class="fn">cf-cache-status</span>: <span class="str">DYNAMIC</span>            <span class="cm">← not cached (dynamic content)</span>
+
+<span class="cm"># Compare with a site that exposes its origin server directly:</span>
+$ <span class="fn">curl</span> <span class="kw">-I</span> <span class="str">https://httpbin.org/get</span>
+
+<span class="cm"># Header values will vary, but the point is to inspect whether</span>
+<span class="cm"># a proxy/CDN is clearly in front of the origin.</span></pre>
+  </div>
+
+  <h3>Demo 2: Trace the Path Through Proxies</h3>
+  <div class="code-block">
+    <div class="code-header"><span>See reflected request headers (macOS/Linux/WSL)</span></div>
+    <pre><span class="cm"># httpbin.org echoes back request headers it received</span>
+$ <span class="fn">curl</span> -s <span class="str">https://httpbin.org/headers</span> | <span class="fn">python3</span> -m json.tool
+
+{
+  <span class="str">"headers"</span>: {
+    <span class="str">"Host"</span>: <span class="str">"httpbin.org"</span>,
+    ...
+  }
+}
+
+<span class="cm"># If proxies add forwarding headers on the path, you'll see them here.</span>
+<span class="cm"># In multi-proxy setups, X-Forwarded-For can contain a comma-separated chain.</span></pre>
+  </div>
+
+  <h3>Demo 3: Run Nginx Locally as a Reverse Proxy</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Set up Nginx to proxy to a Python backend (macOS: brew install nginx / Linux: apt install nginx)</span></div>
+    <pre><span class="cm"># 1. Start a simple Python backend on port 8080</span>
+$ <span class="fn">python3</span> -c "
+from http.server import HTTPServer, BaseHTTPRequestHandler
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers()
+        hdrs = '\n'.join(f'{k}: {v}' for k,v in self.headers.items())
+        self.wfile.write(f'Backend on :8080 received:\n{hdrs}'.encode())
+    def log_message(self,*a): pass
+HTTPServer(('',8080),H).serve_forever()" &amp;
+
+<span class="cm"># 2. Create a minimal Nginx config</span>
+$ <span class="fn">cat</span> > /tmp/nginx-proxy.conf &lt;&lt;'EOF'
+events { worker_connections 64; }
+http {
+    server {
+        listen 9999;
+        location / {
+            proxy_pass http://127.0.0.1:8080;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host $host;
+        }
+    }
+}
+EOF
+
+<span class="cm"># 3. Start Nginx with this config</span>
+$ <span class="fn">nginx</span> -c /tmp/nginx-proxy.conf
+
+<span class="cm"># 4. Test: hit Nginx on :9999 — it proxies to Python on :8080</span>
+$ <span class="fn">curl</span> <span class="str">http://localhost:9999/hello</span>
+
+Backend on :8080 received:
+<span class="fn">Host</span>: localhost
+<span class="fn">X-Real-IP</span>: <span class="num">127.0.0.1</span>
+<span class="fn">X-Forwarded-For</span>: <span class="num">127.0.0.1</span>
+<span class="fn">Connection</span>: close
+
+<span class="cm"># Stop: nginx -s stop && kill %1</span></pre>
+  </div>
+</section>
+
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Mini-Project: Build a Reverse Proxy from Scratch</h2>
+
+  <p>First, a simple example to <strong>feel what proxying means</strong> — then a more advanced one with header injection and load balancing.</p>
+
+  <h4>Simple: The Smallest Possible Reverse Proxy</h4>
+  <div class="code-block">
+    <div class="code-header"><span>tiny_proxy.py — just forwarding (macOS/Linux/WSL, Python 3.7+)</span></div>
+    <pre><span class="kw">import</span> http.server, urllib.request
+
+BACKEND = <span class="str">"http://httpbin.org"</span>
+
+<span class="kw">class</span> <span class="fn">ProxyHandler</span>(http.server.BaseHTTPRequestHandler):
+    <span class="kw">def</span> <span class="fn">do_GET</span>(self):
+        url = f<span class="str">"{BACKEND}{self.path}"</span>
+        <span class="kw">try</span>:
+            resp = urllib.request.urlopen(url)
+            self.send_response(resp.status)
+            self.send_header(<span class="str">"X-Proxied-By"</span>, <span class="str">"tiny-proxy/1.0"</span>)
+            self.end_headers()
+            self.wfile.write(resp.read())
+        <span class="kw">except</span> Exception <span class="kw">as</span> e:
+            self.send_response(<span class="num">502</span>)
+            self.end_headers()
+            self.wfile.write(f<span class="str">"Proxy error: {e}"</span>.encode())
+
+    <span class="kw">def</span> <span class="fn">log_message</span>(self, *a): <span class="kw">pass</span>
+
+print(<span class="str">"[Tiny Proxy] localhost:6060 → proxying to httpbin.org"</span>)
+http.server.HTTPServer((<span class="str">""</span>, <span class="num">6060</span>), ProxyHandler).serve_forever()</pre>
+  </div>
+  <div class="code-block">
+    <div class="code-header"><span>Test it</span></div>
+    <pre><span class="cm"># Terminal 1</span>
+$ <span class="fn">python3</span> tiny_proxy.py
+
+<span class="cm"># Terminal 2</span>
+$ <span class="fn">curl</span> -s <span class="str">http://localhost:6060/ip</span>
+{ <span class="str">"origin"</span>: <span class="str">"YOUR_SERVER_IP"</span> }
+
+$ <span class="fn">curl</span> <span class="kw">-I</span> <span class="str">http://localhost:6060/get</span>
+<span class="fn">X-Proxied-By</span>: <span class="str">tiny-proxy/1.0</span></pre>
+  </div>
+  <div class="callout blue">
+    <div class="callout-label">Demo Reality Check</div>
+    <p>In this localhost demo, the proxy process and your client run on the same machine, so the upstream service will see the same public egress IP. What the demo proves is not anonymity but that the proxy is in the path and can observe, forward, and modify the request.</p>
+  </div>
+
+  <h4>Advanced: Reverse Proxy with Load Balancing + Header Injection</h4>
+  <div class="code-block">
+    <div class="code-header"><span>lb_proxy.py — round-robin reverse proxy (macOS/Linux/WSL, Python 3.7+)</span></div>
+    <pre><span class="kw">import</span> http.server, urllib.request, itertools, time
+
+BACKENDS = [<span class="str">"http://127.0.0.1:8081"</span>, <span class="str">"http://127.0.0.1:8082"</span>, <span class="str">"http://127.0.0.1:8083"</span>]
+pool = itertools.cycle(BACKENDS)
+
+<span class="kw">class</span> <span class="fn">LBProxy</span>(http.server.BaseHTTPRequestHandler):
+    <span class="kw">def</span> <span class="fn">do_GET</span>(self):
+        backend = next(pool)
+        url = f<span class="str">"{backend}{self.path}"</span>
+        t0 = time.perf_counter()
+        <span class="kw">try</span>:
+            req = urllib.request.Request(url, headers={
+                <span class="str">"X-Forwarded-For"</span>: self.client_address[<span class="num">0</span>],
+                <span class="str">"X-Request-Id"</span>: f<span class="str">"req-{int(t0*1000)}"</span>,
+            })
+            resp = urllib.request.urlopen(req, timeout=<span class="num">5</span>)
+            elapsed = (time.perf_counter() - t0) * <span class="num">1000</span>
+            self.send_response(resp.status)
+            self.send_header(<span class="str">"X-Backend"</span>, backend)
+            self.send_header(<span class="str">"X-Latency-Ms"</span>, f<span class="str">"{elapsed:.1f}"</span>)
+            self.end_headers()
+            self.wfile.write(resp.read())
+        <span class="kw">except</span>:
+            self.send_response(<span class="num">502</span>); self.end_headers()
+            self.wfile.write(f<span class="str">"Backend {backend} unreachable"</span>.encode())
+
+    <span class="kw">def</span> <span class="fn">log_message</span>(self, fmt, *args):
+        print(f<span class="str">"  [PROXY] {self.client_address[0]} → {fmt % args}"</span>)
+
+print(f<span class="str">"[LB Proxy] localhost:7070 → round-robin across {BACKENDS}"</span>)
+http.server.HTTPServer((<span class="str">""</span>, <span class="num">7070</span>), LBProxy).serve_forever()</pre>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">What You'll Learn</div>
+    <p>Hit <code class="inline">localhost:7070</code> multiple times — the <code class="inline">X-Backend</code> response header cycles through :8081, :8082, :8083. Kill one backend and watch the proxy return <code class="inline">502 Bad Gateway</code> for that slot. This is the same core idea as a production reverse proxy: traffic distribution, header injection, and an explicit upstream failure path.</p>
+  </div>
+</section>
+
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production Example 1: Cloudflare</h2>
+
+  <p>Cloudflare runs a globally distributed reverse-proxy and CDN network. When you put a domain behind Cloudflare, requests first reach Cloudflare's edge, which can terminate TLS, apply security controls, cache responses, and then forward to the origin when needed. <a href="#ref3" class="ref">[3]</a></p>
+
+  <h3>What Cloudflare Does as a Reverse Proxy</h3>
+  <p><strong>SSL termination:</strong> Cloudflare handles TLS for your domain while your origin can use a different internal TLS or origin setup.</p>
+  <p><strong>DDoS mitigation:</strong> Volumetric attacks can be absorbed at the edge instead of directly reaching the origin.</p>
+  <p><strong>CDN caching:</strong> Static assets are cached close to users, reducing origin load and latency.</p>
+  <p><strong>WAF:</strong> Cloudflare can inspect HTTP requests for attack signatures before forwarding them.</p>
+  <p><strong>Workers (edge compute):</strong> Application logic can run at the edge before the request reaches your origin.</p>
+
+  <div class="callout orange">
+    <div class="callout-label">Key Insight</div>
+    <p>Cloudflare shows how a reverse proxy can evolve from a traffic relay into a programmable control layer. Once the proxy is terminating TLS, routing requests, and caching data, adding edge logic is a natural next step.</p>
+  </div>
+</section>
+
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production Example 2: Envoy at Lyft</h2>
+
+  <p>Envoy is a high-performance proxy originally built at Lyft for service-to-service communication. Unlike Nginx, which is commonly used at the edge, Envoy is also widely used as a sidecar in service-mesh architectures. <a href="#ref2" class="ref">[2]</a></p>
+
+  <h3>The Sidecar Pattern</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Envoy as a sidecar proxy</span></div>
+    <pre><span class="cm">Traditional: Service A ──(HTTP)──→ Service B</span>
+<span class="cm">Problem: Every service must implement retries, circuit breakers,</span>
+<span class="cm">         TLS, metrics, tracing, load balancing... in every language.</span>
+
+<span class="cm">With Envoy sidecar:</span>
+<span class="b">Service A</span> ──→ <span class="v">Envoy (sidecar A)</span> ══→ <span class="v">Envoy (sidecar B)</span> ──→ <span class="b">Service B</span>
+                    <span class="cm">↑ handles:              ↑ handles:</span>
+                    <span class="cm">· retries               · auth/authz</span>
+                    <span class="cm">· circuit breaking      · rate limiting</span>
+                    <span class="cm">· mTLS encryption       · mTLS decryption</span>
+                    <span class="cm">· metrics               · metrics</span>
+                    <span class="cm">· tracing               · access logging</span>
+
+<span class="cm">Service code is simple — just HTTP calls to localhost.</span>
+<span class="cm">All the networking complexity lives in Envoy.</span></pre>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Why Envoy Matters</div>
+    <p>Envoy centralizes retries, mTLS, circuit breaking, tracing, and policy enforcement into the proxy layer. That lets service teams keep application logic simpler while the platform team standardizes networking behavior across languages and runtimes.</p>
+  </div>
+</section>
+
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Edge Cases & Gotchas</h2>
+
+  <h3>1. X-Forwarded-For Spoofing</h3>
+  <p>Clients can set <code class="inline">X-Forwarded-For</code> themselves. If your backend trusts this header blindly for rate limiting or geo decisions, attackers can bypass controls. The fix is to trust only headers set by your known proxy chain.</p>
+
+  <h3>2. Proxy Adding Latency</h3>
+  <p>Every proxy hop adds work. For most web systems the benefits dominate, but if you stack CDN → API gateway → service mesh sidecar → backend, the overhead becomes real and should be measured.</p>
+
+  <h3>3. WebSocket and Long-Lived Connections</h3>
+  <p>Many proxy defaults assume short request-response cycles. WebSockets and streaming protocols need explicit upgrade support and longer idle timeouts.</p>
+
+  <h3>4. The Single Point of Failure Problem</h3>
+  <p>If your reverse proxy goes down, all traffic can fail because it sits in the critical path. Production deployments use multiple proxy nodes or managed load balancers in front of the proxy tier.</p>
+
+  <h3>5. Large Request/Response Bodies</h3>
+  <p>Many proxies buffer request or response bodies by default. Large uploads or downloads can therefore stress the proxy if buffering, limits, or streaming modes are not configured correctly.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story Pattern</div>
+    <p>Timeouts, buffering defaults, and header trust are common proxy-related failure modes because the application often looks broken even when the real problem is sitting in the proxy layer in front of it.</p>
+  </div>
+</section>
+
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">Adding a reverse proxy layer</div>
+      <p><strong>Improves:</strong> TLS offload, load distribution, caching, security, centralized observability.<br>
+      <strong>Costs:</strong> More latency, more configuration, more moving parts.<br>
+      <strong>When worth it:</strong> Almost always for public-facing production services.</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">Envoy sidecar vs shared proxy</div>
+      <p><strong>Improves:</strong> Per-service observability and language-agnostic networking policy.<br>
+      <strong>Costs:</strong> More resource overhead and operational complexity.<br>
+      <strong>When worth it:</strong> Larger microservice estates.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">Edge compute at the proxy</div>
+      <p><strong>Improves:</strong> User latency, origin offload, request shaping near the client.<br>
+      <strong>Costs:</strong> Runtime constraints, debugging complexity, platform coupling.<br>
+      <strong>When worth it:</strong> Auth, routing, personalization, bot detection, lightweight logic.</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">Removing a proxy layer</div>
+      <p><strong>Improves:</strong> Lower latency and simpler operations.<br>
+      <strong>Costs:</strong> Lose TLS offload, caching, or routing features from that layer.<br>
+      <strong>When worth it:</strong> Highly latency-sensitive systems with simpler network needs.</p>
+    </div>
+  </div>
+
+  <h3>Toy Simulation: Proxy Overhead Measurement</h3>
+  <div class="code-block">
+    <div class="code-header"><span>proxy_overhead.py — measure the latency cost of proxying (macOS/Linux/WSL)</span></div>
+    <pre><span class="kw">import</span> urllib.request, time
+
+DIRECT = <span class="str">"http://httpbin.org/get"</span>
+PROXIED = <span class="str">"http://localhost:6060/get"</span>
+
+<span class="kw">def</span> <span class="fn">measure</span>(url, n=<span class="num">10</span>):
+    times = []
+    <span class="kw">for</span> _ <span class="kw">in</span> range(n):
+        t0 = time.perf_counter()
+        urllib.request.urlopen(url, timeout=<span class="num">5</span>)
+        times.append((time.perf_counter() - t0) * <span class="num">1000</span>)
+    avg = sum(times) / len(times)
+    p99 = sorted(times)[int(len(times) * <span class="num">0.99</span>)]
+    <span class="kw">return</span> avg, p99
+
+print(<span class="str">"Measuring proxy overhead..."</span>)
+d_avg, d_p99 = measure(DIRECT)
+print(f<span class="str">"  Direct:  avg={d_avg:.0f}ms  p99={d_p99:.0f}ms"</span>)</pre>
+  </div>
+</section>
+
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Interview Questions & Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What's the difference between a forward proxy and a reverse proxy?</div>
+    <div class="qa-a">
+      <p><strong>Forward proxy</strong>: sits in front of clients, acts on the client's behalf. Hides the client's IP from the server. Configured by the client or network admin. Used for anonymity, filtering, and outbound caching.</p>
+      <p><strong>Reverse proxy</strong>: sits in front of servers, acts on the server's behalf. Hides backend architecture from the client. Configured by the server operator. Used for load balancing, TLS termination, routing, caching, and security.</p>
+      <p>The core question is: <strong>who is the proxy representing?</strong></p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: Why put a reverse proxy in front of application servers?</div>
+    <div class="qa-a">
+      <p>To centralize TLS termination, load balancing, request routing, caching, security controls, and request logging. It lets backends stay simpler while the proxy handles common network concerns once for the whole service.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: How does Nginx achieve high concurrency compared to Apache?</div>
+    <div class="qa-a">
+      <p>Nginx uses an event-driven, non-blocking architecture rather than the classic thread-per-connection model. A small number of workers can therefore manage many open connections using OS event-notification mechanisms.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: What is a service mesh and how do proxy sidecars work?</div>
+    <div class="qa-a">
+      <p>A service mesh is an infrastructure layer for service-to-service traffic. Proxy sidecars such as Envoy sit beside each service instance and handle concerns like mTLS, retries, tracing, and policy enforcement outside the application code.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: A client complains about 502 Bad Gateway errors. How do you debug?</div>
+    <div class="qa-a">
+      <p>Start at the proxy: check upstream health, error logs, timeout settings, backend reachability, and whether the backend is returning malformed or incomplete responses. 502 usually means the proxy could not get a valid upstream response.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: What headers does a reverse proxy typically add, and why do they matter?</div>
+    <div class="qa-a">
+      <p><strong>X-Forwarded-For</strong> exposes the original client IP, <strong>X-Forwarded-Proto</strong> preserves the original scheme, and request IDs help tracing. These headers matter because the backend otherwise only sees the proxy hop in front of it.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Forward proxy: in front of clients. Reverse proxy: in front of servers.<br>
+    <strong>2.</strong> Reverse proxies are standard in production web systems.<br>
+    <strong>3.</strong> Nginx became popular because event-driven I/O handles high concurrency efficiently.<br>
+    <strong>4.</strong> TLS termination at the proxy simplifies certificate and crypto management.<br>
+    <strong>5.</strong> L7 routing lets proxies dispatch requests by path, host, or headers.<br>
+    <strong>6.</strong> Forwarding headers matter because backends otherwise lose client context.<br>
+    <strong>7.</strong> Envoy sidecars power many service-mesh designs.<br>
+    <strong>8.</strong> Every proxy hop adds some latency and operational complexity.<br>
+    <strong>9.</strong> 502 and 504 errors often need proxy-level debugging, not just app debugging.<br>
+    <strong>10.</strong> The proxy layer itself must be redundant because it sits in the critical path.</p>
+  </div>
+</section>
+
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Proxy Traffic Flow Under Load</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
+        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
+        <marker id="mr" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#f87171"/></marker>
+      </defs>
+      <rect x="20" y="30" width="80" height="36" rx="6" fill="#222734" stroke="#f87171" stroke-width="1.5"/>
+      <text x="60" y="53" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171" font-weight="600">Client A</text>
+      <rect x="20" y="80" width="80" height="36" rx="6" fill="#222734" stroke="#f87171" stroke-width="1.5"/>
+      <text x="60" y="103" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171" font-weight="600">Client B</text>
+      <rect x="20" y="130" width="80" height="36" rx="6" fill="#222734" stroke="#f87171" stroke-width="1.5"/>
+      <text x="60" y="153" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171" font-weight="600">Client C</text>
+      <path d="M100 48 L230 88" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <path d="M100 98 L230 98" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <path d="M100 148 L230 108" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+      <rect x="240" y="60" width="160" height="80" rx="10" fill="#222734" stroke="#60a5fa" stroke-width="2"/>
+      <text x="320" y="90" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="14" fill="#60a5fa" font-weight="600">Reverse Proxy</text>
+      <text x="320" y="110" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">Nginx / Envoy</text>
+      <text x="320" y="128" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">TLS · LB · Cache · Route</text>
+      <rect x="500" y="20" width="110" height="40" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="555" y="45" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7" font-weight="600">Server 1 ✓</text>
+      <rect x="500" y="75" width="110" height="40" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="555" y="100" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7" font-weight="600">Server 2 ✓</text>
+      <rect x="500" y="130" width="110" height="40" rx="6" fill="#2a1520" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <text x="555" y="152" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171" font-weight="600">Server 3 ✗</text>
+      <path d="M400 82 L500 40" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
+      <path d="M400 98 L500 95" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
+      <path d="M400 112 L500 148" stroke="#f87171" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#mr)"/>
+      <text x="404" y="172" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">removed from pool</text>
+      <rect x="20" y="200" width="720" height="180" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
+      <text x="40" y="228" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">WHAT HAPPENS UNDER LOAD</text>
+      <text x="40" y="256" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ Proxy handles TLS termination for all clients — offloads crypto from backends</text>
+      <text x="40" y="278" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ Server 3 failed health check — proxy removes it and redistributes traffic</text>
+      <text x="40" y="300" font-family="DM Sans,sans-serif" font-size="12" fill="#fb923c">▸ Remaining servers absorb more load — utilization climbs</text>
+      <text x="40" y="322" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">▸ If the proxy layer fails without redundancy, all traffic is affected</text>
+      <text x="40" y="350" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">▸ Fix: redundant proxies in front, health checks behind, and capacity for failures</text>
+    </svg>
+    <div class="diagram-caption">Reverse proxy distributing traffic with one backend failure — pressure on remaining servers</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>A reverse proxy is a single control point for traffic — which is both its power and its risk.</strong> It gives you one place to terminate TLS, route requests, cache responses, and shed load. But if that layer fails and is not redundant, everything behind it becomes unreachable.</p>
+  </div>
+</section>
+
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References & Further Reading</h2>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Sysoev + Alexeev — Nginx Architecture</div>
+    <p><strong>The Architecture of Open Source Applications, Vol. 2.</strong><br>
+    <a href="https://aosabook.org/en/v2/nginx.html" style="color:var(--accent);" target="_blank">https://aosabook.org/en/v2/nginx.html</a></p>
+    <p>Explains why Nginx was designed around an event-driven architecture and how its master/worker model handles large connection counts efficiently.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Envoy Architecture Overview</div>
+    <p><strong>Envoy Proxy documentation.</strong><br>
+    <a href="https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/arch_overview" style="color:var(--blue);" target="_blank">https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/arch_overview</a></p>
+    <p>Primary overview of Envoy as a high-performance proxy for edge routing and service-mesh sidecars.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Cloudflare Documentation</div>
+    <p><strong>Cloudflare docs and product documentation.</strong><br>
+    <a href="https://developers.cloudflare.com/fundamentals/" style="color:var(--orange);" target="_blank">https://developers.cloudflare.com/fundamentals/</a></p>
+    <p>Useful primary documentation for Cloudflare's role as a reverse proxy, CDN, TLS terminator, and programmable edge platform.</p>
+  </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] RFC 7239 — Forwarded HTTP Extension</div>
+    <p><strong>IETF RFC 7239.</strong><br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc7239" style="color:var(--purple);" target="_blank">https://datatracker.ietf.org/doc/html/rfc7239</a></p>
+    <p>Defines the standardized <code class="inline">Forwarded</code> header that generalizes the commonly used <code class="inline">X-Forwarded-*</code> family.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+</body>
+</html>
