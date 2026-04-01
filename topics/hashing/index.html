@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Hashing</title>
+<meta name="description" content="A system design guide to hashing, consistent hashing, rendezvous hashing, virtual nodes, modulo remapping, and partitioning tradeoffs.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 09</div>
+  <h1><span>Hashing</span></h1>
+  <p class="hero-sub">Hashing turns arbitrary data into fixed-size numbers — and that simple idea powers everything from hash tables to distributed caches to password storage. The system design twist: what happens to your hash assignments when servers are added or removed?</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Prerequisites &amp; Key Terms</a></li>
+    <li><a href="#s1">What Is Hashing &amp; Why It Matters</a></li>
+    <li><a href="#s2">Hash Functions — Properties &amp; Types</a></li>
+    <li><a href="#s3">The Naive Approach: Modulo Hashing</a></li>
+    <li><a href="#s4">Consistent Hashing — The Ring</a></li>
+    <li><a href="#s5">Virtual Nodes — Fixing the Imbalance</a></li>
+    <li><a href="#s6">Rendezvous Hashing</a></li>
+    <li><a href="#s7">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s8">Mini-Project: Consistent Hash Ring</a></li>
+    <li><a href="#s9">Production Example 1: DynamoDB / Cassandra</a></li>
+    <li><a href="#s10">Production Example 2: Google Maglev Hashing</a></li>
+    <li><a href="#s11">Edge Cases &amp; Gotchas</a></li>
+    <li><a href="#s12">What If? — Interactive Exploration</a></li>
+    <li><a href="#s13">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Prerequisites &amp; Key Terms</h2>
+
+  <h3>Hashing Function</h3>
+  <p>A function that accepts an input of arbitrary size (a string, a file, a number) and produces a fixed-size output (typically an integer). A good hash function distributes outputs uniformly across its range, minimizing <strong>collisions</strong> (different inputs producing the same output). The output is deterministic — the same input always produces the same hash. Used everywhere: hash tables, checksums, caching keys, load balancer routing, and cryptography. Examples: MD5 (128-bit output, fast but broken for security), SHA-256 (256-bit, cryptographically secure), MurmurHash3 (fast, non-cryptographic, good distribution), xxHash (extremely fast, non-cryptographic).</p>
+
+  <h3>Consistent Hashing</h3>
+  <p>A hashing technique designed for distributed systems where the number of servers (buckets) changes frequently. In standard modulo hashing (<code class="inline">hash(key) % N</code>), changing N remaps nearly all keys. Consistent hashing maps both keys and servers onto a ring (circular hash space), and each key is assigned to the nearest server clockwise. When a server is added or removed, only <strong>~K/N</strong> keys need to be remapped (where K is the total number of keys and N is the number of servers), rather than nearly all of them. Invented by David Karger et al. in 1997. <a href="#ref1" class="ref">[1]</a> The idea shows up in systems like Cassandra, client-side Memcached sharding, cache-routing designs, and other distributed key-placement schemes.</p>
+
+  <h3>Rendezvous Hashing</h3>
+  <p>Also called <strong>Highest Random Weight (HRW) hashing</strong>. An alternative to consistent hashing that achieves the same goal (minimal key remapping on server changes) with a different mechanism. For each key, compute a score for every server using <code class="inline">hash(key, server_id)</code> and assign the key to the server with the highest score. When a server is removed, only its keys are redistributed — and they go to their second-highest-scoring server, which is deterministic. Simpler to implement than consistent hashing (no ring, no virtual nodes), but requires O(N) computation per key lookup (where N is the number of servers). Practical for small N (dozens of servers).</p>
+
+  <h3>SHA (Secure Hash Algorithms)</h3>
+  <p>A family of cryptographic hash functions published by NIST. <strong>SHA-1</strong> (160-bit, deprecated — collision found in 2017 by Google/CWI). <strong>SHA-256</strong> (256-bit, part of SHA-2 family, widely used in TLS, Bitcoin, Git). <strong>SHA-3</strong> (based on Keccak, selected as the latest standard in 2015). For system design, SHA-256 is the standard choice when you need cryptographic properties (e.g., content addressing, integrity verification). For load balancing and caching, use faster non-cryptographic hashes like MurmurHash3 or xxHash.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>What Is Hashing &amp; Why It Matters</h2>
+
+  <p>At its core, hashing converts data into a number. That number is used to determine <em>where</em> something goes — which bucket in a hash table, which server in a cluster, which shard in a database, which cache node holds this key.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>Imagine a mail sorting facility. Every letter has an address (the key), and you need to decide which delivery truck (server) carries it. The simplest approach: take the zip code, divide by the number of trucks, and use the remainder to assign a truck. That's modulo hashing. It works great — until you add or remove a truck, at which point <em>almost every letter</em> gets reassigned to a different truck. Consistent hashing solves this: it assigns delivery zones on a circular route, so adding a truck only shifts the letters in one zone.</p>
+  </div>
+
+  <p>Hashing appears in system design in three critical places: <strong>(1) Data partitioning</strong> — which database shard holds this row? <strong>(2) Load balancing</strong> — which server handles this request? <strong>(3) Caching</strong> — which cache node stores this key? In all three cases, the question is the same: given a key and a set of servers, which server is responsible?</p>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Hash Functions — Properties &amp; Types</h2>
+
+  <h3>Properties of a Good Hash Function</h3>
+  <p><strong>Deterministic:</strong> Same input always produces the same output. <strong>Uniform distribution:</strong> Outputs are spread evenly across the hash range, minimizing collisions. <strong>Avalanche effect:</strong> A small change in input (one bit flip) changes the output significantly. <strong>Fast computation:</strong> For system design (LB, caching), speed matters — non-cryptographic hashes can process GBs per second.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Hash Function</th><th>Output Size</th><th>Type</th><th>Speed (approx.)</th><th>Use Case</th></tr></thead>
+      <tbody>
+        <tr><td><strong>MD5</strong></td><td>128-bit</td><td>Cryptographic (broken)</td><td>~400 MB/s</td><td>Checksums, file deduplication (NOT security)</td></tr>
+        <tr><td><strong>SHA-256</strong></td><td>256-bit</td><td>Cryptographic</td><td>~200 MB/s</td><td>TLS certificates, Git commits, Bitcoin, integrity verification</td></tr>
+        <tr><td><strong>SHA-3 (Keccak)</strong></td><td>224–512 bit</td><td>Cryptographic</td><td>~150 MB/s</td><td>Post-quantum readiness, Ethereum</td></tr>
+        <tr><td><strong>MurmurHash3</strong></td><td>32 or 128-bit</td><td>Non-cryptographic</td><td>~3 GB/s</td><td>Hash tables, Bloom filters, consistent hashing</td></tr>
+        <tr><td><strong>xxHash</strong></td><td>32, 64, or 128-bit</td><td>Non-cryptographic</td><td>~10+ GB/s</td><td>High-throughput checksums, data processing</td></tr>
+        <tr><td><strong>CRC32</strong></td><td>32-bit</td><td>Error-detection</td><td>~5+ GB/s (hardware accelerated)</td><td>Ethernet frame checks, storage checksums, file integrity</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">Cryptographic vs Non-Cryptographic</div>
+    <p><strong>Cryptographic hashes</strong> (SHA-256, SHA-3) are designed to be collision-resistant and pre-image resistant — you can't reverse the hash to find the input, and it's infeasible to find two inputs with the same output. They're slower because security requires more computation. <strong>Non-cryptographic hashes</strong> (MurmurHash3, xxHash) prioritize speed and good distribution. They're fine for hash tables and load balancing — you don't need security guarantees, just even distribution. <strong>Rule of thumb:</strong> Use SHA-256 for security/integrity. Use MurmurHash3 or xxHash for everything else.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3 ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>The Naive Approach: Modulo Hashing</h2>
+
+  <p>The simplest way to assign keys to servers: <code class="inline">server = hash(key) % num_servers</code>. If you have 4 servers, key "user_42" might hash to 17, and 17 % 4 = 1, so it goes to Server 1.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Modulo hashing — works fine until a server changes</span></div>
+    <pre><span class="cm"># 4 servers, 8 keys</span>
+<span class="fn">hash("user_A")</span> % <span class="num">4</span> = <span class="num">2</span>  → Server 2
+<span class="fn">hash("user_B")</span> % <span class="num">4</span> = <span class="num">0</span>  → Server 0
+<span class="fn">hash("user_C")</span> % <span class="num">4</span> = <span class="num">3</span>  → Server 3
+<span class="fn">hash("user_D")</span> % <span class="num">4</span> = <span class="num">1</span>  → Server 1
+
+<span class="cm"># Now add a 5th server. EVERYTHING shifts:</span>
+<span class="fn">hash("user_A")</span> % <span class="num">5</span> = <span class="num">3</span>  → Server 3  <span class="v">(was 2 — REMAPPED!)</span>
+<span class="fn">hash("user_B")</span> % <span class="num">5</span> = <span class="num">0</span>  → Server 0  (same — lucky)
+<span class="fn">hash("user_C")</span> % <span class="num">5</span> = <span class="num">4</span>  → Server 4  <span class="v">(was 3 — REMAPPED!)</span>
+<span class="fn">hash("user_D")</span> % <span class="num">5</span> = <span class="num">2</span>  → Server 2  <span class="v">(was 1 — REMAPPED!)</span>
+
+<span class="cm"># On average, (N-1)/N = 3/4 = 75% of keys are remapped when going from 4→5 servers.</span>
+<span class="cm"># For a cache: 75% of all cached data becomes unreachable → massive cache miss storm.</span>
+<span class="cm"># For a database: 75% of queries go to the wrong shard → reads fail or return nothing.</span></pre>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">Why This Is Catastrophic</div>
+    <p>In a distributed cache with modulo hashing, adding <em>one</em> server causes ~(N-1)/N of all keys to remap. With 100 servers, adding one remaps ~99% of keys. Every remapped key is a cache miss that hits the database. If your cache is absorbing 95% of reads, suddenly 95% × 99% ≈ 94% of all traffic floods the database simultaneously. This is the problem consistent hashing was invented to solve.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4 ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Consistent Hashing — The Ring</h2>
+
+  <p>Consistent hashing (Karger et al., 1997) solves the remapping problem by mapping both keys and servers onto a <strong>circular hash space</strong> (a ring of integers from 0 to 2³²−1 or 0 to 2⁶⁴−1). <a href="#ref1" class="ref">[1]</a></p>
+
+  <h3>How It Works</h3>
+  <p><strong>Step 1:</strong> Hash each server's identifier (hostname, IP) to a position on the ring.</p>
+  <p><strong>Step 2:</strong> To find which server owns a given key, hash the key to a position on the ring, then walk clockwise until you encounter the first server. That server is responsible for this key.</p>
+  <p><strong>Step 3:</strong> When a server is added, it takes a position on the ring and absorbs only the keys between it and its counter-clockwise neighbor — other servers are unaffected.</p>
+  <p><strong>Step 4:</strong> When a server is removed, its keys are simply absorbed by the next server clockwise — again, other servers are unaffected.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Consistent hashing — what changes when a server is added</span></div>
+    <pre><span class="h">Before (3 servers on the ring):</span>
+Ring: 0 ──── A(100) ──── B(300) ──── C(600) ──── 0
+Keys:
+  "user_1" hashes to <span class="num">50</span>  → walks clockwise → hits <span class="str">A</span> at 100
+  "user_2" hashes to <span class="num">200</span> → walks clockwise → hits <span class="str">B</span> at 300
+  "user_3" hashes to <span class="num">400</span> → walks clockwise → hits <span class="str">C</span> at 600
+  "user_4" hashes to <span class="num">700</span> → walks clockwise → wraps → hits <span class="str">A</span> at 100
+
+<span class="h">After adding server D at position 500:</span>
+Ring: 0 ──── A(100) ──── B(300) ──── <span class="v">D(500)</span> ──── C(600) ──── 0
+Keys:
+  "user_1" → <span class="str">A</span> (unchanged ✓)
+  "user_2" → <span class="str">B</span> (unchanged ✓)
+  "user_3" → <span class="v">D</span> <span class="v">(was C, now remapped to D)</span>  ← only keys between B(300) and D(500)
+  "user_4" → <span class="str">A</span> (unchanged ✓)
+
+<span class="cm">Only keys in one segment of the ring moved. With N servers, adding one remaps ~K/N keys.</span>
+<span class="cm">With 100 servers, adding one remaps ~1% of keys. Compare to modulo's ~99%!</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 5 ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Virtual Nodes — Fixing the Imbalance</h2>
+
+  <p>With only N physical servers on the ring, the arc lengths between them can be very uneven — one server might own 50% of the ring while another owns 10%. This creates hot spots.</p>
+
+  <p><strong>Virtual nodes (vnodes)</strong> solve this: instead of placing each server at one point on the ring, place it at many points (e.g., 100–200 virtual nodes per physical server). Each virtual node maps to the same physical server. With 100 vnodes per server and 10 servers, you have 1,000 points on the ring — the arcs become much more uniform.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Virtual nodes — how they improve balance</span></div>
+    <pre><span class="h">Without vnodes (3 servers, 3 ring positions):</span>
+Server A: owns <span class="num">15%</span> of ring     <span class="cm">← underloaded</span>
+Server B: owns <span class="num">55%</span> of ring     <span class="cm">← HOT SPOT!</span>
+Server C: owns <span class="num">30%</span> of ring
+
+<span class="h">With 100 vnodes per server (3 servers, 300 ring positions):</span>
+Server A: owns <span class="num">~33%</span> of ring    <span class="cm">← balanced!</span>
+Server B: owns <span class="num">~34%</span> of ring    <span class="cm">← balanced!</span>
+Server C: owns <span class="num">~33%</span> of ring    <span class="cm">← balanced!</span>
+
+<span class="cm">More vnodes = better balance, but more memory for the ring data structure.</span>
+<span class="cm">Cassandra uses 256 vnodes per node by default.</span>
+<span class="cm">Other large key-value systems use hashed partition spaces too, even if they do not expose a literal client-visible ring.</span></pre>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Why Not Just Use More Real Servers?</div>
+    <p>Virtual nodes also help with <strong>heterogeneous hardware</strong>. A powerful server can have 200 vnodes while a weaker server has 50, automatically giving the powerful server ~4× more traffic. And when a server is removed, its 100 vnodes are scattered across the ring — so its load distributes evenly among all remaining servers, not just its two ring neighbors.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 6 ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Rendezvous Hashing</h2>
+
+  <p>Rendezvous hashing (Thaler &amp; Ravishankar, 1996) is an alternative to consistent hashing. Instead of a ring, it uses a scoring approach:</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Rendezvous hashing algorithm</span></div>
+    <pre><span class="kw">def</span> <span class="fn">pick_server_rendezvous</span>(key, servers):
+    <span class="str">"""For a given key, compute a score for each server.
+    Assign the key to the server with the highest score."""</span>
+    best_server = <span class="num">None</span>
+    best_score  = -<span class="num">1</span>
+    <span class="kw">for</span> server <span class="kw">in</span> servers:
+        score = <span class="fn">hash</span>(f<span class="str">"{key}:{server}"</span>)   <span class="cm"># Hash the (key, server) pair</span>
+        <span class="kw">if</span> score > best_score:
+            best_score = score
+            best_server = server
+    <span class="kw">return</span> best_server
+
+<span class="cm"># When server X is removed:</span>
+<span class="cm"># Only keys whose HIGHEST score was X are affected.</span>
+<span class="cm"># Those keys now go to their SECOND-highest scoring server.</span>
+<span class="cm"># All other keys are unchanged — same property as consistent hashing.</span></pre>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Property</th><th>Consistent Hashing</th><th>Rendezvous Hashing</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Mechanism</strong></td><td>Ring + walk clockwise</td><td>Score all servers, pick highest</td></tr>
+        <tr><td><strong>Lookup time</strong></td><td>O(log N) with sorted ring, O(1) with jump hash</td><td>O(N) — must score every server</td></tr>
+        <tr><td><strong>Keys remapped on change</strong></td><td>~K/N</td><td>~K/N (same!)</td></tr>
+        <tr><td><strong>Implementation complexity</strong></td><td>Higher (ring, vnodes, binary search)</td><td>Lower (loop over servers, compute hash)</td></tr>
+        <tr><td><strong>Works well with</strong></td><td>Large N (hundreds of servers)</td><td>Small N (dozens of servers)</td></tr>
+        <tr><td><strong>Used by</strong></td><td>Cassandra, client-side Memcached sharding, cache routing</td><td>Proxy-cache routing and small-cluster placement</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SECTION 7 ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: Hash Functions in the Terminal</h3>
+  <div class="code-block">
+    <div class="code-header"><span>See hash functions in action (macOS/Linux/WSL — all pre-installed)</span></div>
+    <pre><span class="cm"># MD5 (128-bit = 32 hex chars)</span>
+$ echo -n <span class="str">"hello"</span> | <span class="fn">md5sum</span>        <span class="cm"># Linux</span>
+$ echo -n <span class="str">"hello"</span> | <span class="fn">md5</span>           <span class="cm"># macOS</span>
+<span class="num">5d41402abc4b2a76b9719d911017c592</span>
+
+<span class="cm"># SHA-256 (256-bit = 64 hex chars)</span>
+$ echo -n <span class="str">"hello"</span> | <span class="fn">sha256sum</span>     <span class="cm"># Linux</span>
+$ echo -n <span class="str">"hello"</span> | <span class="fn">shasum -a 256</span> <span class="cm"># macOS</span>
+<span class="num">2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824</span>
+
+<span class="cm"># Avalanche effect: change one letter ("hello" → "hallo")</span>
+$ echo -n <span class="str">"hallo"</span> | <span class="fn">sha256sum</span>
+<span class="num">d3751d33f9cd5049c4af2b462735457e4d3baf130bcbb87f389e349fbaeb20b9</span>
+<span class="cm"># Completely different output! One character changed, every bit of the hash changed.</span>
+
+<span class="cm"># Deterministic: same input always gives same output</span>
+$ echo -n <span class="str">"hello"</span> | <span class="fn">sha256sum</span>
+<span class="num">2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824</span>
+<span class="cm"># Identical to the first run ✓</span></pre>
+  </div>
+
+  <h3>Demo 2: Modulo Hashing — See the Remapping Storm</h3>
+  <div class="code-block">
+    <div class="code-header"><span>modulo_demo.py (macOS/Linux/WSL, Python 3.7+)</span></div>
+    <pre>$ <span class="fn">python3</span> -c "
+<span class="kw">import</span> hashlib
+
+<span class="kw">def</span> <span class="fn">h</span>(key):
+    <span class="kw">return</span> int(hashlib.md5(key.encode()).hexdigest(), 16)
+
+keys = [f'user_{i}' <span class="kw">for</span> i <span class="kw">in</span> range(20)]
+
+<span class="kw">for</span> n_servers <span class="kw">in</span> [4, 5]:
+    mapping = {k: h(k) % n_servers <span class="kw">for</span> k <span class="kw">in</span> keys}
+    print(f'{n_servers} servers:', {k: f'S{v}' <span class="kw">for</span> k, v <span class="kw">in</span> list(mapping.items())[:6]})
+
+<span class="cm"># Count how many keys changed server</span>
+m4 = {k: h(k) % 4 <span class="kw">for</span> k <span class="kw">in</span> keys}
+m5 = {k: h(k) % 5 <span class="kw">for</span> k <span class="kw">in</span> keys}
+changed = sum(1 <span class="kw">for</span> k <span class="kw">in</span> keys <span class="kw">if</span> m4[k] != m5[k])
+print(f'Keys remapped: {changed}/{len(keys)} = {changed/len(keys)*100:.0f}%')
+"
+
+4 servers: {'user_0': 'S3', 'user_1': 'S0', 'user_2': 'S1', 'user_3': 'S2', ...}
+5 servers: {'user_0': 'S3', 'user_1': 'S0', 'user_2': 'S4', 'user_3': 'S3', ...}
+Keys remapped: <span class="num">15</span>/<span class="num">20</span> = <span class="num">75</span>%   <span class="cm">← 3/4 of keys moved! Matches the (N-1)/N formula.</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 8 ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Mini-Project: Consistent Hash Ring</h2>
+
+  <h4>Simple: Feel What Consistent Hashing Does</h4>
+  <div class="code-block">
+    <div class="code-header"><span>consistent_hash.py — build a ring, add/remove servers, measure remapping (macOS/Linux/WSL)</span></div>
+    <pre><span class="kw">import</span> hashlib, bisect
+
+<span class="kw">class</span> <span class="fn">ConsistentHashRing</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, servers, vnodes=<span class="num">150</span>):
+        self.ring = []        <span class="cm"># Sorted list of (hash_value, server_name)</span>
+        self.vnodes = vnodes
+        <span class="kw">for</span> s <span class="kw">in</span> servers:
+            self.add_server(s)
+
+    <span class="kw">def</span> <span class="fn">_hash</span>(self, key):
+        <span class="kw">return</span> int(hashlib.md5(key.encode()).hexdigest(), <span class="num">16</span>)
+
+    <span class="kw">def</span> <span class="fn">add_server</span>(self, server):
+        <span class="kw">for</span> i <span class="kw">in</span> range(self.vnodes):
+            h = self._hash(f<span class="str">"{server}:vnode{i}"</span>)
+            bisect.insort(self.ring, (h, server))
+
+    <span class="kw">def</span> <span class="fn">remove_server</span>(self, server):
+        self.ring = [(h, s) <span class="kw">for</span> h, s <span class="kw">in</span> self.ring <span class="kw">if</span> s != server]
+
+    <span class="kw">def</span> <span class="fn">get_server</span>(self, key):
+        <span class="kw">if not</span> self.ring:
+            <span class="kw">return</span> <span class="num">None</span>
+        h = self._hash(key)
+        idx = bisect.bisect_right(self.ring, (h,))
+        <span class="kw">if</span> idx == len(self.ring):
+            idx = <span class="num">0</span>  <span class="cm"># Wrap around the ring</span>
+        <span class="kw">return</span> self.ring[idx][<span class="num">1</span>]
+
+<span class="cm"># ── Compare modulo vs consistent hashing ──</span>
+servers = [f<span class="str">"server_{i}"</span> <span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">5</span>)]
+keys = [f<span class="str">"key_{i}"</span> <span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">10000</span>)]
+
+ring = ConsistentHashRing(servers, vnodes=<span class="num">150</span>)
+before = {k: ring.get_server(k) <span class="kw">for</span> k <span class="kw">in</span> keys}
+
+<span class="cm"># Add a 6th server</span>
+ring.add_server(<span class="str">"server_5"</span>)
+after = {k: ring.get_server(k) <span class="kw">for</span> k <span class="kw">in</span> keys}
+
+remapped = sum(<span class="num">1</span> <span class="kw">for</span> k <span class="kw">in</span> keys <span class="kw">if</span> before[k] != after[k])
+print(f<span class="str">"Consistent hashing: {remapped}/{len(keys)} = {remapped/len(keys)*100:.1f}% remapped"</span>)
+print(f<span class="str">"Modulo hashing would remap: ~{(5-1)/5*100:.0f}% = ~{int(len(keys)*4/5)} keys"</span>)
+print(f<span class="str">"Consistent hashing expected: ~{100/6:.1f}% = ~{int(len(keys)/6)} keys"</span>)</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Expected output</span></div>
+    <pre>Consistent hashing: <span class="num">1637</span>/<span class="num">10000</span> = <span class="num">16.4</span>% remapped
+Modulo hashing would remap: ~<span class="num">80</span>% = ~<span class="num">8000</span> keys
+Consistent hashing expected: ~<span class="num">16.7</span>% = ~<span class="num">1667</span> keys
+
+<span class="cm"># ~16% vs ~80% — consistent hashing remaps 5× fewer keys.</span>
+<span class="cm"># With 100 servers, it would be ~1% vs ~99%. The gap grows with scale.</span></pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Experiments to Try</div>
+    <p><strong>1.</strong> Change vnodes from 150 to 1 — watch the load distribution become wildly uneven (some servers get 40%, others get 5%).<br>
+    <strong>2.</strong> Remove a server instead of adding one — verify that only ~K/N keys remap.<br>
+    <strong>3.</strong> Print the per-server key count to see how vnodes affect balance.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 9 ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production Example 1: DynamoDB / Cassandra</h2>
+
+  <p>Apache Cassandra uses a token ring directly, while DynamoDB uses a hashed partition-key space to route items into partitions. Both rely on hashing to keep key placement deterministic as capacity changes, but Cassandra exposes the ring model more explicitly.</p>
+
+  <h3>How DynamoDB Uses Hash-Based Partitioning</h3>
+  <p><strong>Partition key hashing:</strong> DynamoDB hashes the partition key, then uses the hashed value to route the item into a physical partition range. Clients do not manage a ring; the service owns the partition map internally.</p>
+  <p><strong>Automatic splitting:</strong> When a partition grows too large in size or throughput, DynamoDB splits the partition and reassigns part of that hash range to new storage. The point is the same as consistent hashing: capacity can grow without a global reshuffle of every item.</p>
+  <p><strong>Replication:</strong> Each partition is synchronously replicated across Availability Zones. The key idea here is not clockwise replica placement on a public ring, but deterministic mapping from key hash to partition plus replicated storage behind that partition.</p>
+
+  <h3>How Cassandra Uses Consistent Hashing</h3>
+  <p><strong>Token ring:</strong> Cassandra hashes partition keys using MurmurHash3 (by default) to a 64-bit token space. Each node owns a set of token ranges. Cassandra uses 256 vnodes per node by default to ensure even data distribution.</p>
+  <p><strong>Replication factor:</strong> Data is replicated to the next RF-1 nodes clockwise on the ring (where RF is the configurable replication factor, typically 3).</p>
+
+  <div class="callout orange">
+    <div class="callout-label">Key Lesson</div>
+    <p>The shared systems lesson is deterministic key placement under membership change. Cassandra implements that as an explicit token ring with vnodes; DynamoDB implements it as a managed partition map over hashed key ranges. In both cases, the design goal is the same: grow capacity without forcing a full re-placement of the dataset.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 10 ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production Example 2: Google Maglev Hashing</h2>
+
+  <p>Google's Maglev load balancer uses a custom variant of consistent hashing called <strong>Maglev hashing</strong>. <a href="#ref2" class="ref">[2]</a></p>
+
+  <p>Standard consistent hashing with virtual nodes can have uneven distribution — some servers may get 10-20% more traffic than others. Maglev hashing produces a <strong>lookup table</strong> where every entry maps to exactly one backend, and the table is generated so that each backend gets an exactly equal share of entries. When a backend is removed, only its entries are reassigned — minimizing disruption while guaranteeing perfectly even distribution.</p>
+
+  <div class="callout blue">
+    <div class="callout-label">Why Maglev Needed Custom Hashing</div>
+    <p>At Google's scale, even a 10% load imbalance across servers is a serious problem — it means some servers hit their capacity ceiling while others have headroom, reducing overall cluster efficiency. Maglev hashing achieves near-perfect balance (within 1% of ideal) while maintaining the minimal-disruption property of consistent hashing. The tradeoff: the lookup table must be regenerated when the backend set changes, which takes O(N × M) time (N=backends, M=table size).</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 11 ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Edge Cases &amp; Gotchas</h2>
+
+  <h3>1. Hot Partition Key</h3>
+  <p>Even with perfect consistent hashing, if one key is accessed far more than others (a celebrity's profile, a viral post), all traffic for that key goes to one server — creating a hot spot that no hash function can fix. Fix: split the hot key by appending a random suffix (e.g., <code class="inline">user_celeb#0</code> through <code class="inline">user_celeb#9</code>) and scatter-gather reads across all shards.</p>
+
+  <h3>2. Hash Collisions in Practice</h3>
+  <p>With a 32-bit hash and 100K keys, the probability of at least one collision is ~69% (by the birthday paradox: 1 - e^(-n²/2m) where n=100K, m=2³²). For load balancing this is fine — collisions just mean two keys go to the same server. For deduplication or security, use 128-bit or 256-bit hashes where collisions are astronomically unlikely.</p>
+
+  <h3>3. Non-Uniform Hash Functions</h3>
+  <p>Some hash functions cluster outputs in certain ranges. If you're using a hash function that produces non-uniform output (e.g., Java's <code class="inline">String.hashCode()</code> has known clustering for short strings), your ring will have hot spots. Fix: use a well-tested hash function like MurmurHash3 or xxHash, or SHA-256 if you need cryptographic quality.</p>
+
+  <h3>4. Ring Membership Propagation Delay</h3>
+  <p>When a server joins or leaves the ring, all clients (LBs, application servers) must update their view of the ring. If one client updates before another, they'll disagree on key assignments, causing inconsistent reads. Fix: use a consensus service (ZooKeeper, etcd) to coordinate ring membership, and ensure all clients converge on the same ring state before serving traffic.</p>
+
+  <h3>5. Cascading Failures on Ring</h3>
+  <p>If Server A on the ring fails, all of A's keys go to the next server clockwise (Server B). If Server B was already near capacity, this extra load can cause B to fail too — and B's keys cascade to Server C, and so on. Virtual nodes mitigate this (A's load distributes across all servers, not just B), but it's still a risk. Fix: N+1 capacity planning so each server can absorb ~1/N of another server's load.</p>
+</section>
+
+<!-- ============ WHAT IF ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <div class="diagram-wrap" style="padding:24px;">
+    <div style="font-family:var(--sans);">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px;">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin-bottom:12px;font-weight:600;">Modulo vs Consistent — Keys Remapped</div>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Current servers: <strong id="v-cur" style="color:var(--accent);">5</strong>
+            <br><input type="range" id="r-cur" min="2" max="100" value="5" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Add/remove servers: <strong id="v-delta" style="color:var(--accent);">+1</strong>
+            <br><input type="range" id="r-delta" min="-3" max="10" value="1" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+          <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-size:14px;">
+            Total keys (K): <strong id="v-keys" style="color:var(--accent);">1,000,000</strong>
+            <br><input type="range" id="r-keys" min="1000" max="10000000" value="1000000" step="1000" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+          </label>
+        </div>
+        <div style="background:var(--surface-2);border-radius:10px;padding:20px;border:1px solid var(--border);">
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--orange);margin-bottom:12px;font-weight:600;">Remapping Impact</div>
+          <div id="h-modulo" style="font-family:var(--mono);font-size:14px;color:var(--f87171);margin-bottom:8px;"></div>
+          <div id="h-consistent" style="font-family:var(--mono);font-size:14px;color:var(--accent);margin-bottom:8px;"></div>
+          <div id="h-ratio" style="font-family:var(--mono);font-size:14px;color:var(--text-dim);margin-bottom:8px;"></div>
+          <div id="h-verdict" style="font-family:var(--mono);font-size:15px;font-weight:600;margin-top:10px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">More virtual nodes</div>
+      <p><strong>Improves:</strong> Even load distribution (less variance between servers).<br>
+      <strong>Costs:</strong> Larger ring data structure in memory, slightly slower lookups.<br>
+      <strong>When worth it:</strong> Almost always. 100-200 vnodes per server is the standard. Below 50 vnodes, distribution can be notably uneven.</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">Consistent hashing vs rendezvous hashing</div>
+      <p><strong>Consistent hashing:</strong> O(log N) lookup, needs ring + vnodes. Best for large N (hundreds of servers).<br>
+      <strong>Rendezvous:</strong> O(N) lookup, trivial to implement. Best for small N (under ~50 servers).<br>
+      <strong>Both:</strong> ~K/N keys remapped on server change. Choose based on cluster size.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">Faster hash function</div>
+      <p><strong>Improves:</strong> Per-request overhead. xxHash at 10+ GB/s vs SHA-256 at ~200 MB/s — 50× faster.<br>
+      <strong>Costs:</strong> No cryptographic properties. Fine for routing, bad for security.<br>
+      <strong>When worth it:</strong> Always for load balancing and caching. Only use SHA-256 when you need collision resistance or integrity.</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">Bounded-load consistent hashing</div>
+      <p><strong>Improves:</strong> Hard cap on maximum server load (e.g., no server gets &gt;125% of average).<br>
+      <strong>Costs:</strong> Some keys may be routed to a non-nearest server on the ring (violates pure consistent hashing).<br>
+      <strong>When worth it:</strong> When load variance is unacceptable. Used by Google (Vimeo's implementation is open-source).</p>
+    </div>
+  </div>
+
+  <h3>Toy Simulation: Modulo vs Consistent vs Rendezvous</h3>
+  <div class="code-block">
+    <div class="code-header"><span>hash_compare.py — run all three, measure remapping (macOS/Linux/WSL)</span></div>
+    <pre><span class="kw">import</span> hashlib, bisect
+
+<span class="kw">def</span> <span class="fn">md5int</span>(s):
+    <span class="kw">return</span> int(hashlib.md5(s.encode()).hexdigest(), <span class="num">16</span>)
+
+<span class="cm"># ── Modulo hashing ──</span>
+<span class="kw">def</span> <span class="fn">modulo_assign</span>(keys, n):
+    <span class="kw">return</span> {k: md5int(k) % n <span class="kw">for</span> k <span class="kw">in</span> keys}
+
+<span class="cm"># ── Consistent hashing (with vnodes) ──</span>
+<span class="kw">def</span> <span class="fn">ch_assign</span>(keys, servers, vnodes=<span class="num">150</span>):
+    ring = sorted((md5int(f<span class="str">"{s}:v{i}"</span>), s) <span class="kw">for</span> s <span class="kw">in</span> servers <span class="kw">for</span> i <span class="kw">in</span> range(vnodes))
+    hashes = [h <span class="kw">for</span> h, _ <span class="kw">in</span> ring]
+    result = {}
+    <span class="kw">for</span> k <span class="kw">in</span> keys:
+        h = md5int(k)
+        idx = bisect.bisect_right(hashes, h) % len(ring)
+        result[k] = ring[idx][<span class="num">1</span>]
+    <span class="kw">return</span> result
+
+<span class="cm"># ── Rendezvous hashing ──</span>
+<span class="kw">def</span> <span class="fn">rv_assign</span>(keys, servers):
+    result = {}
+    <span class="kw">for</span> k <span class="kw">in</span> keys:
+        result[k] = max(servers, key=<span class="kw">lambda</span> s: md5int(f<span class="str">"{k}:{s}"</span>))
+    <span class="kw">return</span> result
+
+<span class="cm"># ── Run comparison ──</span>
+N = <span class="num">5</span>
+keys = [f<span class="str">"key_{i}"</span> <span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">10000</span>)]
+servers_before = [f<span class="str">"s{i}"</span> <span class="kw">for</span> i <span class="kw">in</span> range(N)]
+servers_after  = servers_before + [<span class="str">"s5"</span>]
+
+print(f<span class="str">"Adding 1 server to a {N}-server cluster (10,000 keys)\n"</span>)
+<span class="kw">for</span> name, fn <span class="kw">in</span> [(<span class="str">"Modulo"</span>, <span class="kw">lambda</span> k,s: modulo_assign(k, len(s))),
+                  (<span class="str">"Consistent (150 vnodes)"</span>, <span class="kw">lambda</span> k,s: ch_assign(k, s)),
+                  (<span class="str">"Rendezvous"</span>, rv_assign)]:
+    before = fn(keys, servers_before)
+    after  = fn(keys, servers_after)
+    changed = sum(<span class="num">1</span> <span class="kw">for</span> k <span class="kw">in</span> keys <span class="kw">if</span> before[k] != after[k])
+    print(f<span class="str">"  {name:&lt;30} remapped: {changed:&gt;5} ({changed/100:.1f}%)"</span>)
+
+print(f<span class="str">"\nIdeal (K/N):                    remapped: {10000//6:&gt;5} ({100/6:.1f}%)"</span>)</pre>
+  </div>
+  <div class="code-block">
+    <div class="code-header"><span>Expected output</span></div>
+    <pre>Adding 1 server to a 5-server cluster (10,000 keys)
+
+  Modulo                         remapped: <span class="num">7997</span> (<span class="num">80.0</span>%)
+  Consistent (150 vnodes)        remapped: <span class="num">1652</span> (<span class="num">16.5</span>%)
+  Rendezvous                     remapped: <span class="num">1683</span> (<span class="num">16.8</span>%)
+
+Ideal (K/N):                    remapped:  <span class="num">1666</span> (<span class="num">16.7</span>%)</pre>
+  </div>
+</section>
+
+<!-- ============ INTERVIEW Q&A ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Interview Questions &amp; Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What is consistent hashing and why is it needed?</div>
+    <div class="qa-a">
+      <p>Consistent hashing maps keys and servers onto a circular hash space (ring). Each key is assigned to the nearest server clockwise on the ring. When a server is added or removed, only ~K/N keys are remapped (where K=total keys, N=servers). Without it, modulo hashing (<code>hash % N</code>) remaps ~(N-1)/N keys on any server change — devastating for caches and partitioned databases. Consistent hashing was invented by Karger et al. (MIT, 1997) for web caching and is now used by DynamoDB, Cassandra, Memcached, Akamai, and virtually every distributed system that partitions data by key.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: What are virtual nodes and why do we need them?</div>
+    <div class="qa-a">
+      <p>With only N physical servers on the ring, the arc lengths between them can be very uneven — one server might own 50% of the key space. Virtual nodes solve this: each physical server is placed at 100-200 positions on the ring (each a "virtual node"). With 5 servers × 150 vnodes = 750 ring positions, the distribution becomes much more uniform. Vnodes also help with heterogeneous hardware (powerful servers get more vnodes → more traffic) and graceful failover (a removed server's load distributes across all survivors, not just one neighbor). Cassandra defaults to 256 vnodes per node.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: Compare consistent hashing vs rendezvous hashing.</div>
+    <div class="qa-a">
+      <p>Both achieve the same goal: ~K/N keys remapped on server changes. <strong>Consistent hashing</strong> uses a ring with O(log N) lookup (binary search on sorted ring), needs virtual nodes for even distribution, and scales well to hundreds of servers. <strong>Rendezvous hashing</strong> scores every server per key, O(N) per lookup, trivially simple to implement (a loop), naturally even distribution (no vnodes needed), but impractical for very large N. Pick consistent hashing for large clusters (DynamoDB, Cassandra). Pick rendezvous hashing for small clusters (under ~50 servers) where simplicity matters.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: What happens during a hash collision in distributed hashing?</div>
+    <div class="qa-a">
+      <p>In the context of load balancing / data partitioning, a "collision" means two different keys hash to the same position on the ring — they simply go to the same server. This is expected and harmless for routing purposes. For hash tables, collisions are handled via chaining (linked lists at each bucket) or open addressing (probing the next empty slot). For <strong>security</strong> contexts (password hashing, data integrity), collisions are dangerous — if an attacker can find two inputs with the same hash (collision attack), they can forge data. SHA-1 collisions were demonstrated in 2017 (Google/CWI SHAttered attack), which is why SHA-256 is now the minimum standard.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: How would you design a distributed cache using consistent hashing?</div>
+    <div class="qa-a">
+      <p><strong>Architecture:</strong> N cache servers (Redis/Memcached) on a consistent hash ring with 150+ vnodes each. Application servers have a client library that maintains the ring and routes <code>GET(key)</code> / <code>SET(key, value)</code> to the correct cache server. <strong>Adding a server:</strong> New server joins ring, absorbs ~K/N keys from neighbors. Those keys are cache misses on first access (cold start) — the DB handles the extra load briefly, then the new server warms up. <strong>Removing a server:</strong> Its keys shift to the next clockwise server — cache misses for those keys until repopulated. <strong>Replication:</strong> Optionally replicate each key to the next 2 servers on the ring for fault tolerance. <strong>Hot keys:</strong> Cache locally in app memory (L1) or replicate across multiple ring positions.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: A distributed cache uses consistent hashing. After adding a new server, users report seeing stale data. Why?</div>
+    <div class="qa-a">
+      <p>When the new server joins, ~K/N keys are reassigned from their old server to the new one. The new server's cache is empty for those keys. If the old server is still alive and hasn't evicted those keys, you now have <strong>two servers with potentially different versions of the same data</strong> — the old server has a stale cached copy, and the new server has nothing (will fetch fresh from DB). But if the app client's ring view is slightly out of sync (propagation delay), some clients may still route those keys to the old server, getting stale data, while others route to the new server, getting fresh data. <strong>Fix:</strong> (1) Invalidate affected keys on the old server when ring membership changes. (2) Use a consensus service (ZooKeeper/etcd) to ensure all clients see the same ring state atomically. (3) TTL as a safety net — stale data expires eventually.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CHEAT SHEET ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Hashing converts arbitrary data into fixed-size numbers. Used for hash tables, caching, load balancing, and data partitioning.<br>
+    <strong>2.</strong> Modulo hashing (<code>hash(key) % N</code>) remaps ~(N-1)/N keys when N changes. Catastrophic for distributed caches.<br>
+    <strong>3.</strong> Consistent hashing maps keys and servers to a ring. Adding/removing a server remaps only ~K/N keys.<br>
+    <strong>4.</strong> Virtual nodes (100-200 per server) fix the uneven distribution problem on the ring. Cassandra defaults to 256.<br>
+    <strong>5.</strong> Rendezvous hashing: score each server per key, pick highest. Same K/N remapping, O(N) lookup. Simple for small clusters.<br>
+    <strong>6.</strong> Use non-cryptographic hashes (MurmurHash3, xxHash) for routing — they're 10-50× faster than SHA-256.<br>
+    <strong>7.</strong> Use SHA-256 for security/integrity. SHA-1 is broken (collision demonstrated 2017). MD5 is broken (collision demonstrated 2004).<br>
+    <strong>8.</strong> Hot partition keys can't be fixed by better hashing — they need key splitting or scatter-gather reads.<br>
+    <strong>9.</strong> Cassandra, Memcached-style client sharding, cache-routing systems, and Maglev-style load balancers all rely on deterministic hash-based placement at production scale.<br>
+    <strong>10.</strong> The birthday paradox: with a 32-bit hash, expect a collision after ~65K entries. Use 64-bit+ for large key spaces.</p>
+  </div>
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — The Consistent Hash Ring</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <!-- Ring -->
+      <circle cx="300" cy="200" r="160" stroke="#3d4663" stroke-width="2" fill="none"/>
+      <!-- Servers on ring (yellow markers) -->
+      <circle cx="440" cy="120" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
+      <text x="458" y="118" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">A</text>
+      <circle cx="410" cy="320" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
+      <text x="428" y="325" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">B</text>
+      <circle cx="180" cy="310" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
+      <text x="155" y="320" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">C</text>
+      <circle cx="160" cy="140" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
+      <text x="133" y="140" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">D</text>
+
+      <!-- Keys on ring (red markers) -->
+      <circle cx="350" cy="50" r="5" fill="#f87171"/>
+      <text x="362" y="48" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k1</text>
+      <circle cx="460" cy="210" r="5" fill="#f87171"/>
+      <text x="472" y="214" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k2</text>
+      <circle cx="250" cy="355" r="5" fill="#f87171"/>
+      <text x="258" y="368" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k3</text>
+      <circle cx="140" cy="220" r="5" fill="#f87171"/>
+      <text x="115" y="224" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k4</text>
+
+      <!-- Clockwise arrows from keys to servers -->
+      <path d="M352 55 Q 400 60 435 115" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
+      <path d="M458 215 Q 430 280 415 315" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
+      <path d="M248 352 Q 200 340 185 315" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
+      <path d="M142 216 Q 145 175 155 145" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
+
+      <!-- Labels -->
+      <text x="390" y="75" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k1 &#x2192; A</text>
+      <text x="445" y="275" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k2 &#x2192; B</text>
+      <text x="155" y="348" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k3 &#x2192; C</text>
+      <text x="102" y="186" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k4 &#x2192; D</text>
+
+      <!-- Annotation box -->
+      <rect x="520" y="30" width="220" height="200" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
+      <text x="540" y="55" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7" font-weight="600">HOW IT WORKS</text>
+      <text x="540" y="80" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">1. Hash servers to ring</text>
+      <text x="540" y="100" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">2. Hash keys to ring</text>
+      <text x="540" y="120" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">3. Walk clockwise to</text>
+      <text x="540" y="138" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">   nearest server</text>
+      <text x="540" y="166" font-family="IBM Plex Mono,monospace" font-size="10" fill="#fb923c" font-weight="600">ADD SERVER E:</text>
+      <text x="540" y="186" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">Only keys between E's</text>
+      <text x="540" y="204" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">neighbors remap (~K/N)</text>
+
+      <!-- Pressure box -->
+      <rect x="520" y="260" width="220" height="130" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
+      <text x="540" y="285" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171" font-weight="600">FAILURE MODE</text>
+      <text x="540" y="310" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">&#x25B8; Without vnodes: arcs</text>
+      <text x="540" y="328" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">  can be wildly uneven</text>
+      <text x="540" y="352" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">&#x25B8; Hot key: one key gets</text>
+      <text x="540" y="370" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">  millions of requests</text>
+      <text x="540" y="388" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">  No hash function can fix this</text>
+
+      <defs>
+        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
+      </defs>
+    </svg>
+    <div class="diagram-caption">Consistent hash ring: 4 servers (yellow), 4 keys (red), each key walks clockwise to its server</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Consistent hashing turns the "add a server, remap everything" problem into "add a server, remap 1/N of the data."</strong> This single property is what makes distributed caches, partitioned databases, and scalable load balancers possible. Without it, every scaling event would trigger a catastrophic cache miss storm. The ring is the most important data structure in distributed systems design.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References &amp; Further Reading</h2>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Karger et al. — "Consistent Hashing and Random Trees" (STOC 1997)</div>
+    <p><strong>David Karger, Eric Lehman, Frank Thomson Leighton, Rina Panigrahy, Matthew Levine, Daniel Lewin.</strong> MIT. ACM STOC, 1997, pp. 654-663.<br>
+    <a href="https://www.cs.princeton.edu/courses/archive/fall09/cos518/papers/chash.pdf" style="color:var(--accent);" target="_blank">https://www.cs.princeton.edu/courses/archive/fall09/cos518/papers/chash.pdf</a></p>
+    <p>&#x2022; Defines a <strong>consistent hash function</strong> as one where the fraction of items remapped when a bucket is added/removed is at most O(1/N), proven via a monotonicity property: if a key maps to cache C in a set S, it still maps to C in any superset of S that contains C.</p>
+    <p>&#x2022; Constructs the ring by hashing both objects and caches to points in [0, 1) using a universal hash family, assigning each object to the closest cache clockwise. With K objects and N caches, each cache holds at most O(K/N × log N) objects with high probability.</p>
+    <p>&#x2022; Introduces <strong>random trees</strong> as an alternative to the ring — objects traverse a tree of caches, querying each level. The tree ensures O(log N) cache probes per request while bounding per-cache load to O(C/N × log N) where C is the total request volume.</p>
+    <p>&#x2022; Proves a <strong>balance bound</strong>: with N caches and O(N log N) virtual replicas per cache on the ring, the maximum load per cache is within a (1 + ε) factor of the average, for any ε &gt; 0. Without virtual replicas, the max/min ratio can be O(N).</p>
+    <p>&#x2022; The adversarial model assumes an adversary controls which pages are requested but cannot see the hash function's random choices — the bounds hold against worst-case request sequences, not just average-case.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Eisenbud et al. — "Maglev: A Fast and Reliable Software Network Load Balancer" (NSDI 2016)</div>
+    <p><strong>Danielle E. Eisenbud, Cheng Yi, et al.</strong> Google Inc. 13th USENIX NSDI, 2016.<br>
+    <a href="https://research.google.com/pubs/archive/44824.pdf" style="color:var(--blue);" target="_blank">https://research.google.com/pubs/archive/44824.pdf</a></p>
+    <p>&#x2022; <strong>Maglev hashing</strong> generates a fixed-size lookup table (default M=65537, a prime) where each entry maps to exactly one backend. The table is built by having each backend generate a permutation of [0, M-1], then backends take turns filling empty slots according to their permutation — ensuring every backend gets exactly M/N entries (perfect balance).</p>
+    <p>&#x2022; On backend removal, only the removed backend's M/N entries are reassigned. The disruption is bounded: at most M/N entries change, matching consistent hashing's K/N guarantee but with zero load variance (every backend gets exactly equal slots).</p>
+    <p>&#x2022; Maglev bypasses the Linux kernel network stack entirely — packets are read directly from the NIC into userspace via a custom ring buffer. A single 8-core machine achieves <strong>12 million packets per second</strong> in benchmarks, saturating a 10Gbps link with small (100-byte) packets.</p>
+    <p>&#x2022; Connection tracking uses a per-packet 5-tuple hash (src IP, dst IP, src port, dst port, protocol) to maintain affinity. If consistent hashing disagrees with the connection table (e.g., after a backend change), the connection table takes precedence to avoid breaking in-flight TCP sessions.</p>
+    <p>&#x2022; Uses Direct Server Return (DSR): the backend sends response packets directly to the router, bypassing Maglev on the return path. This means Maglev only handles the smaller inbound packets, not the larger responses — critical for capacity since responses are typically 10× larger than requests.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Thaler &amp; Ravishankar — "Using Name-Based Mappings to Increase Hit Rates" (IEEE/ACM ToN 1998)</div>
+    <p><strong>David G. Thaler, Chinya V. Ravishankar.</strong> IEEE/ACM Transactions on Networking, 6(1):1-14, 1998.<br>
+    <a href="https://doi.org/10.1109/90.650137" style="color:var(--orange);" target="_blank">https://doi.org/10.1109/90.650137</a></p>
+    <p>&#x2022; The assignment function <code class="inline">server(key) = argmax_s { hash(key, s) }</code> is proven to have the <strong>minimal disruption property</strong>: when server S is removed, only keys whose maximum-weight server was S are reassigned — they fall to their second-highest-weight server deterministically.</p>
+    <p>&#x2022; Unlike consistent hashing, rendezvous hashing achieves uniform distribution <strong>without virtual nodes</strong> — each server is scored once per key, and since the hash function is random, each server wins with equal probability 1/N.</p>
+    <p>&#x2022; The paper compares HRW to modular hashing and tree-based approaches for proxy cache routing, showing that HRW achieves 10-30% higher cache hit rates under server churn because fewer cache entries are invalidated during membership changes.</p>
+    <p>&#x2022; The O(N) per-key computation cost is explicitly acknowledged as the tradeoff — acceptable for N in the dozens (proxy clusters) but impractical for N in the thousands. The paper suggests caching the assignment mapping to amortize this cost for frequently accessed keys.</p>
+    <p>&#x2022; The hash function used must be <strong>jointly uniform</strong> over (key, server) pairs — the paper specifies that independent universal hashing suffices, and provides specific constructions using bitwise operations and primes that avoid expensive cryptographic hashes.</p>
+  </div>
+</section>
+
+<footer class="site-footer">System Design Fundamentals</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script>
+// ── Hashing Comparison Simulator ──
+(function(){
+  const rCur=document.getElementById('r-cur'),rDelta=document.getElementById('r-delta'),rKeys=document.getElementById('r-keys');
+  const vCur=document.getElementById('v-cur'),vDelta=document.getElementById('v-delta'),vKeys=document.getElementById('v-keys');
+  function calc(){
+    const cur=parseInt(rCur.value),delta=parseInt(rDelta.value),K=parseInt(rKeys.value);
+    const newN=Math.max(1,cur+delta);
+    vCur.textContent=cur;
+    vDelta.textContent=delta>=0?'+'+delta:delta;
+    vKeys.textContent=K.toLocaleString();
+
+    // Modulo: fraction remapped ≈ 1 - min(cur,newN)/max(cur,newN) (approximation)
+    // More precisely: for adding servers, ~(N-1)/N of keys move. Simplified:
+    const moduloPct=delta===0?0:Math.round((1-Math.min(cur,newN)/Math.max(cur,newN))*100);
+    const moduloKeys=Math.round(K*moduloPct/100);
+
+    // Consistent: ~K/max(cur,newN) per server changed × |delta| servers
+    const absDelta=Math.abs(delta);
+    const consistentPct=delta===0?0:Math.min(100,Math.round(absDelta/newN*100));
+    const consistentKeys=Math.round(K*consistentPct/100);
+
+    document.getElementById('h-modulo').innerHTML=`<span style="color:#f87171">Modulo:</span> ~${moduloPct}% remapped (~${moduloKeys.toLocaleString()} keys)`;
+    document.getElementById('h-consistent').innerHTML=`<span style="color:#6ee7b7">Consistent:</span> ~${consistentPct}% remapped (~${consistentKeys.toLocaleString()} keys)`;
+    const ratio=moduloPct>0&&consistentPct>0?Math.round(moduloPct/consistentPct):0;
+    document.getElementById('h-ratio').textContent=ratio>0?`Consistent hashing is ~${ratio}× better`:'';
+    const vEl=document.getElementById('h-verdict');
+    if(delta===0){vEl.textContent='No change';vEl.style.color='#5c6580';}
+    else if(moduloPct>50){vEl.textContent='Modulo would be catastrophic here';vEl.style.color='#f87171';}
+    else{vEl.textContent='Consistent hashing keeps disruption minimal';vEl.style.color='#6ee7b7';}
+  }
+  rCur.addEventListener('input',calc);rDelta.addEventListener('input',calc);rKeys.addEventListener('input',calc);
+  calc();
+})();
+</script>
+</body>
+</html>

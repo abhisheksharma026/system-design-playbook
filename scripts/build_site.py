@@ -59,8 +59,16 @@ GRAPH_LAYOUT = {
         "y": 430,
         "cluster": "Data",
         "tone": "data",
-        "deps": ["storage", "latency-and-throughput"],
+        "deps": ["storage", "latency-and-throughput", "hashing"],
         "orbit_rotation": 24,
+    },
+    "hashing": {
+        "x": 960,
+        "y": 820,
+        "cluster": "Foundations",
+        "tone": "foundation",
+        "deps": ["client-server-model"],
+        "orbit_rotation": 10,
     },
     "proxies": {
         "x": 1040,
@@ -75,7 +83,7 @@ GRAPH_LAYOUT = {
         "y": 430,
         "cluster": "Reliability",
         "tone": "reliability",
-        "deps": ["proxies", "latency-and-throughput"],
+        "deps": ["proxies", "latency-and-throughput", "hashing"],
         "orbit_rotation": 22,
     },
     "availability": {
