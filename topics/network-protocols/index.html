@@ -1111,91 +1111,86 @@ print(<span class="str">f"{'='*50}\n"</span>)</pre>
     <div class="callout-label">[1] RFC 791 — Internet Protocol (1981)</div>
     <p><strong>Postel, J.</strong> "Internet Protocol — DARPA Internet Program Protocol Specification." IETF, September 1981.<br>
     <a href="https://datatracker.ietf.org/doc/html/rfc791" style="color:var(--accent);" target="_blank">https://datatracker.ietf.org/doc/html/rfc791</a></p>
-    <p>• The foundational specification for IPv4 — defines the packet format (header fields, fragmentation, TTL, checksums) that every device on the internet uses today.</p>
-    <p>• Establishes IP as <strong>deliberately unreliable and connectionless</strong> — routing datagrams from source to destination with no guarantees on delivery, ordering, or duplication.</p>
-    <p>• Defines the 20-byte minimum header with source/destination IP addresses, TTL, protocol identifier, and header checksum (not payload checksum — a critical detail).</p>
-    <p>• Specifies <strong>fragmentation and reassembly</strong> when packets exceed a network link's MTU, using the Identification, Flags, and Fragment Offset fields.</p>
-    <p>• Written by Jon Postel at USC's Information Sciences Institute — a document that has governed how 5+ billion devices communicate for over 40 years.</p>
+    <p>• Defines the IPv4 datagram header, including version, IHL, total length, identification, flags, fragment offset, TTL, protocol number, header checksum, and source/destination addresses.</p>
+    <p>• Makes IP a <strong>best-effort, connectionless</strong> service: delivery, ordering, duplicate suppression, and retransmission are explicitly outside the protocol contract.</p>
+    <p>• Specifies fragmentation semantics through the MF/DF flags and fragment offsets, which is why MTU mismatches and PMTU failures show up as transport problems later.</p>
+    <p>• The protocol field is the demultiplexing hook that hands payloads upward to TCP, UDP, ICMP, or another upper-layer protocol.</p>
   </div>
 
   <div id="ref2" class="callout blue">
     <div class="callout-label">[2] RFC 793 / RFC 9293 — Transmission Control Protocol</div>
     <p><strong>Postel, J.</strong> "Transmission Control Protocol." IETF, September 1981. Obsoleted by <strong>Eddy, W.</strong> RFC 9293, August 2022.<br>
     <a href="https://datatracker.ietf.org/doc/html/rfc9293" style="color:var(--blue);" target="_blank">https://datatracker.ietf.org/doc/html/rfc9293</a> (modern consolidated version)</p>
-    <p>• Defines reliable, ordered, byte-stream delivery over unreliable IP — the 3-way handshake, sequence numbers, ACKs, retransmission, and flow control via sliding window.</p>
-    <p>• The TCP header's 32-bit sequence numbers enable <strong>byte-level tracking</strong> of a stream — the receiver knows exactly which bytes are missing and can reassemble out-of-order segments.</p>
-    <p>• RFC 9293 (2022) consolidates 40+ years of TCP extensions into a single spec, incorporating congestion control (from RFC 5681), SACK (RFC 2018), timestamps, and modern security fixes.</p>
-    <p>• Introduces the concept of <strong>sockets</strong> (IP:port pairs) as connection endpoints — the programming abstraction that every server framework is built on.</p>
-    <p>• Defines TCP flags (SYN, ACK, FIN, RST, PSH, URG) that appear in every <code class="inline">tcpdump</code> output — understanding these is essential for production debugging.</p>
+    <p>• Specifies TCP’s stateful connection machine, three-way handshake, teardown paths, byte-sequence space, acknowledgments, retransmission timers, and advertised-window flow control.</p>
+    <p>• Sequence numbers are over bytes, not packets, which is why retransmission and out-of-order repair can work on arbitrary segment boundaries.</p>
+    <p>• RFC 9293 consolidates the modern TCP baseline and references later extensions such as SACK, timestamps, and updated robustness/security behavior.</p>
+    <p>• The protocol is the canonical example of endpoint-managed reliability layered above an unreliable network substrate.</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] RFC 9000 — QUIC: A UDP-Based Multiplexed and Secure Transport (2021)</div>
     <p><strong>Iyengar, J. (Fastly) & Thomson, M. (Mozilla).</strong> IETF Standards Track, May 2021.<br>
     <a href="https://datatracker.ietf.org/doc/html/rfc9000" style="color:var(--orange);" target="_blank">https://datatracker.ietf.org/doc/html/rfc9000</a></p>
-    <p>• Defines QUIC — the transport protocol that replaces TCP for HTTP/3. Built on UDP, it provides <strong>multiplexed streams with independent loss recovery</strong>, eliminating TCP's head-of-line blocking.</p>
-    <p>• Integrates <strong>TLS 1.3 directly into the transport</strong>, reducing connection setup to 1 RTT (or 0-RTT for resumed sessions) compared to TCP+TLS's 2-3 RTTs.</p>
-    <p>• Introduces <strong>Connection IDs</strong> that survive network changes — a QUIC connection persists when you switch from WiFi to cellular, unlike TCP which is bound to IP:port.</p>
-    <p>• QUIC began as an experimental Google transport before the IETF standardized interoperable QUIC v1. Modern HTTP/3 uses QUIC as its transport substrate, but the transport and the HTTP mapping are specified separately.</p>
-    <p>• Designed to resist <strong>protocol ossification</strong> — encrypted headers and greased fields prevent middleboxes from making assumptions about the protocol, enabling future evolution.</p>
+    <p>• Defines QUIC as a UDP-based transport with <strong>multiple independent streams</strong>, per-stream flow control, and packet-level loss recovery decoupled from stream delivery.</p>
+    <p>• Integrates TLS 1.3 handshake state into the transport so encryption keys, transport parameters, and connection establishment are negotiated as one protocol.</p>
+    <p>• Uses opaque <strong>Connection IDs</strong> to support migration across address changes and to avoid binding connection identity to the current 4-tuple.</p>
+    <p>• Encrypts most transport metadata, which both reduces ossification and changes how debugging, observability, and middlebox interaction work compared with TCP.</p>
   </div>
 
   <div id="ref4" class="callout purple">
     <div class="callout-label">[4] Saltzer, Reed & Clark — "End-to-End Arguments in System Design" (1984)</div>
     <p><strong>J.H. Saltzer, D.P. Reed, D.D. Clark.</strong> ACM Transactions on Computer Systems, Vol. 2, No. 4, Nov 1984, pp. 277–288.<br>
     <a href="https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf" style="color:var(--purple);" target="_blank">https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf</a></p>
-    <p>• The design principle that explains <em>why</em> the protocol stack is layered the way it is: reliability, encryption, and ordering belong at the <strong>endpoints</strong>, not in the network core.</p>
-    <p>• IP is deliberately "dumb" by design — it moves packets without guaranteeing anything. TCP adds reliability at the endpoints where the application has full context about what "correct" means.</p>
-    <p>• The argument extends beyond networking: any function that can only be completely implemented with application-level knowledge should live at the application level, not in shared infrastructure.</p>
-    <p>• Explains the philosophical trade-off: lower-level implementations are justified only as <strong>performance enhancements</strong>, not as substitutes for end-to-end guarantees.</p>
-    <p>• One of the most cited papers in CS. Understanding it gives you a mental model for every layering decision in protocol design, microservices, and distributed systems.</p>
+    <p>• The paper’s precise claim is that lower layers may optimize reliability or integrity, but complete correctness checks still belong at the communicating endpoints.</p>
+    <p>• It justifies the split between simple packet forwarding in the network core and semantic correctness logic in transport/application protocols.</p>
+    <p>• This is the theoretical reason IP can remain best-effort while TCP, TLS, and application-level retries still exist above it.</p>
+    <p>• The argument generalizes to distributed systems: shared infrastructure can assist, but end-to-end semantics still must be enforced where full application context exists.</p>
   </div>
 
   <div id="ref5" class="callout yellow">
     <div class="callout-label">[5] RFC 2616 / RFC 9110 — HTTP Semantics</div>
     <p><strong>Fielding, R., et al.</strong> "HTTP Semantics." IETF RFC 9110, June 2022. (Replaces HTTP/1.1 spec RFC 2616.)<br>
     <a href="https://datatracker.ietf.org/doc/html/rfc9110" style="color:var(--yellow);" target="_blank">https://datatracker.ietf.org/doc/html/rfc9110</a></p>
-    <p>• The modern, version-independent specification for HTTP semantics — methods (GET, POST, PUT, DELETE, PATCH), status codes, headers, and content negotiation.</p>
-    <p>• Separates <strong>semantics</strong> (what HTTP means) from <strong>transport</strong> (how bytes move) — allowing the same HTTP to work over TCP (HTTP/1.1, HTTP/2) or QUIC (HTTP/3).</p>
-    <p>• Defines <strong>idempotency</strong> formally: GET, PUT, DELETE are idempotent (repeating them has the same effect); POST is not. This distinction is critical for retry and error-handling logic.</p>
-    <p>• Formalizes <strong>conditional requests</strong> (If-None-Match, If-Modified-Since) that enable efficient caching — the mechanism behind 304 Not Modified responses.</p>
-    <p>• The successor to the original RFC 2616 (1999). Understanding the evolution from monolithic spec → modular RFCs 9110–9114 shows how protocol standards mature.</p>
+    <p>• Separates HTTP <strong>semantics</strong> from wire format so the same request model can be carried over HTTP/1.1, HTTP/2, or HTTP/3.</p>
+    <p>• Defines method properties such as safety and idempotency, which directly govern retry behavior, caching eligibility, and intermediary handling.</p>
+    <p>• Specifies status-code classes, representation metadata, conditional requests, validators, and content negotiation rules.</p>
+    <p>• This is the source that tells you what an HTTP exchange means independent of how the bytes were framed on the transport.</p>
   </div>
 
   <div id="ref6" class="callout blue">
     <div class="callout-label">[6] Cloudflare — HTTP RFCs Have Evolved: A View of HTTP Usage Trends (2022)</div>
     <p><strong>Pardue, L. & Belson, D.</strong> Cloudflare Blog, June 2022.<br>
     <a href="https://blog.cloudflare.com/cloudflare-view-http3-usage/" style="color:var(--blue);" target="_blank">https://blog.cloudflare.com/cloudflare-view-http3-usage/</a></p>
-    <p>• Cloudflare's traffic analysis showed <strong>HTTP/3 growing steadily</strong> after standardization, but <strong>HTTP/2 still comprised the majority</strong> of request traffic across Cloudflare customer content at the time.</p>
-    <p>• The post is useful operational context: browser support and protocol negotiation may favor HTTP/3 when available, but global deployment is not uniform.</p>
-    <p>• This is the right corrective to hand-wavy claims like "the whole web already moved to QUIC" — adoption is real, but mixed.</p>
+    <p>• The post publishes real request-share measurements split by HTTP version, which is useful because protocol adoption is often discussed without traffic data.</p>
+    <p>• It shows the operational outcome of version negotiation at the edge: HTTP/3 may grow quickly while HTTP/2 still carries a large fraction of production traffic.</p>
+    <p>• The value of the source is empirical, not theoretical: it quantifies mixed-protocol deployment in the field.</p>
   </div>
 
   <div id="ref7" class="callout green">
     <div class="callout-label">[7] Meta — How Facebook Is Bringing QUIC to Billions (2020)</div>
     <p><strong>Engineering at Meta.</strong> October 2020.<br>
     <a href="https://engineering.fb.com/2020/10/21/networking-traffic/how-facebook-is-bringing-quic-to-billions/" style="color:var(--accent);" target="_blank">https://engineering.fb.com/2020/10/21/networking-traffic/how-facebook-is-bringing-quic-to-billions/</a></p>
-    <p>• Meta reported that <strong>more than 75% of its internet traffic</strong> was already using QUIC and HTTP/3 together at the time of publication.</p>
-    <p>• The article is valuable because it gives a concrete operator perspective: QUIC improved request errors, tail latency, and media delivery under real production conditions.</p>
-    <p>• It also shows why adoption claims must be scoped carefully: one operator may have deep QUIC rollout even while the broader web remains mixed.</p>
+    <p>• Meta describes the engineering path for large-scale QUIC rollout, including loss recovery tuning, congestion control behavior, and migration concerns at internet scale.</p>
+    <p>• The write-up is especially useful as an operator case study: it focuses on observed error-rate and tail-latency effects rather than only protocol elegance.</p>
+    <p>• It is a good complement to the RFC because it shows what transport behavior matters once QUIC meets real mobile and heterogeneous-network traffic.</p>
   </div>
 
   <div id="ref8" class="callout purple">
     <div class="callout-label">[8] Chrome for Developers — Remove HTTP/2 Server Push from Chrome (2022)</div>
     <p><strong>Pollard, B.</strong> Chrome for Developers, August 2022.<br>
     <a href="https://developer.chrome.com/blog/removing-push" style="color:var(--purple);" target="_blank">https://developer.chrome.com/blog/removing-push</a></p>
-    <p>• Chrome disabled HTTP/2 Server Push by default in Chrome 106 after years of weak adoption and mixed performance results.</p>
-    <p>• The post explicitly notes that Server Push was difficult to realize safely in practice and often produced no clear net gain.</p>
-    <p>• For interview prep and system design discussions, this means Server Push is best treated as historical background, not a default optimization strategy.</p>
+    <p>• Documents why HTTP/2 Server Push underperformed in practice: poor cache-awareness at the server, hard-to-predict asset usefulness, and complex interaction with prioritization and browser caches.</p>
+    <p>• The deprecation note is technically useful because it shows that a feature can be standards-compliant yet still lose to simpler alternatives like `preload` and good caching.</p>
+    <p>• It is a practical example of protocol-surface reduction after real deployment evidence, not just a browser policy announcement.</p>
   </div>
 
   <div id="ref9" class="callout red">
     <div class="callout-label">[9] Cloudflare — Path MTU Discovery in Practice (2015)</div>
     <p><strong>Majkowski, M.</strong> Cloudflare Blog, February 2015.<br>
     <a href="https://blog.cloudflare.com/path-mtu-discovery-in-practice/" style="color:var(--red);" target="_blank">https://blog.cloudflare.com/path-mtu-discovery-in-practice/</a></p>
-    <p>• Cloudflare documented a production incident where Path MTU Discovery broke under ECMP routing and certain user traffic became unreachable.</p>
-    <p>• The write-up is a strong real-world example of how ICMP handling, MTU assumptions, and routing behavior can combine into a hard-to-diagnose outage.</p>
-    <p>• It is a good reference whenever you want to justify why PMTU, MSS clamping, and black-hole detection matter in production.</p>
+    <p>• Walks through a real PMTU failure mode in which oversized packets and missing/blocked ICMP feedback caused black-holed traffic for a subset of paths.</p>
+    <p>• The write-up is technically useful because it ties together MTU, ICMP “fragmentation needed” behavior, ECMP path variation, and transport-level symptoms.</p>
+    <p>• It gives concrete production motivation for MSS clamping, PMTU diagnostics, and careful handling of ICMP in network security policies.</p>
   </div>
 </section>
 

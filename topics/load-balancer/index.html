@@ -773,31 +773,30 @@ Lower spread = more even distribution. Least-connections wins on skewed workload
     <div class="callout-label">[1] Eisenbud et al. — "Maglev: A Fast and Reliable Software Network Load Balancer" (NSDI 2016)</div>
     <p><strong>Danielle E. Eisenbud, Cheng Yi, et al.</strong> Google Inc. 13th USENIX NSDI, March 2016.<br>
     <a href="https://research.google.com/pubs/archive/44824.pdf" style="color:var(--accent);" target="_blank">https://research.google.com/pubs/archive/44824.pdf</a></p>
-    <p>&#x2022; Google's L4 software load balancer running on commodity Linux servers. Has served Google's traffic since 2008.</p>
-    <p>&#x2022; Uses ECMP routing for N+1 redundancy across all LB machines — no active-passive waste. All machines are active.</p>
-    <p>&#x2022; Introduces <strong>Maglev hashing</strong> — a consistent hashing algorithm with better load distribution than standard consistent hashing, minimizing disruption when machines are added/removed.</p>
-    <p>&#x2022; A single Maglev machine saturates a 10Gbps link with small packets by bypassing the Linux kernel network stack.</p>
-    <p>&#x2022; Proved that software LBs on commodity hardware can replace expensive proprietary hardware LBs — a finding that shaped the entire cloud LB industry.</p>
+    <p>&#x2022; Describes a software L4 load balancer built on commodity servers, with <strong>ECMP</strong> at the routers spreading inbound traffic across many active Maglev instances instead of an active/passive pair.</p>
+    <p>&#x2022; Defines <strong>Maglev hashing</strong> as a permutation-based fixed-size lookup table where each backend contributes a permutation of table slots and the fill process yields near-perfect balance.</p>
+    <p>&#x2022; Shows the disruption bound on backend change: only entries owned by the removed backend need reassignment, so connection affinity survives pool churn much better than naive modulo hashing.</p>
+    <p>&#x2022; Uses Direct Server Return and kernel-bypass style packet handling so the LB primarily processes inbound packets while backend responses bypass the LB on the return path.</p>
   </div>
 
   <div id="ref2" class="callout blue">
     <div class="callout-label">[2] Mitzenmacher — "The Power of Two Random Choices" (1996/2001)</div>
     <p><strong>Michael Mitzenmacher.</strong> PhD Thesis, UC Berkeley, 1996. Survey in IEEE TPDS, 2001.<br>
     <a href="https://www.eecs.harvard.edu/~michaelm/postscripts/handbook2001.pdf" style="color:var(--blue);" target="_blank">https://www.eecs.harvard.edu/~michaelm/postscripts/handbook2001.pdf</a></p>
-    <p>&#x2022; Proved that choosing the less-loaded of <strong>two random candidates</strong> yields exponentially better load balance than pure random assignment.</p>
-    <p>&#x2022; Maximum load with N balls into N bins: random &#x2192; O(log N / log log N). Two choices &#x2192; O(log log N). A dramatic improvement with trivial extra work.</p>
-    <p>&#x2022; This result is the theoretical foundation for power-of-two and least-request style strategies used in many modern distributed systems.</p>
-    <p>&#x2022; One of the most elegant results in randomized algorithms — simple enough to explain in an interview, powerful enough to use in production.</p>
+    <p>&#x2022; Analyzes the classic <strong>balls-into-bins</strong> process and proves that comparing two random candidate bins dramatically reduces the maximum load relative to single-choice random assignment.</p>
+    <p>&#x2022; The asymptotic result is the key technical point: maximum occupancy falls from <code class="inline">Θ(log n / log log n)</code> under one random choice to <code class="inline">Θ(log log n)</code> under two choices.</p>
+    <p>&#x2022; This is why “pick two, choose the less loaded” is such an attractive engineering heuristic: it gets most of the benefit of global state with only constant-time sampling cost.</p>
+    <p>&#x2022; Load balancers use the result operationally by sampling a small subset of backends and choosing the lower-load candidate rather than computing a global optimum on every request.</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] HAProxy Documentation — Load Balancing Algorithms</div>
     <p><strong>Willy Tarreau et al.</strong> HAProxy Technologies.<br>
     <a href="https://docs.haproxy.org/2.9/configuration.html#4-balance" style="color:var(--orange);" target="_blank">https://docs.haproxy.org/2.9/configuration.html#4-balance</a></p>
-    <p>&#x2022; Comprehensive documentation of HAProxy's load balancing algorithms: roundrobin, static-rr, leastconn, source, uri, url_param, hdr, random, rdp-cookie.</p>
-    <p>&#x2022; HAProxy is a long-standing reference implementation for open-source L4/L7 load balancing and remains widely used in production environments.</p>
-    <p>&#x2022; Documents practical considerations: connection limits per backend, health check configuration, connection draining (graceful shutdown), and slow start for newly recovered backends.</p>
-    <p>&#x2022; Essential reference for configuring production load balancers — the docs are exceptionally detailed and include performance tuning guidance.</p>
+    <p>&#x2022; Enumerates algorithm families supported in HAProxy, including <code class="inline">roundrobin</code>, <code class="inline">leastconn</code>, <code class="inline">source</code>, URI/header hashing, and random-with-draws policies.</p>
+    <p>&#x2022; Documents how backend selection interacts with connection limits, weights, stick tables, and server health state.</p>
+    <p>&#x2022; Covers graceful draining, slow start for recovered servers, and health-check configuration knobs that materially affect failure detection and reintroduction behavior.</p>
+    <p>&#x2022; This is valuable as an implementation reference because it maps abstract load-balancing ideas to concrete operational controls.</p>
   </div>
 
   <div id="ref4" class="callout purple">
@@ -805,9 +804,9 @@ Lower spread = more even distribution. Least-connections wins on skewed workload
     <p><strong>Amazon Web Services.</strong> Elastic Load Balancing developer guides.<br>
     <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html" style="color:var(--purple);" target="_blank">https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html</a><br>
     <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html" style="color:var(--purple);" target="_blank">https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html</a></p>
-    <p>&#x2022; Official AWS reference for ALB and NLB capabilities, supported protocols, routing features, and load balancer architecture.</p>
-    <p>&#x2022; Confirms ALB is the application-layer option for host/path/header-based routing, while NLB focuses on transport-layer TCP, UDP, and TLS forwarding.</p>
-    <p>&#x2022; Documents features such as static IPs for NLB and deregistration delay / target-group behavior for managed deployments.</p>
+    <p>&#x2022; ALB documentation specifies listener rules, target groups, host/path/header/query routing, HTTP/2 and gRPC support, and application-layer health checks.</p>
+    <p>&#x2022; NLB documentation focuses on transport-layer forwarding, static IP allocation per Availability Zone, TCP/UDP/TLS listeners, and connection-preserving behavior.</p>
+    <p>&#x2022; The target-group docs expose operational mechanics like deregistration delay, cross-zone balancing, and target health state transitions that affect rollout safety and failover timing.</p>
   </div>
 
   <div id="ref5" class="callout yellow">
@@ -815,8 +814,9 @@ Lower spread = more even distribution. Least-connections wins on skewed workload
     <p><strong>Envoy Proxy.</strong> Official load balancing and upstream configuration docs.<br>
     <a href="https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers#weighted-least-request" style="color:var(--yellow);" target="_blank">https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers#weighted-least-request</a><br>
     <a href="https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/slow_start" style="color:var(--yellow);" target="_blank">https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/slow_start</a></p>
-    <p>&#x2022; Describes Envoy's least-request policy and its default <strong>choice count of 2</strong>, which is the practical power-of-two strategy referenced in this topic.</p>
-    <p>&#x2022; Documents slow start as a way to ramp traffic gradually to newly added or recovered endpoints instead of sending a full share immediately.</p>
+    <p>&#x2022; Describes the <strong>least_request</strong> policy, including weighted least-request behavior and the default <code class="inline">choice_count = 2</code> sample size used in the two-choice strategy.</p>
+    <p>&#x2022; Explains how request counts and weights are combined when backends have unequal capacity.</p>
+    <p>&#x2022; Documents <strong>slow start</strong> as a traffic-ramping function applied to newly added or recovered endpoints so they do not immediately receive their full theoretical share.</p>
   </div>
 </section>
 

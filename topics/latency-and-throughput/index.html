@@ -770,30 +770,30 @@ $ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python
     <div class="callout-label">[1] Jeff Dean / Peter Norvig — "Latency Numbers Every Programmer Should Know"</div>
     <p><strong>Jeff Dean, Google.</strong> Originally presented around 2009 and widely circulated in systems courses and talks.<br>
     <a href="https://colin-scott.github.io/personal_website/research/interactive_latency.html" style="color:var(--accent);" target="_blank">Interactive version (Colin Scott)</a> · <a href="https://github.com/sirupsen/napkin-math" style="color:var(--accent);" target="_blank">Modern update: sirupsen/napkin-math</a></p>
-    <p>• The canonical reference for memory, disk, and network latencies — L1 cache (0.5ns) through inter-continental RTT (150ms).</p>
-    <p>• The "humanized" version multiplies all times by 1 billion: RAM access = 1.5 minutes, SSD read = 1.7 days, HDD seek = 16.5 weeks.</p>
-    <p>• sirupsen/napkin-math is a practical, modern companion reference with broader benchmarking examples and cost intuition.</p>
-    <p>• These numbers are the foundation of <strong>napkin math</strong> — the back-of-envelope calculations expected in every system design interview.</p>
+    <p>• The table is useful because it places memory hierarchy, disk I/O, and network RTT in the same unit system, making bottleneck comparisons possible without full benchmarking.</p>
+    <p>• The critical technical insight is the <strong>orders-of-magnitude gap</strong>: cache, RAM, SSD, HDD, and WAN are not “a bit slower” than each other; they are different regimes entirely.</p>
+    <p>• Those gaps drive queueing behavior, batching economics, and architecture choices such as caching, asynchronous pipelines, and co-location of state.</p>
+    <p>• The companion `napkin-math` dataset extends the same idea to modern cloud and storage primitives so estimates stay anchored to current hardware classes.</p>
   </div>
 
   <div id="ref2" class="callout blue">
     <div class="callout-label">[2] Little, J.D.C. — "A Proof for the Queuing Formula: L = λW" (1961)</div>
     <p><strong>John D.C. Little.</strong> Operations Research, Vol. 9, No. 3, 1961, pp. 383-387. DOI: 10.1287/opre.9.3.383.<br>
     <a href="https://doi.org/10.1287/opre.9.3.383" style="color:var(--blue);" target="_blank">https://doi.org/10.1287/opre.9.3.383</a></p>
-    <p>• Proves that for any stable system: average items in system (L) = arrival rate (λ) × average time per item (W). Remarkably, this holds regardless of arrival distribution, service order, or number of servers.</p>
-    <p>• Applied to system design: <strong>Concurrency = Throughput × Latency</strong>. This single equation drives capacity planning for connection pools, thread pools, and server fleets.</p>
-    <p>• Rearranged: <strong>Throughput = Concurrency / Latency</strong>. Reducing latency by half doubles throughput at fixed concurrency — latency optimization IS capacity creation.</p>
-    <p>• Used daily by engineers at every scale — from sizing a database connection pool to planning a fleet of 10,000 servers.</p>
+    <p>• Proves under broad stability assumptions that the long-run mean number of items in a system equals the mean arrival rate multiplied by the mean time in system: <code class="inline">L = λW</code>.</p>
+    <p>• The result is distribution-agnostic: it does not depend on Poisson arrivals, exponential service times, FIFO scheduling, or a specific queue discipline.</p>
+    <p>• In systems engineering this becomes <strong>concurrency = throughput × latency</strong>, which constrains thread pools, connection pools, and in-flight request counts.</p>
+    <p>• The proof matters because it elevates the equation from a heuristic to an invariant that remains valid even when real workloads are bursty and non-Markovian.</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] sirupsen/napkin-math — "Napkin Math: Estimate System Performance"</div>
     <p><strong>Simon Eskildsen (former Principal Engineer, Shopify).</strong><br>
     <a href="https://github.com/sirupsen/napkin-math" style="color:var(--orange);" target="_blank">https://github.com/sirupsen/napkin-math</a></p>
-    <p>• A practical, modern collection of latency, throughput, and cost benchmarks for back-of-the-envelope capacity reasoning.</p>
-    <p>• Numbers are benchmarked using Criterion.rs on real hardware, not estimates. Each number has a referenced source.</p>
-    <p>• Useful as a sanity-checking companion when you need rough orders of magnitude for storage, network, and cloud primitives.</p>
-    <p>• Essential reference for system design interviews where you need to estimate "how fast" and "how much" for real infrastructure.</p>
+    <p>• The repository is effectively a working catalog of <strong>order-of-magnitude constants</strong> for CPU, memory, disks, networks, and cloud services.</p>
+    <p>• It turns system-design reasoning into dimensional analysis: given a latency, batch size, core count, or network rate, estimate throughput and saturation without a full prototype.</p>
+    <p>• Many examples are costed, which helps convert performance discussions into capacity-planning discussions rather than purely algorithmic ones.</p>
+    <p>• Technically, its value is not a new theorem but a repeatable methodology for translating low-level constants into fleet-level estimates.</p>
   </div>
 
   <div id="ref5" class="callout yellow">
@@ -801,20 +801,19 @@ $ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python
     <p><strong>Apache Kafka Project.</strong> Official documentation for Kafka's design tradeoffs and producer batching behavior.<br>
     <a href="https://kafka.apache.org/documentation/#design_efficiency" style="color:var(--yellow);" target="_blank">Design efficiency</a> ·
     <a href="https://kafka.apache.org/41/configuration/producer-configs/" style="color:var(--yellow);" target="_blank">Producer configs</a></p>
-    <p>• Kafka's design docs emphasize batching, sequential I/O, compression, and reduced byte-copying as the main reasons log-style workloads can achieve very high throughput.</p>
-    <p>• The producer docs explain how <code class="inline">batch.size</code> and <code class="inline">linger.ms</code> influence batching behavior and throughput.</p>
-    <p>• The official docs note that <code class="inline">linger.ms</code> defaults to <code class="inline">5</code> in Kafka 4.0, and that larger batches often improve efficiency enough to keep observed latency similar or lower under load.</p>
+    <p>• The design docs tie throughput to four specific mechanisms: sequential append to a commit log, OS page cache leverage, zero-copy transfer paths, and compression over batches instead of individual messages.</p>
+    <p>• The producer configuration docs make batching explicit: <code class="inline">batch.size</code> bounds per-partition batch accumulation and <code class="inline">linger.ms</code> trades a small enqueue delay for larger, more efficient writes.</p>
+    <p>• Kafka’s latency/throughput tradeoff is therefore not abstract; it is exposed directly in producer knobs that change batch formation and syscall frequency.</p>
   </div>
 
   <div id="ref4" class="callout red">
     <div class="callout-label">[4] Dean & Barroso — "The Tail at Scale" (2013)</div>
     <p><strong>Jeffrey Dean, Luiz André Barroso.</strong> Communications of the ACM, Vol. 56, No. 2, February 2013, pp. 74-80.<br>
     <a href="https://research.google/pubs/the-tail-at-scale/" style="color:var(--red);" target="_blank">https://research.google/pubs/the-tail-at-scale/</a></p>
-    <p>• Demonstrates that in fan-out architectures, tail latencies (p99, p99.9) dominate user experience — if one request touches 100 servers, there's a 63% chance at least one is slow.</p>
-    <p>• Introduces <strong>hedged requests</strong>: send the same request to two replicas, use whichever responds first. Reduces tail latency at the cost of 2× backend load.</p>
-    <p>• Introduces <strong>tied requests</strong>: cross-server cancellation to avoid wasting resources on the slower replica.</p>
-    <p>• Argues that reducing <strong>variability</strong> is more important than reducing average latency — a system with p50=5ms and p99=5ms beats one with p50=2ms and p99=500ms.</p>
-    <p>• One of the most important systems papers of the 2010s. Required reading for anyone building large-scale distributed services.</p>
+    <p>• Quantifies how fan-out amplifies tails: if one user request depends on many subrequests, the composite latency approaches the worst straggler rather than the average subrequest.</p>
+    <p>• Introduces <strong>hedged requests</strong>, where a duplicate is launched after a delay threshold rather than immediately, reducing the extra load compared with naive duplication.</p>
+    <p>• Introduces <strong>tied requests</strong>, which propagate cancellation between replicas so only one backend continues useful work after the faster response wins.</p>
+    <p>• The paper’s technical message is that service design must optimize <strong>variance and tail control</strong>, not just median latency, once large-scale parallelism is involved.</p>
   </div>
 </section>
 

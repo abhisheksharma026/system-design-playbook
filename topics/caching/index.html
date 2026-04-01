@@ -798,41 +798,40 @@ stats = defaultdict(int)
     <div class="callout-label">[1] Nishtala et al. — "Scaling Memcache at Facebook" (NSDI 2013)</div>
     <p><strong>Rajesh Nishtala, Hans Fugal, et al.</strong> 10th USENIX NSDI, April 2013.<br>
     <a href="https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf" style="color:var(--accent);" target="_blank">https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf</a></p>
-    <p>• Describes how Facebook scaled Memcached to handle <strong>billions of requests/second</strong>, hold trillions of items, and serve over a billion users.</p>
-    <p>• Introduces the <strong>demand-filled look-aside cache</strong> pattern with delete-on-write invalidation — the most widely-deployed caching architecture in industry.</p>
-    <p>• Solves the stale-set race condition with <strong>lease tokens</strong> — a lightweight mechanism that rejects cache fills if an invalidation arrived during the fill window.</p>
-    <p>• Documents "Gutter" pools — reserve cache capacity that absorbs traffic during primary cache failures, preventing thundering herd to the database.</p>
-    <p>• One of the most practical and influential distributed systems papers — a must-read for anyone building large-scale web services.</p>
+    <p>• Describes a <strong>look-aside cache</strong> design with delete-on-write invalidation, where the application owns cache population and cache entries are invalidated rather than synchronously overwritten.</p>
+    <p>• Introduces <strong>lease tokens</strong> to prevent stale fill races: only the holder of a valid lease may repopulate a missing key, and intervening invalidations revoke earlier fills.</p>
+    <p>• Adds <strong>Gutter pools</strong> as a limited fallback cache tier that absorbs miss traffic when a primary cache shard is unavailable, reducing immediate load on the backing store.</p>
+    <p>• Documents how regional fan-out and replication interact with cache invalidation, warmup, and failure handling at Facebook scale.</p>
   </div>
 
   <div id="ref2" class="callout blue">
     <div class="callout-label">[2] Berger et al. — "Adaptsize: Orchestrating the Hot Object Memory Cache" (2017)</div>
     <p><strong>Daniel S. Berger, Ramesh K. Sitaraman, Mor Harchol-Balter.</strong> USENIX NSDI 2017.<br>
     <a href="https://www.usenix.org/conference/nsdi17/technical-sessions/presentation/berger" style="color:var(--blue);" target="_blank">https://www.usenix.org/conference/nsdi17/technical-sessions/presentation/berger</a></p>
-    <p>• Demonstrates that <strong>object size matters</strong> for cache efficiency — small objects waste less space per miss, while large objects consume disproportionate cache capacity.</p>
-    <p>• Proposes AdaptSize, which dynamically adjusts the maximum object size admitted to the cache based on current hit rate and object size distribution.</p>
-    <p>• Achieved 33–54% miss-rate reduction in Akamai CDN workloads compared to fixed-size admission policies.</p>
-    <p>• Relevant for understanding why CDNs and distributed caches don't just blindly cache everything — admission control is as important as eviction.</p>
+    <p>• Models caching as an <strong>admission-control</strong> problem rather than just an eviction problem: admitting a large object with low reuse can evict many small hot objects and reduce overall hit rate.</p>
+    <p>• AdaptSize estimates workload characteristics online and chooses a moving object-size admission threshold that maximizes byte hit rate under the current object distribution.</p>
+    <p>• The paper shows that static policies like “cache everything below X KB” underperform when workload skew changes over time.</p>
+    <p>• The key systems idea is that admission policy and eviction policy must be tuned together; eviction alone cannot recover space wasted on bad admissions.</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] Redis Documentation — Eviction Policies</div>
     <p><strong>Redis Ltd.</strong><br>
     <a href="https://redis.io/docs/latest/develop/reference/eviction/" style="color:var(--orange);" target="_blank">https://redis.io/docs/latest/develop/reference/eviction/</a></p>
-    <p>• Documents Redis's 8 eviction policies: noeviction, allkeys-lru, volatile-lru, allkeys-lfu, volatile-lfu, allkeys-random, volatile-random, volatile-ttl.</p>
-    <p>• Explains approximated LRU — Redis doesn't maintain a true LRU linked list (too expensive). Instead, it samples N random keys and evicts the least recently used among them.</p>
-    <p>• <code class="inline">allkeys-lru</code> is the recommended default for most cache workloads — it treats all keys equally and evicts the least recently accessed.</p>
-    <p>• Essential reference for configuring Redis as a cache in production — choosing the wrong eviction policy can silently destroy your hit rate.</p>
+    <p>• Enumerates Redis eviction families by both <strong>candidate set</strong> (`allkeys` vs `volatile`) and <strong>victim heuristic</strong> (LRU, LFU, random, TTL).</p>
+    <p>• Explains that Redis uses <strong>sampled approximations</strong> of LRU/LFU instead of exact global ordering, trading small optimality loss for lower metadata and CPU overhead.</p>
+    <p>• Details how TTL-based candidate restriction can interact with application behavior: `volatile-*` policies only evict keys that already have expirations.</p>
+    <p>• The docs make clear that eviction policy is a workload-level control knob; an LFU cache and an LRU cache behave very differently under scans, bursts, and long-tail reuse.</p>
   </div>
 
   <div id="ref4" class="callout purple">
     <div class="callout-label">[4] Vixie — "DNS and BIND" + RFC 1035 (Domain Name System Caching)</div>
     <p><strong>P. Mockapetris.</strong> RFC 1035, November 1987. · <strong>P. Vixie.</strong> DNS and BIND, O'Reilly.<br>
     <a href="https://datatracker.ietf.org/doc/html/rfc1035" style="color:var(--purple);" target="_blank">https://datatracker.ietf.org/doc/html/rfc1035</a></p>
-    <p>• DNS is one of the oldest and most critical caching systems on the internet — every domain lookup is a cache query with a TTL-based expiration.</p>
-    <p>• Defines the TTL mechanism that all caching systems inherited: the authoritative source sets the expiration, and every downstream cache respects it.</p>
-    <p>• DNS caching failures (stale TTLs, negative caching) have caused major production outages — understanding DNS caching is essential for debugging "why can't users reach my site?"</p>
-    <p>• The hierarchical DNS cache (browser → OS resolver → ISP recursive → root/TLD/authoritative) is a real-world example of multi-layer caching in production.</p>
+    <p>• RFC 1035 defines DNS resource records with <strong>TTL</strong> as explicit freshness metadata supplied by the authority and consumed by recursive resolvers and local caches.</p>
+    <p>• DNS is a multi-layer cache hierarchy in practice: browser cache, OS cache, recursive resolver cache, and any forwarding layers all compound freshness and invalidation behavior.</p>
+    <p>• The protocol’s caching model is intentionally simple: cached answers are reused until TTL expiry rather than revalidated with the authority on every lookup.</p>
+    <p>• This makes DNS a canonical example of fixed-expiration caching and explains why stale mappings persist until timeout even after the origin state changes.</p>
   </div>
 
   <div id="ref5" class="callout green">
@@ -840,9 +839,9 @@ stats = defaultdict(int)
     <p><strong>Cloudflare Documentation.</strong><br>
     <a href="https://developers.cloudflare.com/cache/how-to/tiered-cache/" style="color:var(--accent);" target="_blank">https://developers.cloudflare.com/cache/how-to/tiered-cache/</a><br>
     <a href="https://developers.cloudflare.com/cache/advanced-configuration/cache-reserve/" style="color:var(--accent);" target="_blank">https://developers.cloudflare.com/cache/advanced-configuration/cache-reserve/</a></p>
-    <p>• Documents Tiered Cache as an upper-tier cache topology that improves cache efficiency and reduces origin requests.</p>
-    <p>• Documents Cache Reserve as a persistent cache layer for eligible long-tail assets.</p>
-    <p>• Useful for grounding CDN caching discussions in current product behavior instead of point-in-time scale claims.</p>
+    <p>• Tiered Cache introduces an explicit <strong>parent / child cache topology</strong> so many edge POPs can collapse misses through an upper tier instead of stampeding the origin independently.</p>
+    <p>• Cache Reserve adds a persistent backing layer for long-tail objects that would otherwise age out of edge memory/disk caches but are still worth keeping off origin.</p>
+    <p>• Together the docs show that CDN caching is not a single store; it is a layered hierarchy with different admission, persistence, and refill behaviors at each level.</p>
   </div>
 </section>
 

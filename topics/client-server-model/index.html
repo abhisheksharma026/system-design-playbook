@@ -801,44 +801,40 @@ LISTEN  0       128     0.0.0.0:<span class="num">3000</span>        node
     <div class="callout-label">[1] RFC 2616 — Hypertext Transfer Protocol — HTTP/1.1</div>
     <p><strong>Fielding, R., et al.</strong> "Hypertext Transfer Protocol — HTTP/1.1." IETF, June 1999. (Obsoleted by RFCs 7230–7235.)<br>
     <a href="https://datatracker.ietf.org/doc/html/rfc2616" style="color:var(--blue);" target="_blank">https://datatracker.ietf.org/doc/html/rfc2616</a></p>
-    <p>• Defines the request-response model that underpins every web client-server interaction — methods, headers, status codes, and connection management.</p>
-    <p>• Establishes HTTP as a <strong>stateless</strong> protocol: each request is independent, with no inherent memory of prior requests.</p>
-    <p>• Introduces the <code class="inline">Connection: keep-alive</code> mechanism that lets TCP connections be reused across multiple request-response cycles.</p>
-    <p>• Formalizes the concept of <strong>content negotiation</strong> — the client tells the server what formats it can accept; the server picks the best match.</p>
-    <p>• Later superseded by the RFC 723x series (2014), which decomposed the monolithic spec into modular parts for easier evolution.</p>
+    <p>• Specifies HTTP/1.1 message syntax: request line, status line, headers, optional message body, and the rules for delimiting payload length via <code class="inline">Content-Length</code> or transfer codings.</p>
+    <p>• Makes <strong>persistent connections</strong> the default, which changed client-server performance materially by allowing multiple requests over one TCP connection.</p>
+    <p>• Defines method semantics and safety/idempotency expectations, which is why clients can retry GET differently from POST.</p>
+    <p>• Formalizes intermediary behavior such as proxies, caching directives, and hop-by-hop headers, which is central to real client-server deployments rather than just origin-server communication.</p>
   </div>
 
   <div id="ref2" class="callout green">
     <div class="callout-label">[2] Saltzer, Reed & Clark — "End-to-End Arguments in System Design" (1984)</div>
     <p><strong>J.H. Saltzer, D.P. Reed, D.D. Clark.</strong> ACM Transactions on Computer Systems, Vol. 2, No. 4, Nov 1984, pp. 277–288.<br>
     <a href="https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf" style="color:var(--accent);" target="_blank">https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf</a></p>
-    <p>• The foundational design principle of the internet: functions should be implemented at the <strong>endpoints</strong> (application layer), not in the network core.</p>
-    <p>• Explains why IP is deliberately "dumb" (best-effort) and TCP adds reliability at the endpoints — pushing complexity to the edges where applications have full context.</p>
-    <p>• Directly explains the client-server split: the <strong>client and server are the "ends"</strong> that negotiate correctness. The network in between just moves packets.</p>
-    <p>• Argues that lower-level reliability (in the network) is useful as a <strong>performance optimization</strong> but can never <em>replace</em> application-level checks.</p>
-    <p>• One of the most cited papers in computer science — understanding it deeply gives you a mental model for <em>every</em> architectural layering decision.</p>
+    <p>• States the end-to-end argument precisely: a function should live at a lower layer only if it can be completely and correctly implemented there; otherwise lower-layer support is merely an optimization.</p>
+    <p>• Uses file transfer and duplicate suppression to show that network-level reliability cannot eliminate the need for endpoint-level acknowledgment and integrity validation.</p>
+    <p>• Explains why client and server endpoints own correctness semantics while the network core remains minimal and general-purpose.</p>
+    <p>• The paper’s key systems tradeoff is architectural placement of functionality: reliability, encryption, and semantic validation belong at the ends because only the application has full context.</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] RFC 793 — Transmission Control Protocol (1981)</div>
     <p><strong>Postel, J.</strong> "Transmission Control Protocol." IETF, September 1981. (Obsoleted by RFC 9293, August 2022.)<br>
     <a href="https://datatracker.ietf.org/doc/html/rfc793" style="color:var(--orange);" target="_blank">https://datatracker.ietf.org/doc/html/rfc793</a></p>
-    <p>• The original specification for TCP — the reliable transport protocol that makes the client-server model practical over unreliable IP networks.</p>
-    <p>• Defines the 3-way handshake (SYN → SYN-ACK → ACK) that establishes every TCP connection between client and server.</p>
-    <p>• Introduces <strong>sequence numbers, acknowledgments, and retransmission</strong> — the mechanisms that guarantee ordered, reliable delivery.</p>
-    <p>• Defines <strong>sockets</strong> (IP + port) as connection endpoints — the fundamental abstraction that client-server programming is built on.</p>
-    <p>• Superseded by RFC 9293 (2022), which consolidates 40 years of TCP updates into a single modern spec.</p>
+    <p>• Defines TCP as a <strong>reliable ordered byte stream</strong> over IP, with sequencing performed over bytes rather than packets.</p>
+    <p>• Specifies the three-way handshake, connection teardown with FIN/RST, retransmission timers, flow control via the advertised window, and checksum-based segment integrity.</p>
+    <p>• Introduces the socket pair abstraction (source IP, source port, destination IP, destination port) that uniquely identifies a TCP connection.</p>
+    <p>• The protocol mechanisms in RFC 793 are exactly what make client-server request/response exchanges survivable over lossy, reordered packet networks.</p>
   </div>
 
   <div id="ref4" class="callout purple">
     <div class="callout-label">[4] Fielding — "Architectural Styles and the Design of Network-based Software Architectures" (2000)</div>
     <p><strong>Roy Thomas Fielding.</strong> Doctoral Dissertation, University of California, Irvine, 2000.<br>
     <a href="https://ics.uci.edu/~fielding/pubs/dissertation/top.htm" style="color:var(--purple);" target="_blank">https://ics.uci.edu/~fielding/pubs/dissertation/top.htm</a></p>
-    <p>• The dissertation that coined <strong>REST</strong> (Representational State Transfer) — the architectural style that dominates modern web APIs.</p>
-    <p>• Chapter 3 catalogues network-based architectural styles, including <strong>client-server</strong> as a foundational pattern with explicit separation of concerns.</p>
-    <p>• Argues that the client-server constraint improves <strong>portability</strong> (clients can be simple) and <strong>scalability</strong> (servers can evolve independently).</p>
-    <p>• Introduces the <strong>uniform interface</strong> constraint — the idea that standardized methods (GET, POST, PUT, DELETE) and resource identifiers (URLs) decouple clients from servers.</p>
-    <p>• Essential reading for understanding why modern APIs look the way they do and why REST succeeded over alternatives like SOAP and XML-RPC.</p>
+    <p>• Chapter 3 formally identifies <strong>client-server</strong> as a constraint that separates user-interface concerns from data storage and processing concerns.</p>
+    <p>• The dissertation’s REST model adds further constraints on top of client-server: stateless interactions, cacheability, a uniform interface, layered systems, and optional code-on-demand.</p>
+    <p>• It explains why the uniform resource and method model reduces coupling: clients manipulate representations, not server internals.</p>
+    <p>• The document is technical evidence that “client-server” is not just topology; it is an architectural separation chosen to improve evolvability, cacheability, and independent deployment.</p>
   </div>
 </section>
 
