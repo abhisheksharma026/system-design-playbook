@@ -766,10 +766,9 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
     <div class="callout-label">[1] Latency Numbers Every Programmer Should Know</div>
     <p><strong>Jeff Dean, Google.</strong> Originally presented ~2009, widely updated. Compiled by Colin Scott.<br>
     <a href="https://colin-scott.github.io/personal_website/research/interactive_latency.html" style="color:var(--blue);" target="_blank">https://colin-scott.github.io/personal_website/research/interactive_latency.html</a></p>
-    <p>• Quantifies the storage hierarchy: L1 cache (0.5ns), RAM (100ns), SSD random read (16µs in 2020), HDD seek (2ms in 2020).</p>
-    <p>• Shows how latency gaps have changed over decades — RAM has gotten faster at a different rate than disk, widening the gap.</p>
-    <p>• The source of the famous "if RAM were 1 second, disk would be X days" analogies used in every system design interview.</p>
-    <p>• Essential for <strong>napkin math</strong> — back-of-the-envelope calculations that interviewers expect you to do fluently.</p>
+    <p>• Quantifies the hierarchy from CPU caches through DRAM, SSDs, HDDs, and network round trips, giving the latency constants that drive storage-placement decisions.</p>
+    <p>• The important technical point is the widening ratio between memory and storage classes: a random disk access is not “slower RAM,” it is a different bottleneck regime entirely.</p>
+    <p>• These constants explain why write-ahead logs, buffer pools, batching, and sequential I/O dominate storage-system design.</p>
   </div>
 
   <div id="ref2" class="callout green">
@@ -777,51 +776,48 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
     <p><strong>Jim Gray, Gianfranco Putzolu.</strong> ACM SIGMOD, 1987. Revised in 1997, 2007, and 2017.<br>
     <a href="https://jimgray.azurewebsites.net/5_min_rule_sigmod.pdf" style="color:var(--accent);" target="_blank">https://jimgray.azurewebsites.net/5_min_rule_sigmod.pdf</a> (1997 revision)<br>
     <a href="https://cacm.acm.org/research/the-five-minute-rule-30-years-later-and-its-impact-on-the-storage-hierarchy/" style="color:var(--accent);" target="_blank">CACM 2019 — 30-year revision</a></p>
-    <p>• Provides a formula: <strong>BreakEvenInterval = (PagesPerMB_RAM / IOPS_Disk) × (PricePerDisk / PricePerMB_RAM)</strong>. If data is accessed more frequently than this interval, cache it in RAM.</p>
-    <p>• In 1987, the break-even was ~5 minutes for 1KB pages (RAM vs HDD). In 2017, it's ~90 minutes for DRAM-HDD and ~5 minutes for DRAM-SSD.</p>
-    <p>• The 30-year revision shows HDD is becoming irrelevant for random-access workloads — the five-minute rule now applies to DRAM vs SSD.</p>
-    <p>• Jim Gray (Turing Award winner) predicted the storage hierarchy evolution with remarkable accuracy. His framework is still used for cache sizing decisions.</p>
-    <p>• Teaches the fundamental principle: <strong>storage engineering is economics</strong> — cost per access determines where data should live.</p>
+    <p>• Derives a break-even rule comparing the cost of keeping a page in memory with the cost of re-reading it from storage at some access interval.</p>
+    <p>• The equation is an economics model over <strong>memory price, storage price, page size, and I/O rate</strong>, not a hardware-specific heuristic.</p>
+    <p>• The later revisions show how the break-even interval moves as DRAM, HDD, and SSD prices/performance shift, which is why the “five-minute rule” changes over time.</p>
+    <p>• This is the right mental model for cache sizing: a page belongs in a faster tier when its expected reuse interval is shorter than the economically justified threshold.</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] PostgreSQL Documentation — Reliability and the Write-Ahead Log</div>
     <p><strong>The PostgreSQL Global Development Group.</strong><br>
     <a href="https://www.postgresql.org/docs/current/wal-reliability.html" style="color:var(--orange);" target="_blank">https://www.postgresql.org/docs/current/wal-reliability.html</a></p>
-    <p>• Explains WAL reliability guarantees: each transaction commit writes to WAL and fsync()s before acknowledging to the client.</p>
-    <p>• Describes the fsync failure problem: if fsync fails, all dirty buffers in the OS page cache for that file become unreliable.</p>
-    <p>• Documents the <code class="inline">full_page_writes</code> mechanism — writing full page images on the first modification after a checkpoint to prevent partial-write corruption.</p>
-    <p>• Covers the interaction between PostgreSQL's buffer pool and the OS page cache — why both layers of caching exist and how they complement each other.</p>
-    <p>• Essential reading for understanding how a real production database achieves ACID durability using the storage hierarchy.</p>
+    <p>• States the WAL rule precisely: the log record describing a page change must reach durable storage before the corresponding data page is written back.</p>
+    <p>• Explains why commit acknowledgment depends on WAL flush, not on immediate flushing of every dirty table page.</p>
+    <p>• Documents <code class="inline">full_page_writes</code> as protection against torn-page / partial-write scenarios after checkpoints.</p>
+    <p>• The reliability notes are especially useful because they discuss real failure semantics around controller caches, barriers, and what an <code class="inline">fsync</code> failure implies for subsequent recovery confidence.</p>
   </div>
 
   <div id="ref4" class="callout purple">
     <div class="callout-label">[4] Mohan et al. — "ARIES: A Transaction Recovery Method" (1992)</div>
     <p><strong>C. Mohan, Don Haderle, Bruce Lindsay, Hamid Pirahesh, Peter Schwarz.</strong> ACM TODS, Vol. 17, No. 1, March 1992.<br>
     <a href="https://cs.stanford.edu/people/chrismre/cs345/rl/aries.pdf" style="color:var(--purple);" target="_blank">https://cs.stanford.edu/people/chrismre/cs345/rl/aries.pdf</a></p>
-    <p>• The foundational paper on write-ahead logging for database crash recovery, used (in some form) by PostgreSQL, MySQL/InnoDB, SQL Server, and most modern databases.</p>
-    <p>• Describes three phases of recovery: <strong>Analysis</strong> (determine what was dirty at crash), <strong>Redo</strong> (replay all logged changes), <strong>Undo</strong> (roll back uncommitted transactions).</p>
-    <p>• Introduces <strong>physiological logging</strong> — logging physical page modifications at a logical level, balancing between full physical logging (too expensive) and pure logical logging (can't handle partial writes).</p>
-    <p>• The WAL "trick" explained in Section 6 of this document is a simplified version of the ARIES protocol.</p>
-    <p>• One of the most cited database papers. Understanding ARIES at a high level gives you deep credibility in database design interviews.</p>
+    <p>• ARIES formalizes recovery as three phases: <strong>analysis</strong> rebuilds the dirty-page table and transaction table, <strong>redo</strong> reapplies history, and <strong>undo</strong> rolls back loser transactions.</p>
+    <p>• It uses <strong>physiological logging</strong>: log records are page-oriented but encode logical operations within a page, giving enough structure for idempotent redo with lower overhead than full physical images.</p>
+    <p>• The paper introduces <strong>log sequence numbers (LSNs)</strong>, pageLSN checks, and compensation log records (CLRs) to make redo/undo restartable and crash-safe even if recovery itself is interrupted.</p>
+    <p>• This is the technical foundation behind modern WAL-based recovery systems, not just the high-level idea of “write the log first.”</p>
   </div>
 
   <div id="ref5" class="callout green">
     <div class="callout-label">[5] Redis Documentation — Persistence</div>
     <p><strong>Redis Open Source Docs.</strong><br>
     <a href="https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/" style="color:var(--accent);" target="_blank">https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/</a></p>
-    <p>• Documents Redis persistence modes: RDB snapshots, AOF, no persistence, or both together.</p>
-    <p>• Explains the three AOF fsync policies: <code class="inline">always</code>, <code class="inline">everysec</code>, and <code class="inline">no</code>.</p>
-    <p>• States that the suggested and default AOF fsync policy is <code class="inline">everysec</code> when AOF is enabled, balancing performance with durability.</p>
+    <p>• Documents the persistence tradeoff surface explicitly: periodic <strong>RDB snapshots</strong>, append-only logging (<strong>AOF</strong>), or combining both for faster restart plus bounded recent-data loss.</p>
+    <p>• AOF durability is parameterized by the flush policy: <code class="inline">always</code>, <code class="inline">everysec</code>, or OS-managed flushing.</p>
+    <p>• The docs also describe AOF rewrite/compaction, which turns a long mutation log into a smaller equivalent command sequence for restart efficiency.</p>
   </div>
 
   <div id="ref6" class="callout red">
     <div class="callout-label">[6] GitLab — Postmortem of Database Outage of January 31 (2017)</div>
     <p><strong>GitLab Engineering.</strong> February 2017.<br>
     <a href="https://about.gitlab.com/blog/postmortem-of-database-outage-of-january-31/" style="color:var(--red);" target="_blank">https://about.gitlab.com/blog/postmortem-of-database-outage-of-january-31/</a></p>
-    <p>• Documents the accidental removal of data from GitLab.com's primary database and the resulting outage.</p>
-    <p>• Explains that backup and recovery procedures were incomplete or unreliable, which turned a bad production incident into a major data-loss event.</p>
-    <p>• A strong real-world reminder that durability requires not just storage, but verified restore paths and tested backups.</p>
+    <p>• The postmortem is technically useful because it details multiple failed recovery paths rather than a single root cause: replication lag, delayed failover, inconsistent backups, and restore tooling gaps all compounded.</p>
+    <p>• It shows that durability is an end-to-end property involving primary data, replicas, backups, and verified restore procedures.</p>
+    <p>• The failure narrative is a concrete example of why storage design must include operational recovery drills, not just theoretically redundant copies of data.</p>
   </div>
 </section>
 

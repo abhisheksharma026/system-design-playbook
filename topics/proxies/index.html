@@ -661,28 +661,39 @@ print(f<span class="str">"  Direct:  avg={d_avg:.0f}ms  p99={d_p99:.0f}ms"</span
     <div class="callout-label">[1] Sysoev + Alexeev — Nginx Architecture</div>
     <p><strong>The Architecture of Open Source Applications, Vol. 2.</strong><br>
     <a href="https://aosabook.org/en/v2/nginx.html" style="color:var(--accent);" target="_blank">https://aosabook.org/en/v2/nginx.html</a></p>
-    <p>Explains why Nginx was designed around an event-driven architecture and how its master/worker model handles large connection counts efficiently.</p>
+    <p>• Describes the <strong>master / worker</strong> split: the master parses configuration, binds sockets, and manages lifecycle; workers handle accept/read/write on active connections.</p>
+    <p>• Explains the <strong>event-driven, non-blocking</strong> request model in which each worker multiplexes many sockets through epoll/kqueue rather than creating a thread per connection.</p>
+    <p>• Shows how Nginx models HTTP processing as a chain of phases and filters, which is why features like reverse proxying, compression, buffering, and caching compose cleanly.</p>
+    <p>• Covers accept mutexes, connection pools, and preallocated request structures that reduce lock contention and allocator overhead under high concurrency.</p>
   </div>
 
   <div id="ref2" class="callout blue">
     <div class="callout-label">[2] Envoy Architecture Overview</div>
     <p><strong>Envoy Proxy documentation.</strong><br>
     <a href="https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/arch_overview" style="color:var(--blue);" target="_blank">https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/arch_overview</a></p>
-    <p>Primary overview of Envoy as a high-performance proxy for edge routing and service-mesh sidecars.</p>
+    <p>• Defines Envoy’s core data plane abstraction: <strong>listeners</strong> accept downstream connections, <strong>filter chains</strong> inspect and transform traffic, and <strong>clusters</strong> represent upstream backends.</p>
+    <p>• Explains the separation between <strong>L4 filters</strong> (TCP proxy, TLS inspector) and <strong>L7 HTTP filters</strong> (routing, retries, authn/z, rate limiting, tracing).</p>
+    <p>• Documents <strong>xDS APIs</strong>, where a control plane pushes routes, endpoints, certificates, and policy to many sidecars without editing local config files.</p>
+    <p>• Shows why Envoy fits service meshes: per-hop timeouts, circuit breakers, retries, observability, and mTLS all execute in the proxy rather than application code.</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] Cloudflare Documentation</div>
     <p><strong>Cloudflare docs and product documentation.</strong><br>
     <a href="https://developers.cloudflare.com/fundamentals/" style="color:var(--orange);" target="_blank">https://developers.cloudflare.com/fundamentals/</a></p>
-    <p>Useful primary documentation for Cloudflare's role as a reverse proxy, CDN, TLS terminator, and programmable edge platform.</p>
+    <p>• Documents Cloudflare’s reverse-proxy deployment model in which DNS points clients at Cloudflare edge IPs, the edge terminates TLS, applies caching/WAF policy, and then proxies to origin.</p>
+    <p>• Covers edge-origin request flow details such as origin certificates, cache-control behavior, and request/response headers injected by the proxy layer.</p>
+    <p>• Explains how a single reverse-proxy tier can combine CDN caching, bot mitigation, rate limiting, and programmable request handling at the network edge.</p>
   </div>
 
   <div id="ref4" class="callout purple">
     <div class="callout-label">[4] RFC 7239 — Forwarded HTTP Extension</div>
     <p><strong>IETF RFC 7239.</strong><br>
     <a href="https://datatracker.ietf.org/doc/html/rfc7239" style="color:var(--purple);" target="_blank">https://datatracker.ietf.org/doc/html/rfc7239</a></p>
-    <p>Defines the standardized <code class="inline">Forwarded</code> header that generalizes the commonly used <code class="inline">X-Forwarded-*</code> family.</p>
+    <p>• Standardizes the <code class="inline">Forwarded</code> header so proxies can preserve the original client-facing request context with parameters like <code class="inline">for=</code>, <code class="inline">by=</code>, <code class="inline">host=</code>, and <code class="inline">proto=</code>.</p>
+    <p>• Specifies grammar for multiple proxy hops, where each intermediary appends its own element rather than overwriting the chain.</p>
+    <p>• Addresses operational issues around IPv6 literals, quoted strings, obfuscated identifiers, and trust boundaries when parsing forwarded metadata.</p>
+    <p>• Gives the standards-track model behind the de facto <code class="inline">X-Forwarded-For</code> family and explains why backends must know which proxy hops are trusted.</p>
   </div>
 </section>
 
