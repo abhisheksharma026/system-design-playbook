@@ -901,43 +901,40 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
     <div class="callout-label">[1] Beyer et al. — "Site Reliability Engineering" (Google SRE Book, 2016)</div>
     <p><strong>Betsy Beyer, Chris Jones, Jennifer Petoff, Niall Richard Murphy.</strong> O'Reilly Media, 2016. Free online.<br>
     <a href="https://sre.google/sre-book/table-of-contents/" style="color:var(--accent);" target="_blank">https://sre.google/sre-book/table-of-contents/</a></p>
-    <p>• Defines SLIs, SLOs, SLAs, and the <strong>error budget</strong> framework — the quantitative mechanism for balancing reliability vs feature velocity.</p>
-    <p>• Chapter 3 ("Embracing Risk") argues that 100% availability is the wrong target — it prevents all meaningful change. The right target is the minimum availability your users need.</p>
-    <p>• Chapter 4 ("Service Level Objectives") provides a concrete framework for defining SLOs: choose meaningful SLIs, set achievable targets, track error budgets, and use them to govern deployment cadence.</p>
-    <p>• Introduces the concept that SRE is "what happens when you ask a software engineer to design an operations team" — treating operations as a software engineering problem.</p>
-    <p>• The most influential book on production reliability in the last decade. Essential reading for anyone building or operating distributed systems.</p>
+    <p>• Formalizes the <strong>SLI → SLO → error budget</strong> control loop: measure a user-visible indicator, set a target over a rolling window, and treat the remaining allowed failures as the budget for releases and risky changes.</p>
+    <p>• Makes the key distinction that an <strong>SLA</strong> is a contractual promise with penalties, while an <strong>SLO</strong> is the internal engineering target that should sit stricter than the SLA.</p>
+    <p>• Chapter 3 models reliability as an optimization variable: pushing the target upward reduces available error budget and therefore reduces the rate of safe change.</p>
+    <p>• Chapter 4 details good SLI construction: aggregate only events users can observe, avoid vanity infrastructure metrics, and evaluate targets over explicit time windows.</p>
   </div>
 
   <div id="ref2" class="callout blue">
     <div class="callout-label">[2] Brewer — "CAP Twelve Years Later: How the 'Rules' Have Changed" (2012)</div>
     <p><strong>Eric Brewer.</strong> IEEE Computer, Vol. 45, No. 2, February 2012, pp. 23-29.<br>
     <a href="https://sites.cs.ucsb.edu/~rich/class/cs293b-cloud/papers/brewer-cap.pdf" style="color:var(--blue);" target="_blank">https://sites.cs.ucsb.edu/~rich/class/cs293b-cloud/papers/brewer-cap.pdf</a></p>
-    <p>• Brewer's own retrospective on the CAP theorem he introduced at PODC 2000. Clarifies that CAP is <strong>not a simple "pick 2 of 3"</strong> — the trade-off only applies during network partitions.</p>
-    <p>• Argues that modern systems should use the partition as a trigger to enter a special "partition mode" with reduced guarantees, and recover full consistency once the partition heals.</p>
-    <p>• Introduces the idea that <strong>the trade-off is a spectrum</strong>, not binary. Systems can choose different consistency levels for different operations (e.g., strong consistency for payments, eventual for social feeds).</p>
-    <p>• Discusses ACID vs BASE (Basically Available, Soft state, Eventually consistent) as opposite ends of the consistency spectrum.</p>
-    <p>• Required reading for any system design interview where CAP is discussed — knowing Brewer's update shows deeper understanding than just reciting "pick 2 of 3."</p>
+    <p>• Restates CAP precisely: when a network partition exists, a replicated service cannot simultaneously preserve full availability and linearizable consistency for all operations.</p>
+    <p>• Emphasizes that the tradeoff is only active <strong>during partitions</strong>; outside partition mode, systems can and should pursue both high availability and strong consistency.</p>
+    <p>• Reframes CAP as an engineering spectrum by pointing to designs that vary semantics per operation, such as stale reads, delayed writes, or partition-specific degradation modes.</p>
+    <p>• Connects the theorem to operational design: partition detection, replica placement, quorum rules, and recovery semantics matter more than the slogan “pick two.”</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] Rosenthal et al. — "Chaos Engineering" (Netflix, 2017/2020)</div>
     <p><strong>Casey Rosenthal, Nora Jones.</strong> O'Reilly Media, 2020. Original Netflix Tech Blog articles from 2011+.<br>
     <a href="https://principlesofchaos.org/" style="color:var(--orange);" target="_blank">https://principlesofchaos.org/</a></p>
-    <p>• Defines chaos engineering as "the discipline of experimenting on a system in order to build confidence in the system's capability to withstand turbulent conditions in production."</p>
-    <p>• Documents Netflix's Simian Army: <strong>Chaos Monkey</strong> (random instance termination), <strong>Chaos Kong</strong> (region evacuation), <strong>Latency Monkey</strong> (artificial delays).</p>
-    <p>• Establishes the principle: <strong>"the best way to avoid failure is to fail constantly."</strong> Regular, controlled failure injection in production builds resilience that testing in staging never can.</p>
-    <p>• Provides a methodology: define steady state, hypothesize, introduce real-world events (server crashes, network degradation), observe the difference between hypothesis and reality.</p>
-    <p>• Now widely adopted beyond Netflix. AWS has FIS (Fault Injection Simulator), Google has DiRT (Disaster Recovery Testing), and Gremlin offers chaos-as-a-service.</p>
+    <p>• Defines chaos engineering around a <strong>steady-state hypothesis</strong>: specify a measurable normal-output signal, inject a disturbance, and compare the observed state against the baseline.</p>
+    <p>• The principles document requires experiments to run in production-like conditions because retry storms, control-plane coupling, and autoscaling interactions often do not emerge in staging.</p>
+    <p>• Netflix’s fault models map to real failure classes: instance termination, injected latency, regional evacuation, and dependency blackholes.</p>
+    <p>• The technical value is not “breaking things randomly”; it is validating circuit breakers, retry budgets, failover automation, and observability under controlled faults.</p>
   </div>
 
   <div id="ref4" class="callout purple">
     <div class="callout-label">[4] Oppenheimer, Ganapathi & Patterson — "Why Do Internet Services Fail, and What Can Be Done About It?" (2003)</div>
     <p><strong>David Oppenheimer, Archana Ganapathi, David A. Patterson.</strong> USENIX USITS, 2003.<br>
     <a href="https://www.usenix.org/legacy/events/usits03/tech/full_papers/oppenheimer/oppenheimer.pdf" style="color:var(--purple);" target="_blank">https://www.usenix.org/legacy/events/usits03/tech/full_papers/oppenheimer/oppenheimer.pdf</a></p>
-    <p>• Studied real-world outages across major internet services and found that <strong>operator error</strong> was the largest single cause of failures — not hardware, not software bugs.</p>
-    <p>• Found that front-end servers failing (stateless, easily replaced) caused less downtime than back-end/state-management failures (databases, config stores) which are harder to recover.</p>
-    <p>• Recommended: redundancy at every tier, automated monitoring and restart, better operational tools, and reducing the human factors that lead to mistakes.</p>
-    <p>• An early empirical paper that shaped the field's understanding of what actually causes outages — its findings are still cited and relevant today.</p>
+    <p>• Classifies failure causes empirically and finds a large fraction rooted in <strong>operator actions</strong>, configuration mistakes, and state-management failures rather than simple hardware faults.</p>
+    <p>• Separates stateless front-end recovery from stateful back-end recovery, showing that outages involving naming, storage, and configuration services dominate downtime because state repair is slower than process restart.</p>
+    <p>• Recommends reducing mean time to recovery with restart automation, isolating stateful dependencies, and improving tooling around configuration rollout and rollback.</p>
+    <p>• The paper’s core systems lesson is that availability is controlled by operational complexity and state coordination, not just by adding more front-end machines.</p>
   </div>
 
   <div id="ref5" class="callout yellow">
@@ -946,8 +943,9 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
     <a href="https://aws.amazon.com/s3/sla/" style="color:var(--yellow);" target="_blank">Amazon S3 SLA</a> ·
     <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/DataDurability.html" style="color:var(--yellow);" target="_blank">S3 durability and availability docs</a> ·
     <a href="https://aws.amazon.com/message/41926/" style="color:var(--yellow);" target="_blank">2017 S3 event summary</a></p>
-    <p>• S3 Standard is documented as designed for 99.99% availability and 11 nines of durability, while the SLA defines the service-credit threshold separately.</p>
-    <p>• The 2017 us-east-1 event is a canonical example of operational error plus recovery-path complexity producing a major availability incident.</p>
+    <p>• The S3 docs separate <strong>durability</strong> from <strong>availability</strong>: durability concerns object survival probability across failures, while availability concerns request success over time.</p>
+    <p>• The SLA documents the service-credit thresholds separately from the architectural design targets, which is why availability numbers must always be read in context.</p>
+    <p>• The 2017 us-east-1 event summary shows how an operational command triggered a larger-than-expected subsystem restart, and how recovery time was dominated by metadata-system reinitialization under full load.</p>
   </div>
 
   <div id="ref6" class="callout red">
@@ -955,8 +953,9 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
     <p><strong>Meta Engineering.</strong> Official engineering write-ups on the October 4 outage.<br>
     <a href="https://engineering.fb.com/2021/10/04/networking-traffic/outage/" style="color:var(--red);" target="_blank">Initial update</a> ·
     <a href="https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/" style="color:var(--red);" target="_blank">Detailed follow-up</a></p>
-    <p>• Describes how backbone router configuration changes disrupted inter-datacenter communication and cascaded into a global outage.</p>
-    <p>• Useful for understanding why recovery tooling and control-plane dependencies must be isolated from the systems they manage.</p>
+    <p>• The outage write-up traces the failure to a backbone capacity-management command that unintentionally withdrew BGP announcements for Meta’s data-center prefixes.</p>
+    <p>• Removing those routes simultaneously broke user traffic, internal service discovery, and engineer access paths, turning a routing incident into a control-plane outage.</p>
+    <p>• The detailed postmortem is especially useful for showing why out-of-band access, isolated recovery tooling, and dependency minimization are availability requirements, not operational luxuries.</p>
   </div>
 </section>
 
