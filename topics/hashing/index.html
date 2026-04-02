@@ -594,7 +594,7 @@ flowchart LR
     class C2 cacheRisk;
     class N1,N2,N3 note;
     </pre>
-    <div class="diagram-caption">This is the whiteboard version of the answer: define the key, define who owns the ring, then walk through rebalancing, cold-node behavior, and stale membership.</div>
+    <div class="diagram-caption">Whiteboard version: define the key, define who owns the ring, then walk through rebalancing, cold-node behavior, and stale membership.</div>
   </div>
 
   <h3>If I Were Answering This Out Loud</h3>
@@ -668,7 +668,7 @@ flowchart LR
     <div class="qa-q">Q7: The interviewer says, “One node is twice as powerful as the others. What changes?”</div>
     <div class="qa-a">
       <p><strong>Answer:</strong> Equal placement is no longer correct because equal ownership will underutilize the stronger node and overload the weaker ones. In a ring-based design, give the stronger node proportionally more virtual nodes. In rendezvous hashing, use weighted rendezvous so the stronger server wins a larger fraction of keys.</p>
-      <p><strong>Thought process:</strong> First identify whether the imbalance is compute, memory, or network. Then make the placement algorithm capacity-aware. The key interview move is to say that load-balancing fairness is relative to server capacity, not raw key count.</p>
+      <p><strong>Thought process:</strong> First identify what is actually uneven: CPU, memory, or network. Then make the placement algorithm capacity-aware. Fairness is relative to server capacity, not just key count.</p>
     </div>
   </div>
 
@@ -676,7 +676,7 @@ flowchart LR
     <div class="qa-q">Q8: “What if the hash function is perfect but one key is 1000× hotter than the rest?”</div>
     <div class="qa-a">
       <p><strong>Answer:</strong> The problem is no longer poor distribution; it is skew. A perfect hash only balances the number of keys, not the request rate per key. Split the hot key into subkeys, replicate the hot object, add an L1 cache near the application, or introduce request coalescing so concurrent misses do not stampede the backing store.</p>
-      <p><strong>Thought process:</strong> Say explicitly that hashing solves placement variance, not workload skew. Interviewers often ask this to see whether you confuse distribution quality with load quality.</p>
+      <p><strong>Thought process:</strong> Say plainly that hashing solves placement variance, not workload skew. Even perfect distribution can still leave you with one disastrous hot key.</p>
     </div>
   </div>
 
@@ -684,7 +684,7 @@ flowchart LR
     <div class="qa-q">Q9: “Clients update ring membership asynchronously. Is that acceptable?”</div>
     <div class="qa-a">
       <p><strong>Answer:</strong> It depends on the workload. For an eventually consistent cache, a short period of disagreement may be acceptable if you tolerate misses and stale entries. For a partitioned primary data store, divergent views can route writes to the wrong owner and create correctness bugs.</p>
-      <p><strong>Thought process:</strong> Classify the system first: cache, shard router, or authoritative datastore. Then explain the convergence mechanism: versioned ring metadata, leases, epoch numbers, and safe rollout windows. The real question is not “async or sync?” but “what correctness guarantees does this layer owe?”</p>
+      <p><strong>Thought process:</strong> Classify the system first: cache, shard router, or authoritative datastore. Then explain how views converge with versioned metadata, leases, epochs, and safe rollout windows. The real question is not just "async or sync?" It is "what correctness does this layer owe?"</p>
     </div>
   </div>
 </section>
@@ -827,12 +827,12 @@ flowchart LR
   </div>
 
   <div id="ref5" class="callout yellow">
-    <div class="callout-label">[5] Alex Xu — "System Design Interview" (Vol. 1 / Vol. 2)</div>
-    <p><strong>Alex Xu.</strong> ByteByteGo, 2020 onward.<br>
-    <a href="https://bytebytego.com/" style="color:var(--yellow);" target="_blank">https://bytebytego.com/</a></p>
-    <p>&#x2022; Uses consistent hashing repeatedly as an <strong>interview design primitive</strong>: caches, sharded data stores, and sticky-routing load balancers all need deterministic placement that survives node churn without global remapping.</p>
-    <p>&#x2022; The practical interview pattern is: define the placement key, decide client-side versus proxy-side routing, choose replication, then explain what happens during <strong>scale-out, node failure, and hot-key skew</strong>. Those four follow-ups are where most hashing discussions become system-design discussions.</p>
-    <p>&#x2022; Recommends discussing <strong>virtual nodes, metadata propagation, and rebalance windows</strong> explicitly, because the algorithm alone is not enough. The operational behavior around the ring is what interviewers usually grade.</p>
+    <div class="callout-label">[5] DeCandia et al. — "Dynamo: Amazon's Highly Available Key-value Store" (SOSP 2007)</div>
+    <p><strong>Giuseppe DeCandia, Deniz Hastorun, Madan Jampani, et al.</strong> Amazon. ACM SOSP, 2007.<br>
+    <a href="https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf" style="color:var(--yellow);" target="_blank">https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf</a></p>
+    <p>&#x2022; Dynamo uses consistent hashing to place partitions on a ring, but the operational detail that matters is the <strong>preference list</strong>: each key maps to an ordered set of replica nodes, not just one owner.</p>
+    <p>&#x2022; The paper is useful for what happens under churn: <strong>virtual nodes</strong> smooth balance, and <strong>hinted handoff</strong> keeps writes moving when the preferred replica is unavailable.</p>
+    <p>&#x2022; Read it as proof that hashing is only the placement layer. Replication, sloppy quorum behavior, and membership propagation are what turn placement into a working distributed store.</p>
   </div>
 </section>
 

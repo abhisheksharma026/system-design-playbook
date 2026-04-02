@@ -98,7 +98,7 @@
   <p>A reverse proxy sits in front of backend servers and accepts requests from clients on the servers' behalf. The client doesn't know (or care) that there's a proxy — it thinks it's talking directly to the service.</p>
 
   <h3>What Reverse Proxies Do</h3>
-  <p><strong>Load balancing:</strong> Distributes incoming requests across multiple backend servers (round-robin, least connections, IP hash, etc.). This is the #1 reason reverse proxies exist in system design.</p>
+  <p><strong>Load balancing:</strong> Distributes incoming requests across multiple backend servers (round-robin, least connections, IP hash, etc.). In most production systems, this is the job people mean when they say "reverse proxy."</p>
   <p><strong>SSL/TLS termination:</strong> The proxy handles the expensive TLS handshake and decryption. Backend servers receive plain HTTP — simpler, cheaper, and the CPU-intensive crypto is done once at the proxy instead of on every backend.</p>
   <p><strong>Caching:</strong> Cache responses for frequently-requested content at the proxy layer. Static assets, API responses with <code class="inline">Cache-Control</code> headers, and even full HTML pages can be served without hitting the backend.</p>
   <p><strong>Compression:</strong> Gzip/Brotli compression of responses at the proxy, reducing bandwidth without backend CPU cost.</p>
@@ -398,7 +398,7 @@ http.server.HTTPServer((<span class="str">""</span>, <span class="num">7070</spa
   </div>
   <div class="callout green">
     <div class="callout-label">What You'll Learn</div>
-    <p>Hit <code class="inline">localhost:7070</code> multiple times — the <code class="inline">X-Backend</code> response header cycles through :8081, :8082, :8083. Kill one backend and watch the proxy return <code class="inline">502 Bad Gateway</code> for that slot. This is the same core idea as a production reverse proxy: traffic distribution, header injection, and an explicit upstream failure path.</p>
+    <p>Hit <code class="inline">localhost:7070</code> a few times and the <code class="inline">X-Backend</code> header cycles through :8081, :8082, :8083. Kill one backend and you will get a <code class="inline">502 Bad Gateway</code> for that slot. That is the production pattern in miniature: route traffic, add forwarding context, and surface upstream failure cleanly.</p>
   </div>
 </section>
 
@@ -417,7 +417,7 @@ http.server.HTTPServer((<span class="str">""</span>, <span class="num">7070</spa
 
   <div class="callout orange">
     <div class="callout-label">Key Insight</div>
-    <p>Cloudflare shows how a reverse proxy can evolve from a traffic relay into a programmable control layer. Once the proxy is terminating TLS, routing requests, and caching data, adding edge logic is a natural next step.</p>
+    <p>Cloudflare is a good example of how a reverse proxy stops being "just a relay." Once it owns TLS termination, request routing, and cache lookup, it is already in a position to run logic at the edge.</p>
   </div>
 </section>
 
@@ -737,7 +737,7 @@ flowchart LR
     <p>• The key architectural detail is the <strong>orange-cloud reverse-proxy path</strong>: authoritative DNS returns Cloudflare edge IPs, the nearest POP accepts the TCP/TLS connection, and the origin never talks directly to most clients.</p>
     <p>• The docs are useful for the <strong>edge-to-origin control surface</strong>: origin certificates, connection reuse, cacheability rules, and request-header rewriting determine what context the origin actually receives.</p>
     <p>• Read them as a proxy pipeline, not a product catalog: TLS termination, WAF evaluation, cache lookup, rate limiting, Workers execution, and origin fetch all happen as ordered stages on the same request path.</p>
-    <p>• The practical lesson is that reverse proxies are enforcement points with trust-boundary consequences, especially around client IP propagation and which headers the origin is allowed to trust.</p>
+    <p>• Reverse proxies are trust boundaries. Client IP propagation, header rewriting, and origin trust rules all live here.</p>
   </div>
 
   <div id="ref4" class="callout purple">
@@ -747,7 +747,7 @@ flowchart LR
     <p>• Standardizes the exact wire format for preserved client context: each proxy can append a <code class="inline">Forwarded</code> element with <code class="inline">for=</code>, <code class="inline">by=</code>, <code class="inline">host=</code>, and <code class="inline">proto=</code> parameters.</p>
     <p>• The technical point is <strong>hop-by-hop provenance</strong>: the header is a list, not a singleton, so downstream services can reconstruct the proxy chain instead of trusting the most recent hop blindly.</p>
     <p>• The RFC is also useful for parser edge cases that break real systems: IPv6 literals require brackets, identifiers may be obfuscated, and quoting rules matter if intermediaries normalize headers differently.</p>
-    <p>• This is the standards-track answer to “how does the backend learn the real client IP and scheme?” but it only works if the backend defines a strict trusted-proxy boundary.</p>
+    <p>• This is the standard way for a backend to learn the real client IP and scheme, but it only works if the backend knows exactly which proxy hops it trusts.</p>
   </div>
 </section>
 

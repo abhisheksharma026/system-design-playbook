@@ -804,14 +804,14 @@ flowchart LR
   </div>
 
   <h3>Diagram Interpretation</h3>
-  <p><strong>Top: the queueing model.</strong> Requests arrive at 900/s. The server processes at 1000/s capacity (1ms each). At 90% utilization, the system looks fine on paper — headroom exists. But the queue tells a different story.</p>
-  <p><strong>The curve:</strong> This is the M/M/1 queueing model. At low utilization (10-50%), latency is barely above the processing time (~1ms). At 70%, it's ~3ms. At 90%, it's ~10ms (10× processing time). At 95%, it's ~20ms. At 99%, it's ~100ms. The curve is exponential — latency doesn't degrade linearly, it <strong>explodes</strong>.</p>
-  <p><strong>The danger zone (>80%):</strong> This is where most production systems break. Traffic spikes push utilization from 70% to 90%, and latency jumps 5× in seconds. Users start seeing timeouts, retries add more load, and the system enters a death spiral. This is why capacity planning targets ~60-70% utilization — the remaining headroom absorbs spikes without entering the hockey stick.</p>
-  <p><strong>The fix:</strong> Either add capacity (more servers → lower utilization per server) or reduce processing time (optimize queries, add caching → shift the curve left). Both work, but caching is usually cheaper and faster to implement.</p>
+  <p><strong>Top: the queueing model.</strong> Requests arrive at 900/s. The server can process 1000/s. On paper that sounds comfortable. In practice, the queue starts to matter long before the machine looks "full."</p>
+  <p><strong>The curve:</strong> This is M/M/1 queueing. At low utilization, latency stays close to service time. Around 70%, it starts bending upward. By 90% and beyond, queueing delay is doing most of the damage.</p>
+  <p><strong>The danger zone:</strong> once the system lives near that bend, a small traffic spike can shove it into timeout territory. Retries add more load, which makes the queue longer, which triggers more retries. That loop is how ordinary load turns into an outage.</p>
+  <p><strong>The fix:</strong> either lower utilization by adding capacity, or shorten service time so each request leaves faster. Query work, caching, and concurrency limits all change the shape of this graph.</p>
 
   <div class="callout green">
     <div class="callout-label">Key Intuition</div>
-    <p><strong>Latency is flat until utilization crosses ~70%, then it explodes exponentially.</strong> This is the single most important graph in system design. When someone says "the system is slow under load," this curve is why. Never run a production system above 70-80% average utilization — the remaining headroom isn't waste, it's your insurance against the hockey stick.</p>
+    <p><strong>Latency stays tame for a while, then queueing takes over.</strong> That is why average utilization targets matter. The gap between 60% and 80% is not waste. It is the space that keeps normal spikes from turning into a queueing mess.</p>
   </div>
 </section>
 

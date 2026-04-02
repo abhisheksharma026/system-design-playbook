@@ -1168,7 +1168,7 @@ print(<span class="str">f"{'='*50}\n"</span>)</pre>
 
   <div class="callout red">
     <div class="callout-label">Production War Story</div>
-    <p>Cloudflare documented a real production incident where Path MTU Discovery broke under ECMP routing, causing a subset of traffic to fail until mitigations were rolled out. The lesson: network-layer issues (IP fragmentation, MTU, ICMP handling) can surface as application-layer outages that are extremely hard to diagnose. <a href="#ref9" style="color:var(--red);font-family:var(--mono);font-size:12px;">[9]</a></p>
+    <p>Cloudflare documented a production incident where Path MTU Discovery broke under ECMP routing and a slice of traffic started failing. It is a good reminder that network-layer issues such as MTU, fragmentation, and ICMP handling often show up as mysterious application failures. <a href="#ref9" style="color:var(--red);font-family:var(--mono);font-size:12px;">[9]</a></p>
   </div>
 </section>
 
@@ -1176,12 +1176,12 @@ print(<span class="str">f"{'='*50}\n"</span>)</pre>
 <section class="section" id="s14">
   <div class="section-num">14</div>
   <h2>Interview Questions & Answers</h2>
-  <p>Click to reveal answers. These are real FAANG-level questions.</p>
+  <p>Click to reveal answers. These are the kinds of protocol questions that show up in strong systems interviews.</p>
 
   <h3>Actual System Design Interview</h3>
   <div class="callout blue">
     <div class="callout-label">A Prompt You Could Actually Get</div>
-    <p><strong>Design the network protocol choices for a global collaboration product.</strong> Documents sync, presence updates, and large file upload all live in the same product, but they should not all ride the network the same way. A good answer has to separate addressing and packet forwarding, reliable byte-stream transport, modern encrypted transport, and application semantics. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a></p>
+    <p><strong>Design the network protocol choices for a global collaboration product.</strong> Document sync, presence updates, and large file upload live in the same product, but they should not all ride the network the same way. A good answer separates packet forwarding, transport behavior, encrypted session setup, and application semantics. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a></p>
   </div>
   <div class="callout green">
     <div class="callout-label">How I'd Structure the Answer</div>
@@ -1193,7 +1193,7 @@ print(<span class="str">f"{'='*50}\n"</span>)</pre>
   </div>
   <div class="callout purple">
     <div class="callout-label">Production Case Study Lens</div>
-    <p><strong>Think a Figma- or Docs-style collaboration stack:</strong> HTTP semantics for metadata, QUIC for interactive streams on lossy networks, and an application shard keyed by <code class="inline">document_id</code> or <code class="inline">room_id</code>. The interview strength is showing that transport fixes some latency and loss problems, but not ownership, ordering, or failover semantics. <a href="#ref2" class="ref">[2]</a> <a href="#ref5" class="ref">[5]</a> <a href="#ref9" class="ref">[9]</a></p>
+    <p><strong>Think in terms of a Docs- or Figma-style collaboration stack:</strong> HTTP semantics for metadata, QUIC for interactive streams on lossy networks, and an application shard keyed by <code class="inline">document_id</code> or <code class="inline">room_id</code>. Transport can improve latency and loss behavior, but it does not solve ownership, ordering, or failover on its own. <a href="#ref2" class="ref">[2]</a> <a href="#ref5" class="ref">[5]</a> <a href="#ref9" class="ref">[9]</a></p>
   </div>
   <div class="diagram-wrap">
     <pre class="mermaid">
@@ -1400,7 +1400,7 @@ flowchart LR
     <a href="https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf" style="color:var(--purple);" target="_blank">https://web.mit.edu/saltzer/www/publications/endtoend/endtoend.pdf</a></p>
     <p>• The paper’s precise claim is that lower layers may optimize reliability or integrity, but complete correctness checks still belong at the communicating endpoints.</p>
     <p>• It justifies the split between simple packet forwarding in the network core and semantic correctness logic in transport/application protocols.</p>
-    <p>• This is the theoretical reason IP can remain best-effort while TCP, TLS, and application-level retries still exist above it.</p>
+    <p>• This is why IP can stay best-effort while TCP, TLS, and application retries still sit above it.</p>
     <p>• The argument generalizes to distributed systems: shared infrastructure can assist, but end-to-end semantics still must be enforced where full application context exists.</p>
   </div>
 
@@ -1411,14 +1411,14 @@ flowchart LR
     <p>• Separates HTTP <strong>semantics</strong> from wire format so the same request model can be carried over HTTP/1.1, HTTP/2, or HTTP/3.</p>
     <p>• Defines method properties such as safety and idempotency, which directly govern retry behavior, caching eligibility, and intermediary handling.</p>
     <p>• Specifies status-code classes, representation metadata, conditional requests, validators, and content negotiation rules.</p>
-    <p>• This is the source that tells you what an HTTP exchange means independent of how the bytes were framed on the transport.</p>
+    <p>• This is the document that defines what an HTTP exchange means even when the framing changes underneath it.</p>
   </div>
 
   <div id="ref6" class="callout blue">
     <div class="callout-label">[6] Cloudflare — HTTP RFCs Have Evolved: A View of HTTP Usage Trends (2022)</div>
     <p><strong>Pardue, L. & Belson, D.</strong> Cloudflare Blog, June 2022.<br>
     <a href="https://blog.cloudflare.com/cloudflare-view-http3-usage/" style="color:var(--blue);" target="_blank">https://blog.cloudflare.com/cloudflare-view-http3-usage/</a></p>
-    <p>• The useful detail is the <strong>measured negotiation outcome</strong> at the edge: even when HTTP/3 support exists, final protocol choice still depends on browser support, UDP reachability, Alt-Svc discovery, and fallback to HTTP/2.</p>
+    <p>• The useful detail here is the <strong>measured negotiation outcome</strong> at the edge: even when HTTP/3 is supported, the final protocol still depends on browser support, UDP reachability, Alt-Svc discovery, and fallback to HTTP/2.</p>
     <p>• Read the charts as deployment evidence for <strong>multi-protocol serving</strong>: operators must keep H1/H2/H3 paths healthy at the same time because adoption is incremental, not a clean cutover.</p>
     <p>• The source is valuable precisely because it converts protocol evolution from a standards story into an observed production-traffic distribution.</p>
   </div>
