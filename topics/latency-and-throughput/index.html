@@ -604,6 +604,60 @@ $ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python
   <div class="section-num">14</div>
   <h2>Interview Questions & Answers</h2>
 
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design a search-autocomplete service with a hard p99 latency target.</strong> This is where interviewers want to see whether you can turn “fast” into numbers, and whether you understand that tail latency, concurrency, and fan-out are linked by queueing rather than by hand-waving. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would start with a latency budget. If the end-to-end p99 target is 150ms, I cannot let one backend consume 140ms by itself. Then I would use Little's Law to convert throughput and latency into concurrency so the design has a capacity model instead of a vibe. Before I talk about fan-out, I would pin down the routing shape: does one query hit one shard, a bounded subset, or every shard? If the index is partitioned by prefix or term range, I would say out loud that a “good” partitioning scheme still fails on hot prefixes unless I over-partition or cap scatter-gather. If the request fans out to many shards or services, I would say explicitly that averages are misleading because the slowest branch often determines the user-visible latency. That is where parallelism helps the median but can still hurt the tail if every request now depends on many backends returning in time. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The interviewer usually pushes on overload: <em>what happens when traffic doubles and the average still looks okay?</em> That is where queueing shows up. Once utilization gets high, waiting time grows much faster than service time, so p99 blows up before CPU necessarily hits 100%. A good answer mentions admission control, load shedding, caching, and bounded fan-out instead of promising to “optimize later.” I would also expect a follow-up on rebalancing: when a shard is added or moved, only some queries should re-route, but stale shard maps and cold partitions can still spike the tail. If they ask about hedged requests, I would mention them as a tail-latency tool, but only where the backend can tolerate the duplicate work. <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think a search-style fan-out path:</strong> the gateway owns the latency budget, a coordinator fans out only as far as necessary, and caches or shard-local indexes absorb the common case. What matters in interview discussion is showing where the p99 budget is spent and why adding shards or parallelism can improve the median while hurting the tail. <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    U["User Query"]
+    G["API edge: p99 budget"]
+    C["Coordinator: bounded fan-out"]
+    Cache["Prefix Cache"]
+    S1["Shard 1"]
+    S2["Shard 2"]
+    S3["Shard 3"]
+    N1["Hot prefix overloads shard"]
+    N2["Stale shard map hurts p99"]
+    N3["Tail = slowest branch"]
+
+    U --> G
+    G --> C
+    C --> Cache
+    C --> S1
+    C --> S2
+    C --> S3
+    C -.-> N1
+    C -.-> N2
+    C -.-> N3
+
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class U user;
+    class G,C core;
+    class Cache,S1,S2,S3 data;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: define the latency budget, bound the fan-out, and explain where hot partitions or stale shard maps turn into tail-latency failures.</div>
+  </div>
+
   <div class="qa">
     <div class="qa-q">Q1: What's the difference between latency and throughput?</div>
     <div class="qa-a">
@@ -765,6 +819,7 @@ $ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References & Further Reading</h2>
+  <p>Each note below highlights the specific invariant, queueing result, or performance mechanism to extract from the source.</p>
 
   <div id="ref1" class="callout green" style="margin-top:28px;">
     <div class="callout-label">[1] Jeff Dean / Peter Norvig — "Latency Numbers Every Programmer Should Know"</div>
@@ -822,6 +877,7 @@ $ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python
 </footer>
 
 </div>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 <script src="../../assets/js/topic.js"></script>
 </body>
 </html>

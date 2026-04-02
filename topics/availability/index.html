@@ -727,6 +727,59 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
   <div class="section-num">14</div>
   <h2>Interview Questions & Answers</h2>
 
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design a payment-facing API for 99.99% monthly availability.</strong> The real test here is not whether you know the phrase “multi-AZ.” It is whether you can translate an availability target into dependency math, failure isolation, error-budget tradeoffs, and an operational plan that still makes sense during a regional event. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would start by naming the SLI first: for example, successful authorization responses within a defined latency bound. Then I would turn the 99.99% target into an error budget and say out loud that every hard dependency spends from the same budget. That changes the architecture discussion immediately: one load balancer, one primary database, or one regional control plane is no longer “just an implementation detail.” I would also separate data-plane availability from control-plane availability, because many famous outages kept the serving fleet alive while the coordination layer failed. If the system is partitioned by merchant, account, or card range, I would name that ownership key explicitly and explain how failover updates the routing view without leaving half the fleet on the old owner. <a href="#ref1" class="ref">[1]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref6" class="ref">[6]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The next question is usually: <em>what happens during a partition or a partial regional failure?</em> That is where CAP stops being abstract. I would explain which operations are allowed to fail closed for correctness and which ones can keep serving from a degraded path. I would also expect a follow-up on failover drills: if the design assumes standby promotion or region evacuation, I need evidence that it has been exercised, not just diagrammed. For partitioned systems, I would add one more failure mode: traffic does get remapped to survivors, but stale endpoint maps, cold caches, or ownership disagreement can burn the latency and error budget even if the service stays “up.” The SRE framing matters here because availability is not only replicas; it is safe release policy, observability, and tested recovery paths. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref6" class="ref">[6]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think an SRE-run payment API:</strong> global routing, multi-AZ regional serving, and a control plane that may degrade differently from the data plane. The interview quality comes from turning “multi-region” into error-budget math, failover behavior, and routing convergence rather than treating redundancy as a box-counting exercise. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref6" class="ref">[6]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    U["Clients"]
+    G["Global Routing"]
+    R1["Region A API"]
+    R2["Region B failover"]
+    C["Control Plane"]
+    O["Ownership map"]
+    N1["Data plane outlives control plane"]
+    N2["Failover must update routes fast"]
+    N3["Cold cache burns budget"]
+
+    U --> G
+    G --> R1
+    G --> R2
+    C --> O
+    O --> R1
+    O --> R2
+    G -.-> N2
+    C -.-> N1
+    O -.-> N3
+
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class U user;
+    class G,C core;
+    class R1,R2,O data;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: separate global routing, regional serving, and control-plane ownership, then explain where failover still spends the error budget.</div>
+  </div>
+
   <div class="qa">
     <div class="qa-q">Q1: What does "five nines" availability mean and how much downtime does it allow?</div>
     <div class="qa-a">
@@ -765,7 +818,7 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
   <div class="qa">
     <div class="qa-q">Q6: How would you design a system for 99.99% availability?</div>
     <div class="qa-a">
-      <p><strong>Eliminate single points of failure:</strong> Multiple app servers behind LB, replicated database with auto-failover, redundant load balancers. <strong>Multi-AZ deployment:</strong> Spread across 2+ availability zones so one AZ failure doesn't take you down. <strong>Health checks + automated failover:</strong> LB health checks every 5-10s, DB failover via Patroni/RDS Multi-AZ, DNS failover for the LB itself. <strong>Safe deployments:</strong> Canary releases, automatic rollback on error rate spike. <strong>Circuit breakers:</strong> Prevent cascading failures from downstream dependencies. <strong>Monitoring + alerting:</strong> SLI dashboards, error budget tracking, PagerDuty alerts. <strong>Test your failover:</strong> Run regular game days / chaos experiments to verify everything works.</p>
+      <p><strong>Eliminate single points of failure:</strong> Multiple app servers behind LB, replicated database with auto-failover, redundant load balancers. <strong>Multi-AZ deployment:</strong> Spread across 2+ availability zones so one AZ failure doesn't take you down. <strong>Health checks + automated failover:</strong> LB health checks every 5-10s, DB failover via Patroni/RDS Multi-AZ, DNS failover for the LB itself. <strong>Routing convergence:</strong> if the system is partitioned, version the shard or ownership map so every caller agrees on the current owner after failover. <strong>Safe deployments:</strong> Canary releases, automatic rollback on error rate spike. <strong>Circuit breakers:</strong> Prevent cascading failures from downstream dependencies. <strong>Monitoring + alerting:</strong> SLI dashboards, error budget tracking, PagerDuty alerts. <strong>Test your failover:</strong> Run regular game days / chaos experiments to verify everything works.</p>
     </div>
   </div>
 
@@ -896,6 +949,7 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References & Further Reading</h2>
+  <p>Each source below is summarized by the specific reliability mechanism, outage pattern, or control-loop detail it teaches.</p>
 
   <div id="ref1" class="callout green" style="margin-top:28px;">
     <div class="callout-label">[1] Beyer et al. — "Site Reliability Engineering" (Google SRE Book, 2016)</div>
@@ -943,9 +997,10 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
     <a href="https://aws.amazon.com/s3/sla/" style="color:var(--yellow);" target="_blank">Amazon S3 SLA</a> ·
     <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/DataDurability.html" style="color:var(--yellow);" target="_blank">S3 durability and availability docs</a> ·
     <a href="https://aws.amazon.com/message/41926/" style="color:var(--yellow);" target="_blank">2017 S3 event summary</a></p>
-    <p>• The S3 docs separate <strong>durability</strong> from <strong>availability</strong>: durability concerns object survival probability across failures, while availability concerns request success over time.</p>
-    <p>• The SLA documents the service-credit thresholds separately from the architectural design targets, which is why availability numbers must always be read in context.</p>
-    <p>• The 2017 us-east-1 event summary shows how an operational command triggered a larger-than-expected subsystem restart, and how recovery time was dominated by metadata-system reinitialization under full load.</p>
+    <p>• The durability docs are worth reading for the exact separation of concerns: <strong>11 nines durability</strong> comes from redundant multi-AZ storage plus integrity checking and repair, while availability is about whether reads and writes succeed right now.</p>
+    <p>• The SLA is the contractual layer, not the design explanation: monthly uptime percentages define customer compensation thresholds, which is why SLA numbers should never be read as the same thing as internal SLO targets.</p>
+    <p>• The 2017 us-east-1 event summary is technically useful because it shows a <strong>subsystem dependency chain</strong>: an operator command removed more capacity than intended, which forced restart of indexing and placement subsystems before request traffic could recover.</p>
+    <p>• The lesson is that availability failures often come from metadata and control-path recovery time, not from losing object replicas themselves.</p>
   </div>
 
   <div id="ref6" class="callout red">
@@ -953,9 +1008,10 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
     <p><strong>Meta Engineering.</strong> Official engineering write-ups on the October 4 outage.<br>
     <a href="https://engineering.fb.com/2021/10/04/networking-traffic/outage/" style="color:var(--red);" target="_blank">Initial update</a> ·
     <a href="https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/" style="color:var(--red);" target="_blank">Detailed follow-up</a></p>
-    <p>• The outage write-up traces the failure to a backbone capacity-management command that unintentionally withdrew BGP announcements for Meta’s data-center prefixes.</p>
-    <p>• Removing those routes simultaneously broke user traffic, internal service discovery, and engineer access paths, turning a routing incident into a control-plane outage.</p>
-    <p>• The detailed postmortem is especially useful for showing why out-of-band access, isolated recovery tooling, and dependency minimization are availability requirements, not operational luxuries.</p>
+    <p>• The failure starts with a <strong>BGP withdrawal event</strong>: a backbone capacity-management command unintentionally removed route advertisements for Meta’s data-center prefixes.</p>
+    <p>• That routing loss propagated into dependent systems, breaking DNS authoritative reachability, internal service discovery, and engineer access at the same time.</p>
+    <p>• The deeper lesson is control-plane coupling: if recovery tooling, naming, and traffic engineering all depend on the same network substrate, one routing failure can block its own remediation.</p>
+    <p>• The write-up is worth reading for the recovery constraints, not just the trigger, because it shows why out-of-band access and dependency isolation are hard availability requirements.</p>
   </div>
 </section>
 
@@ -1049,5 +1105,6 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
   calc();
 })();
 </script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 </body>
 </html>
