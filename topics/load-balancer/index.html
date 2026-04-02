@@ -624,6 +624,60 @@ Lower spread = more even distribution. Least-connections wins on skewed workload
   <div class="section-num">13</div>
   <h2>Interview Questions &amp; Answers</h2>
 
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design the load-balancing layer for an API that sees bursty traffic and uneven backend performance.</strong> Interviewers usually ask this after the proxy discussion because they want to see whether you understand that “send traffic to many servers” is the easy part; the hard part is choosing a distribution strategy that behaves sanely when one backend is slow, one is empty, and one just rejoined. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would start by separating the dimensions: transport layer versus HTTP-aware routing, server-selection algorithm, health-check policy, and capacity reserve. If the service needs affinity, I would name the routing key out loud first: session cookie, user ID, tenant ID, or source IP. For a normal web service, an L7 load balancer with least-request style routing is a strong default because it adapts when request cost varies across backends. If I do need affinity, I would switch the discussion to consistent hashing or rendezvous hashing and say explicitly that the reason is minimizing churn during scale events, not just “keeping a user on one box.” Then I would say that the algorithm and the health-check policy have to be discussed together: a good picker still fails badly if the system keeps sending traffic to a node that is degraded but not yet marked unhealthy. If a node rejoins after failure, I would mention slow start or connection draining so the balancer does not immediately send full production load to a cold backend. <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The common push-back is: <em>what if one backend is not dead, only slow?</em> That is where round-robin starts to look naive, and adaptive policies matter. Another push is what happens to sticky or hashed routing when the pool changes: only a fraction of keys should move, but those keys are cold on the new backend, and hot keys can still overload one node even with a mathematically perfect hash. I would also call out control-plane convergence: if different load balancers disagree about current healthy members, the same client can bounce between owners. Another push is the load balancer itself: if it is on the critical path, how is <em>it</em> made redundant? That is where managed multi-AZ balancers, active-passive pairs, or Maglev-style ECMP designs enter the conversation. The strongest answers also mention N+1 capacity planning, because graceful failover is meaningless if the surviving pool has no headroom after one node disappears. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think Google Maglev or a modern Envoy/HAProxy fleet:</strong> ECMP or anycast gets traffic to the balancer tier, adaptive picking handles uneven backends, and consistent hashing only appears when you truly need affinity. The strong answer is the one that separates backend selection, health state, and membership convergence instead of collapsing them into “round-robin plus health checks.” <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    U["Users"]
+    LB["LB fleet: least-request"]
+    H["Affinity: hash sid or user"]
+    B1["Backend A healthy"]
+    B2["Backend B slow"]
+    B3["Backend C rejoined"]
+    N1["Slow start on rejoin"]
+    N2["Only ~1/N keys move"]
+    N3["hot key != balanced load"]
+
+    U --> LB
+    LB --> B1
+    LB --> B2
+    LB --> B3
+    LB -.-> H
+    B3 -.-> N1
+    LB -.-> N2
+    LB -.-> N3
+
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef bal fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef ok fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef risk fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class U user;
+    class LB bal;
+    class B1 ok;
+    class B2,B3 risk;
+    class H,N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: choose the default picker, decide whether affinity is really needed, then explain cold-node rejoin, hot keys, and control-plane agreement.</div>
+  </div>
+
   <div class="qa">
     <div class="qa-q">Q1: What is a load balancer and why do you need one?</div>
     <div class="qa-a">
@@ -641,7 +695,7 @@ Lower spread = more even distribution. Least-connections wins on skewed workload
   <div class="qa">
     <div class="qa-q">Q3: Compare round-robin, least-connections, and consistent hashing. When would you use each?</div>
     <div class="qa-a">
-      <p><strong>Round-robin:</strong> Simple, even distribution when requests have similar cost. Use for stateless services with uniform request patterns. <strong>Least-connections:</strong> Adaptive — sends to the server with fewest active connections. Best when request durations vary (some fast, some slow). Use as the default for most workloads. <strong>Consistent hashing:</strong> Same key always goes to the same server. Minimal disruption when servers are added/removed (only ~1/N keys re-map). Use when you need affinity (caching, sessions) and can't externalize state. Downside: can create hot spots if keys are skewed.</p>
+      <p><strong>Round-robin:</strong> Simple, even distribution when requests have similar cost. Use for stateless services with uniform request patterns. <strong>Least-connections:</strong> Adaptive — sends to the server with fewest active connections. Best when request durations vary (some fast, some slow). Use as the default for most workloads. <strong>Consistent hashing:</strong> Same key always goes to the same server, so start by naming the key (session cookie, user ID, tenant ID). It minimizes disruption when servers are added or removed (only ~1/N keys re-map). Use it when you need affinity and cannot fully externalize state. Downside: it balances ownership, not request skew, so hot keys can still create hot spots.</p>
     </div>
   </div>
 
@@ -655,7 +709,7 @@ Lower spread = more even distribution. Least-connections wins on skewed workload
   <div class="qa">
     <div class="qa-q">Q5: How would you prevent the load balancer from being a single point of failure?</div>
     <div class="qa-a">
-      <p>Three strategies: (1) <strong>Managed cloud LB</strong> (AWS ALB/NLB, GCP LB) — multi-AZ and managed by the cloud provider. This is the easiest approach. (2) <strong>Active-passive pair</strong> with keepalived — two Nginx/HAProxy instances share a floating VIP. If the primary dies, the passive claims the VIP in a few seconds. (3) <strong>DNS round-robin</strong> across multiple LBs — client resolves to one of several LB IPs. If one goes down, DNS health checks can remove it, though DNS TTL caching adds delay. Google's Maglev uses ECMP routing for N+1 redundancy across all LB machines.</p>
+      <p>Three strategies: (1) <strong>Managed cloud LB</strong> (AWS ALB/NLB, GCP LB) — multi-AZ and managed by the cloud provider. This is the easiest approach. (2) <strong>Active-passive pair</strong> with keepalived — two Nginx/HAProxy instances share a floating VIP. If the primary dies, the passive claims the VIP in a few seconds. (3) <strong>DNS round-robin</strong> across multiple LBs — client resolves to one of several LB IPs. If one goes down, DNS health checks can remove it, though DNS TTL caching adds delay. Google's Maglev uses ECMP routing for N+1 redundancy across all LB machines. Whichever option you choose, the LB fleet needs a consistent view of backend membership quickly enough that a scale event does not create conflicting routing decisions across different balancers.</p>
     </div>
   </div>
 
@@ -768,6 +822,7 @@ Lower spread = more even distribution. Least-connections wins on skewed workload
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References &amp; Further Reading</h2>
+  <p>Each source below is unpacked for the algorithm, data-plane behavior, or control-plane mechanism worth carrying into design discussions.</p>
 
   <div id="ref1" class="callout green" style="margin-top:28px;">
     <div class="callout-label">[1] Eisenbud et al. — "Maglev: A Fast and Reliable Software Network Load Balancer" (NSDI 2016)</div>
@@ -804,9 +859,10 @@ Lower spread = more even distribution. Least-connections wins on skewed workload
     <p><strong>Amazon Web Services.</strong> Elastic Load Balancing developer guides.<br>
     <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html" style="color:var(--purple);" target="_blank">https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html</a><br>
     <a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html" style="color:var(--purple);" target="_blank">https://docs.aws.amazon.com/elasticloadbalancing/latest/network/introduction.html</a></p>
-    <p>&#x2022; ALB documentation specifies listener rules, target groups, host/path/header/query routing, HTTP/2 and gRPC support, and application-layer health checks.</p>
-    <p>&#x2022; NLB documentation focuses on transport-layer forwarding, static IP allocation per Availability Zone, TCP/UDP/TLS listeners, and connection-preserving behavior.</p>
-    <p>&#x2022; The target-group docs expose operational mechanics like deregistration delay, cross-zone balancing, and target health state transitions that affect rollout safety and failover timing.</p>
+    <p>&#x2022; ALB docs are most useful for the <strong>rule-evaluation model</strong>: listeners feed ordered rule matching, which selects a target group based on host/path/header/query conditions before any backend request is issued.</p>
+    <p>&#x2022; NLB docs matter for the <strong>L4 flow-routing contract</strong>: TCP/UDP/TLS listeners preserve long-lived connection behavior, expose static zonal IPs, and use transport-level distribution instead of request-aware balancing.</p>
+    <p>&#x2022; The target-group material is the real operational detail: health-check thresholds, deregistration delay, slow start, and cross-zone balancing determine how quickly traffic moves during deploys and failures.</p>
+    <p>&#x2022; Read the docs as a control-plane/data-plane split: config defines rules and health policy, while the live balancer has to converge those decisions without dropping active flows.</p>
   </div>
 
   <div id="ref5" class="callout yellow">
@@ -859,5 +915,6 @@ Lower spread = more even distribution. Least-connections wins on skewed workload
   calc();
 })();
 </script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 </body>
 </html>

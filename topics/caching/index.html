@@ -666,6 +666,64 @@ stats = defaultdict(int)
   <div class="section-num">13</div>
   <h2>Interview Questions & Answers</h2>
 
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design the caching layer for a product-detail or social-feed service under read spikes.</strong> The interviewer is usually checking whether you know that caching is not one box in front of a database. It is a set of choices about where the cache lives, how keys are invalidated, how hot keys behave, and what happens when the cache itself becomes part of the failure path. <a href="#ref1" class="ref">[1]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would begin with access pattern and staleness budget. If reads dominate and slight staleness is acceptable, cache-aside is usually the first pattern I would describe because it keeps the source of truth in the database and lets the application control invalidation. Then I would layer the caches: browser or CDN for shared edge content, distributed cache for hot objects, and local in-process cache only where object churn is manageable. The answer gets much stronger if I say how each layer is keyed, how long entries live, and which layer is allowed to serve stale data during backend trouble. If the distributed cache is sharded, I would name the placement key explicitly and say how clients find the owner: consistent hashing or rendezvous hashing, plus how quickly routing metadata changes propagate when cache nodes join or leave. <a href="#ref1" class="ref">[1]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The push-back is usually about stampede and invalidation races. If one celebrity post or one product SKU turns into a hot key, naive TTL expiry can dump the entire read surge onto the backing store. A good answer mentions request coalescing, stale-while-revalidate, lease-style protection, or explicit admission control during refill. I would also expect a follow-up on membership churn: adding a cache node should only move a slice of keys, but those keys are cold on the new node, and if different app servers have different ring views they can read stale data from the old owner while others refill on the new owner. I would also expect the interviewer to ask what happens when the cache cluster itself is unavailable. That is where the Facebook memcache lesson matters: once the cache is load-bearing, the database probably cannot survive a full cold miss storm without graceful degradation. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think Facebook Memcache:</strong> look-aside caching, lease tokens for refill races, and a cluster that is so load-bearing that a full cold-miss storm can drown the database. The interview edge is showing where the key lives, how the shard owner is chosen, and what happens when a hot object or membership change makes the “cache” part of the write/read correctness story. <a href="#ref1" class="ref">[1]</a> <a href="#ref3" class="ref">[3]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    A["App Servers"]
+    L1["Local L1 Cache"]
+    Ring["Cache ring: hash product_id"]
+    C1["Cache Shard A"]
+    C2["Cache Shard B hot key"]
+    C3["Cache Shard C new node"]
+    DB["Primary DB"]
+    N1["Refill lease or coalescing"]
+    N2["Only ~K/N keys move"]
+    N3["Old ring view = stale reads"]
+
+    A --> L1
+    L1 --> Ring
+    Ring --> C1
+    Ring --> C2
+    Ring --> C3
+    C1 --> DB
+    C2 --> DB
+    C3 --> DB
+    Ring -.-> N2
+    C2 -.-> N1
+    Ring -.-> N3
+
+    classDef app fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef place fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef risk fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class A,L1 app;
+    class Ring place;
+    class C1,C3,DB data;
+    class C2 risk;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: define the cache key, define the shard owner, then explain stampede protection, cold-node churn, and ring-view drift.</div>
+  </div>
+
   <div class="qa">
     <div class="qa-q">Q1: What is caching and when should you use it?</div>
     <div class="qa-a">
@@ -793,6 +851,7 @@ stats = defaultdict(int)
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References & Further Reading</h2>
+  <p>Each source below is summarized by the cache mechanism or failure mode it teaches, rather than by a generic topic label.</p>
 
   <div id="ref1" class="callout green" style="margin-top:28px;">
     <div class="callout-label">[1] Nishtala et al. — "Scaling Memcache at Facebook" (NSDI 2013)</div>
@@ -839,9 +898,10 @@ stats = defaultdict(int)
     <p><strong>Cloudflare Documentation.</strong><br>
     <a href="https://developers.cloudflare.com/cache/how-to/tiered-cache/" style="color:var(--accent);" target="_blank">https://developers.cloudflare.com/cache/how-to/tiered-cache/</a><br>
     <a href="https://developers.cloudflare.com/cache/advanced-configuration/cache-reserve/" style="color:var(--accent);" target="_blank">https://developers.cloudflare.com/cache/advanced-configuration/cache-reserve/</a></p>
-    <p>• Tiered Cache introduces an explicit <strong>parent / child cache topology</strong> so many edge POPs can collapse misses through an upper tier instead of stampeding the origin independently.</p>
-    <p>• Cache Reserve adds a persistent backing layer for long-tail objects that would otherwise age out of edge memory/disk caches but are still worth keeping off origin.</p>
-    <p>• Together the docs show that CDN caching is not a single store; it is a layered hierarchy with different admission, persistence, and refill behaviors at each level.</p>
+    <p>• Tiered Cache is useful because it shows <strong>miss collapsing by topology</strong>: a cold edge does not immediately hit origin, it first asks an upper-tier cache that centralizes refill traffic.</p>
+    <p>• Cache Reserve adds a different storage class to the hierarchy: long-tail objects can survive edge eviction in a persistent backing tier, then be promoted back upward on later demand.</p>
+    <p>• The important technical detail is the <strong>refill path</strong>: edge miss → upper-tier lookup → reserve/origin fetch, with each layer trading latency for origin offload and object retention.</p>
+    <p>• Read these docs as evidence that CDN caching is a multi-tier admission and refill system, not a flat “edge cache hit or miss” story.</p>
   </div>
 </section>
 
@@ -880,5 +940,6 @@ stats = defaultdict(int)
   calc();
 })();
 </script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 </body>
 </html>

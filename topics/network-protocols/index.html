@@ -193,33 +193,98 @@
   <h3>IPv4 Packet Structure</h3>
   <p>An IP packet has two parts: the <strong>header</strong> (20–60 bytes of metadata) and the <strong>payload</strong> (the actual data, up to ~65,535 bytes total packet size, but typically ~1,500 bytes due to Ethernet MTU).</p>
 
-  <div class="memory-map"><span class="h">IPv4 PACKET HEADER (20 bytes minimum)</span>
-<span class="d">┌─────────────────────────────────────────────────────────────────┐</span>
-<span class="d">│</span> <span class="b">Bits:  0-3</span>     <span class="d">│</span> <span class="b">4-7</span>       <span class="d">│</span> <span class="b">8-15</span>           <span class="d">│</span> <span class="b">16-31</span>            <span class="d">│</span>
-<span class="d">├──────────┼───────────┼────────────────┼──────────────────┤</span>
-<span class="d">│</span> <span class="v">Version</span>  <span class="d">│</span> <span class="v">IHL</span>       <span class="d">│</span> <span class="v">Type of Service</span> <span class="d">│</span> <span class="v">Total Length</span>     <span class="d">│</span>
-<span class="d">│</span> <span class="num">4</span> (IPv4) <span class="d">│</span> <span class="num">5</span> (words)  <span class="d">│</span> <span class="num">0x00</span>            <span class="d">│</span> <span class="num">1500</span> bytes       <span class="d">│</span>
-<span class="d">├──────────┴───────────┼────────────────┼──────────────────┤</span>
-<span class="d">│</span> <span class="v">Identification</span>       <span class="d">│</span> <span class="v">Flags</span>          <span class="d">│</span> <span class="v">Fragment Offset</span>  <span class="d">│</span>
-<span class="d">│</span> <span class="num">0x1A2B</span>               <span class="d">│</span> <span class="str">DF</span> (Don't Frag) <span class="d">│</span> <span class="num">0</span>                <span class="d">│</span>
-<span class="d">├────────────────────┼────────────────┼──────────────────┤</span>
-<span class="d">│</span> <span class="v">TTL</span>                <span class="d">│</span> <span class="v">Protocol</span>       <span class="d">│</span> <span class="v">Header Checksum</span>  <span class="d">│</span>
-<span class="d">│</span> <span class="num">64</span> (hops left)     <span class="d">│</span> <span class="num">6</span> (TCP)        <span class="d">│</span> <span class="num">0xB1C2</span>           <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="v">Source IP Address</span>                                        <span class="d">│</span>
-<span class="d">│</span> <span class="num">192.168.1.42</span>                                             <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="v">Destination IP Address</span>                                   <span class="d">│</span>
-<span class="d">│</span> <span class="num">142.250.80.46</span>                                            <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="v">Options</span> (if IHL > 5)        <span class="d">│</span> <span class="v">Padding</span>                    <span class="d">│</span>
-<span class="d">└──────────────────────────────────────────────────────────┘</span>
-<span class="d">│</span>
-<span class="h">PAYLOAD (up to ~65,515 bytes)</span>
-<span class="d">┌──────────────────────────────────────────────────────────┐</span>
-<span class="d">│</span> TCP segment / UDP datagram / ICMP message / etc.         <span class="d">│</span>
-<span class="d">│</span> <span class="str">[This is where TCP header + HTTP data lives]</span>              <span class="d">│</span>
-<span class="d">└──────────────────────────────────────────────────────────┘</span></div>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 780" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <style>
+          .ttl { font-family: 'DM Sans', sans-serif; fill: #e2e6f0; font-size: 14px; font-weight: 600; }
+          .sub { font-family: 'IBM Plex Mono', monospace; fill: #8891a8; font-size: 11px; }
+          .val { font-family: 'IBM Plex Mono', monospace; fill: #fb923c; font-size: 12px; }
+          .hdr { font-family: 'IBM Plex Mono', monospace; fill: #6ee7b7; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; }
+        </style>
+      </defs>
+
+      <text x="30" y="34" class="hdr">IPv4 PACKET HEADER (20 bytes minimum)</text>
+
+      <g transform="translate(30,60)">
+        <text x="45" y="-10" class="sub" text-anchor="middle">0-3</text>
+        <text x="140" y="-10" class="sub" text-anchor="middle">4-7</text>
+        <text x="290" y="-10" class="sub" text-anchor="middle">8-15</text>
+        <text x="570" y="-10" class="sub" text-anchor="middle">16-31</text>
+
+        <rect x="0" y="0" width="90" height="78" rx="8" fill="#1a1e28" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="45" y="28" class="ttl" text-anchor="middle">Version</text>
+        <text x="45" y="50" class="val" text-anchor="middle">4</text>
+        <text x="45" y="68" class="sub" text-anchor="middle">(IPv4)</text>
+
+        <rect x="90" y="0" width="100" height="78" rx="8" fill="#1a1e28" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="140" y="28" class="ttl" text-anchor="middle">IHL</text>
+        <text x="140" y="50" class="val" text-anchor="middle">5</text>
+        <text x="140" y="68" class="sub" text-anchor="middle">(20 bytes)</text>
+
+        <rect x="190" y="0" width="200" height="78" rx="8" fill="#1a1e28" stroke="#fb923c" stroke-width="1.5"/>
+        <text x="290" y="28" class="ttl" text-anchor="middle">Type of Service</text>
+        <text x="290" y="52" class="val" text-anchor="middle">0x00</text>
+
+        <rect x="390" y="0" width="360" height="78" rx="8" fill="#1a1e28" stroke="#fb923c" stroke-width="1.5"/>
+        <text x="570" y="28" class="ttl" text-anchor="middle">Total Length</text>
+        <text x="570" y="52" class="val" text-anchor="middle">1500 bytes</text>
+
+        <text x="180" y="108" class="sub" text-anchor="middle">0-15</text>
+        <text x="405" y="108" class="sub" text-anchor="middle">16-18</text>
+        <text x="600" y="108" class="sub" text-anchor="middle">19-31</text>
+
+        <rect x="0" y="118" width="360" height="78" rx="8" fill="#1a1e28" stroke="#fb923c" stroke-width="1.5"/>
+        <text x="180" y="146" class="ttl" text-anchor="middle">Identification</text>
+        <text x="180" y="170" class="val" text-anchor="middle">0x1A2B</text>
+
+        <rect x="360" y="118" width="90" height="78" rx="8" fill="#1a1e28" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="405" y="146" class="ttl" text-anchor="middle">Flags</text>
+        <text x="405" y="170" class="val" text-anchor="middle">DF</text>
+
+        <rect x="450" y="118" width="300" height="78" rx="8" fill="#1a1e28" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="600" y="146" class="ttl" text-anchor="middle">Fragment Offset</text>
+        <text x="600" y="170" class="val" text-anchor="middle">0</text>
+
+        <text x="90" y="226" class="sub" text-anchor="middle">0-7</text>
+        <text x="270" y="226" class="sub" text-anchor="middle">8-15</text>
+        <text x="555" y="226" class="sub" text-anchor="middle">16-31</text>
+
+        <rect x="0" y="236" width="180" height="78" rx="8" fill="#1a1e28" stroke="#6ee7b7" stroke-width="1.5"/>
+        <text x="90" y="264" class="ttl" text-anchor="middle">TTL</text>
+        <text x="90" y="286" class="val" text-anchor="middle">64</text>
+        <text x="90" y="304" class="sub" text-anchor="middle">(hops left)</text>
+
+        <rect x="180" y="236" width="180" height="78" rx="8" fill="#1a1e28" stroke="#6ee7b7" stroke-width="1.5"/>
+        <text x="270" y="264" class="ttl" text-anchor="middle">Protocol</text>
+        <text x="270" y="286" class="val" text-anchor="middle">6</text>
+        <text x="270" y="304" class="sub" text-anchor="middle">(TCP)</text>
+
+        <rect x="360" y="236" width="390" height="78" rx="8" fill="#1a1e28" stroke="#6ee7b7" stroke-width="1.5"/>
+        <text x="555" y="264" class="ttl" text-anchor="middle">Header Checksum</text>
+        <text x="555" y="288" class="val" text-anchor="middle">0xB1C2</text>
+
+        <rect x="0" y="354" width="750" height="78" rx="8" fill="#1a1e28" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="375" y="382" class="ttl" text-anchor="middle">Source IP Address</text>
+        <text x="375" y="406" class="val" text-anchor="middle">192.168.1.42</text>
+
+        <rect x="0" y="450" width="750" height="78" rx="8" fill="#1a1e28" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="375" y="478" class="ttl" text-anchor="middle">Destination IP Address</text>
+        <text x="375" y="502" class="val" text-anchor="middle">142.250.80.46</text>
+
+        <rect x="0" y="546" width="375" height="58" rx="8" fill="#1a1e28" stroke="#8891a8" stroke-width="1.5"/>
+        <text x="187.5" y="580" class="ttl" text-anchor="middle">Options (if used)</text>
+
+        <rect x="375" y="546" width="375" height="58" rx="8" fill="#1a1e28" stroke="#8891a8" stroke-width="1.5"/>
+        <text x="562.5" y="580" class="ttl" text-anchor="middle">Padding</text>
+      </g>
+
+      <text x="30" y="690" class="hdr">PAYLOAD (up to ~65,515 bytes)</text>
+      <rect x="30" y="708" width="750" height="44" rx="8" fill="#1a1e28" stroke="#2a3040" stroke-width="1.5"/>
+      <text x="405" y="734" class="sub" text-anchor="middle">TCP segment, UDP datagram, ICMP message, etc.</text>
+    </svg>
+    <div class="diagram-caption">Structured IPv4 header layout: each row is 32 bits wide, with fields grouped by bit range before the payload begins.</div>
+  </div>
 
   <h3>Key Fields Explained</h3>
   <div class="table-wrap">
@@ -260,34 +325,82 @@
   <p><strong>Congestion control:</strong> TCP dynamically adjusts its sending rate based on network conditions (packet loss, latency). Algorithms: Slow Start, Congestion Avoidance, Fast Retransmit, Fast Recovery. Modern variants: CUBIC (Linux default), BBR (Google).</p>
 
   <h3>The 3-Way Handshake</h3>
-  <div class="code-block">
-    <div class="code-header"><span>TCP Connection Establishment</span></div>
-    <pre><span class="cm">Client                              Server</span>
-<span class="cm">  │                                    │</span>
-  ├──── <span class="b">SYN</span> (seq=100) ──────────────→  │  <span class="cm">1. "I want to connect, my seq starts at 100"</span>
-  │                                    │
-  │  ←── <span class="v">SYN-ACK</span> (seq=300, ack=101) ──┤  <span class="cm">2. "OK, my seq starts at 300, I expect 101 next"</span>
-  │                                    │
-  ├──── <span class="b">ACK</span> (ack=301) ────────────────→ │  <span class="cm">3. "Got it, I expect 301 next"</span>
-  │                                    │
-  │  <span class="str">  ═══ CONNECTION ESTABLISHED ═══</span>   │
-  │                                    │
-  ├──── <span class="b">PSH,ACK</span> (data: "GET /") ────→  │  <span class="cm">4. Now data flows</span>
-  │                                    │</pre>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 400" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="hs-arrow-r" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse">
+          <path d="M0,0 L8,3 L0,6" fill="#8891a8"/>
+        </marker>
+      </defs>
+
+      <text x="30" y="34" font-family="IBM Plex Mono,monospace" font-size="13" fill="#8891a8">TCP connection establishment</text>
+
+      <text x="110" y="78" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="18" font-weight="600" fill="#60a5fa">Client</text>
+      <text x="510" y="78" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="18" font-weight="600" fill="#a78bfa">Server</text>
+
+      <line x1="110" y1="96" x2="110" y2="334" stroke="#5c6580" stroke-width="2" stroke-dasharray="8 6"/>
+      <line x1="510" y1="96" x2="510" y2="334" stroke="#5c6580" stroke-width="2" stroke-dasharray="8 6"/>
+
+      <line x1="140" y1="128" x2="480" y2="128" stroke="#8891a8" stroke-width="2" marker-end="url(#hs-arrow-r)"/>
+      <text x="310" y="120" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#60a5fa">SYN seq=100</text>
+      <text x="540" y="120" font-family="DM Sans,sans-serif" font-size="14" fill="#8891a8">1. Client starts with its sequence number</text>
+
+      <line x1="140" y1="184" x2="480" y2="184" stroke="#8891a8" stroke-width="2" marker-start="url(#hs-arrow-r)"/>
+      <text x="310" y="176" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#a78bfa">SYN-ACK seq=300 ack=101</text>
+      <text x="540" y="176" font-family="DM Sans,sans-serif" font-size="14" fill="#8891a8">2. Server accepts and acknowledges</text>
+
+      <line x1="140" y1="240" x2="480" y2="240" stroke="#8891a8" stroke-width="2" marker-end="url(#hs-arrow-r)"/>
+      <text x="310" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#60a5fa">ACK ack=301</text>
+      <text x="540" y="232" font-family="DM Sans,sans-serif" font-size="14" fill="#8891a8">3. Client confirms server sequence</text>
+
+      <rect x="205" y="274" width="210" height="30" rx="8" fill="rgba(110,231,183,0.08)" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="310" y="294" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#6ee7b7">CONNECTION ESTABLISHED</text>
+
+      <line x1="140" y1="336" x2="480" y2="336" stroke="#8891a8" stroke-width="2" marker-end="url(#hs-arrow-r)"/>
+      <text x="310" y="328" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#60a5fa">PSH,ACK data</text>
+      <text x="540" y="328" font-family="DM Sans,sans-serif" font-size="14" fill="#8891a8">4. Application data can now flow</text>
+    </svg>
+    <div class="diagram-caption">Three-step TCP setup: synchronize sequence numbers in both directions, then start sending application data.</div>
   </div>
 
   <h3>The 4-Way Teardown</h3>
-  <div class="code-block">
-    <div class="code-header"><span>TCP Connection Termination</span></div>
-    <pre><span class="cm">Client                              Server</span>
-  │                                    │
-  ├──── <span class="b">FIN</span> ─────────────────────────→ │  <span class="cm">1. "I'm done sending"</span>
-  │  ←── <span class="v">ACK</span> ──────────────────────── ┤  <span class="cm">2. "OK, noted"</span>
-  │                                    │  <span class="cm">   (server may still send data)</span>
-  │  ←── <span class="v">FIN</span> ──────────────────────── ┤  <span class="cm">3. "I'm done too"</span>
-  ├──── <span class="b">ACK</span> ─────────────────────────→ │  <span class="cm">4. "Acknowledged"</span>
-  │                                    │
-  │  <span class="str">  ═══ CONNECTION CLOSED ═══</span>       │</pre>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 380" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="tcp-arrow-r" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse">
+          <path d="M0,0 L8,3 L0,6" fill="#8891a8"/>
+        </marker>
+      </defs>
+
+      <text x="30" y="34" font-family="IBM Plex Mono,monospace" font-size="13" fill="#8891a8">TCP connection termination</text>
+
+      <text x="110" y="78" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="18" font-weight="600" fill="#60a5fa">Client</text>
+      <text x="510" y="78" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="18" font-weight="600" fill="#a78bfa">Server</text>
+
+      <line x1="110" y1="96" x2="110" y2="314" stroke="#5c6580" stroke-width="2" stroke-dasharray="8 6"/>
+      <line x1="510" y1="96" x2="510" y2="314" stroke="#5c6580" stroke-width="2" stroke-dasharray="8 6"/>
+
+      <line x1="140" y1="128" x2="480" y2="128" stroke="#8891a8" stroke-width="2" marker-end="url(#tcp-arrow-r)"/>
+      <text x="310" y="120" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#60a5fa">FIN</text>
+      <text x="540" y="120" font-family="DM Sans,sans-serif" font-size="14" fill="#8891a8">1. Client finished sending</text>
+
+      <line x1="140" y1="176" x2="480" y2="176" stroke="#8891a8" stroke-width="2" marker-start="url(#tcp-arrow-r)"/>
+      <text x="310" y="168" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#a78bfa">ACK</text>
+      <text x="540" y="168" font-family="DM Sans,sans-serif" font-size="14" fill="#8891a8">2. Server acknowledges</text>
+      <text x="540" y="188" font-family="IBM Plex Mono,monospace" font-size="12" fill="#5c6580">server may still send pending data</text>
+
+      <line x1="140" y1="232" x2="480" y2="232" stroke="#8891a8" stroke-width="2" marker-start="url(#tcp-arrow-r)"/>
+      <text x="310" y="224" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#a78bfa">FIN</text>
+      <text x="540" y="224" font-family="DM Sans,sans-serif" font-size="14" fill="#8891a8">3. Server finished too</text>
+
+      <line x1="140" y1="280" x2="480" y2="280" stroke="#8891a8" stroke-width="2" marker-end="url(#tcp-arrow-r)"/>
+      <text x="310" y="272" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#60a5fa">ACK</text>
+      <text x="540" y="272" font-family="DM Sans,sans-serif" font-size="14" fill="#8891a8">4. Client acknowledges</text>
+
+      <rect x="220" y="326" width="180" height="30" rx="8" fill="rgba(110,231,183,0.08)" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="310" y="346" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#6ee7b7">CONNECTION CLOSED</text>
+    </svg>
+    <div class="diagram-caption">Four-step TCP close: one side closes its send stream first, the other acknowledges, then closes its side, then receives the final ACK.</div>
   </div>
 
   <div class="callout green">
@@ -303,25 +416,81 @@
 
   <p>The TCP header sits inside the IP packet's payload. It's 20 bytes minimum (up to 60 with options). Every field has a purpose — here's the complete anatomy.</p>
 
-  <div class="memory-map"><span class="h">TCP HEADER (20 bytes minimum)</span>
-<span class="d">┌─────────────────────────────┬─────────────────────────────┐</span>
-<span class="d">│</span> <span class="v">Source Port</span>      (16 bits)   <span class="d">│</span> <span class="v">Destination Port</span> (16 bits)   <span class="d">│</span>
-<span class="d">│</span> <span class="num">52431</span>                       <span class="d">│</span> <span class="num">443</span>                         <span class="d">│</span>
-<span class="d">├─────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="v">Sequence Number</span>                                  (32 bits)  <span class="d">│</span>
-<span class="d">│</span> <span class="num">0x00A3F1B2</span>  <span class="cm">← byte position in the stream</span>                   <span class="d">│</span>
-<span class="d">├─────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="v">Acknowledgment Number</span>                            (32 bits)  <span class="d">│</span>
-<span class="d">│</span> <span class="num">0x00F2A100</span>  <span class="cm">← next byte I expect from you</span>                   <span class="d">│</span>
-<span class="d">├────────┬──────────────┬─────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="v">Offset</span> <span class="d">│</span> <span class="v">Reserved</span>     <span class="d">│</span> <span class="v">Flags</span>  (9 bits)                       <span class="d">│</span>
-<span class="d">│</span> <span class="num">5</span>      <span class="d">│</span> <span class="num">000</span>          <span class="d">│</span> <span class="str">SYN ACK PSH FIN RST URG ECE CWR NS</span> <span class="d">│</span>
-<span class="d">├────────┴──────────────┼─────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="v">Window Size</span>           <span class="d">│</span> <span class="v">Checksum</span>                            <span class="d">│</span>
-<span class="d">│</span> <span class="num">65535</span> bytes            <span class="d">│</span> <span class="num">0xA1B2</span>                              <span class="d">│</span>
-<span class="d">├───────────────────────┼─────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="v">Urgent Pointer</span>        <span class="d">│</span> <span class="v">Options</span> (if offset > 5)              <span class="d">│</span>
-<span class="d">└───────────────────────┴─────────────────────────────────────┘</span></div>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 720" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <style>
+          .tcp-ttl { font-family: 'DM Sans', sans-serif; fill: #e2e6f0; font-size: 14px; font-weight: 600; }
+          .tcp-sub { font-family: 'IBM Plex Mono', monospace; fill: #8891a8; font-size: 11px; }
+          .tcp-val { font-family: 'IBM Plex Mono', monospace; fill: #fb923c; font-size: 12px; }
+          .tcp-hdr { font-family: 'IBM Plex Mono', monospace; fill: #6ee7b7; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; }
+        </style>
+      </defs>
+
+      <text x="30" y="34" class="tcp-hdr">TCP HEADER (20 bytes minimum)</text>
+
+      <g transform="translate(30,60)">
+        <text x="187.5" y="-10" class="tcp-sub" text-anchor="middle">0-15</text>
+        <text x="562.5" y="-10" class="tcp-sub" text-anchor="middle">16-31</text>
+
+        <rect x="0" y="0" width="375" height="78" rx="8" fill="#1a1e28" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="187.5" y="28" class="tcp-ttl" text-anchor="middle">Source Port</text>
+        <text x="187.5" y="52" class="tcp-val" text-anchor="middle">52431</text>
+
+        <rect x="375" y="0" width="375" height="78" rx="8" fill="#1a1e28" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="562.5" y="28" class="tcp-ttl" text-anchor="middle">Destination Port</text>
+        <text x="562.5" y="52" class="tcp-val" text-anchor="middle">443</text>
+
+        <text x="375" y="108" class="tcp-sub" text-anchor="middle">0-31</text>
+
+        <rect x="0" y="118" width="750" height="78" rx="8" fill="#1a1e28" stroke="#fb923c" stroke-width="1.5"/>
+        <text x="375" y="146" class="tcp-ttl" text-anchor="middle">Sequence Number</text>
+        <text x="375" y="170" class="tcp-val" text-anchor="middle">0x00A3F1B2</text>
+        <text x="375" y="188" class="tcp-sub" text-anchor="middle">Byte position in the stream</text>
+
+        <rect x="0" y="218" width="750" height="78" rx="8" fill="#1a1e28" stroke="#fb923c" stroke-width="1.5"/>
+        <text x="375" y="246" class="tcp-ttl" text-anchor="middle">Acknowledgment Number</text>
+        <text x="375" y="270" class="tcp-val" text-anchor="middle">0x00F2A100</text>
+        <text x="375" y="288" class="tcp-sub" text-anchor="middle">Next byte expected from peer</text>
+
+        <text x="60" y="326" class="tcp-sub" text-anchor="middle">0-3</text>
+        <text x="150" y="326" class="tcp-sub" text-anchor="middle">4-6</text>
+        <text x="240" y="326" class="tcp-sub" text-anchor="middle">7-15</text>
+        <text x="525" y="326" class="tcp-sub" text-anchor="middle">16-31</text>
+
+        <rect x="0" y="336" width="120" height="88" rx="8" fill="#1a1e28" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="60" y="364" class="tcp-ttl" text-anchor="middle">Offset</text>
+        <text x="60" y="388" class="tcp-val" text-anchor="middle">5</text>
+        <text x="60" y="406" class="tcp-sub" text-anchor="middle">(20 bytes)</text>
+
+        <rect x="120" y="336" width="120" height="88" rx="8" fill="#1a1e28" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="180" y="364" class="tcp-ttl" text-anchor="middle">Reserved</text>
+        <text x="180" y="388" class="tcp-val" text-anchor="middle">000</text>
+
+        <rect x="240" y="336" width="510" height="88" rx="8" fill="#1a1e28" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="495" y="364" class="tcp-ttl" text-anchor="middle">Flags</text>
+        <text x="495" y="388" class="tcp-sub" text-anchor="middle">SYN ACK PSH FIN RST URG ECE CWR NS</text>
+
+        <text x="187.5" y="454" class="tcp-sub" text-anchor="middle">0-15</text>
+        <text x="562.5" y="454" class="tcp-sub" text-anchor="middle">16-31</text>
+
+        <rect x="0" y="464" width="375" height="78" rx="8" fill="#1a1e28" stroke="#6ee7b7" stroke-width="1.5"/>
+        <text x="187.5" y="492" class="tcp-ttl" text-anchor="middle">Window Size</text>
+        <text x="187.5" y="516" class="tcp-val" text-anchor="middle">65535 bytes</text>
+
+        <rect x="375" y="464" width="375" height="78" rx="8" fill="#1a1e28" stroke="#6ee7b7" stroke-width="1.5"/>
+        <text x="562.5" y="492" class="tcp-ttl" text-anchor="middle">Checksum</text>
+        <text x="562.5" y="516" class="tcp-val" text-anchor="middle">0xA1B2</text>
+
+        <rect x="0" y="562" width="240" height="58" rx="8" fill="#1a1e28" stroke="#8891a8" stroke-width="1.5"/>
+        <text x="120" y="596" class="tcp-ttl" text-anchor="middle">Urgent Pointer</text>
+
+        <rect x="240" y="562" width="510" height="58" rx="8" fill="#1a1e28" stroke="#8891a8" stroke-width="1.5"/>
+        <text x="495" y="596" class="tcp-ttl" text-anchor="middle">Options (if offset &gt; 5)</text>
+      </g>
+    </svg>
+    <div class="diagram-caption">Structured TCP header layout: ports, sequence tracking, control flags, flow-control window, and options are grouped by their on-wire bit layout.</div>
+  </div>
 
   <div class="table-wrap">
     <table>
@@ -353,19 +522,46 @@
   <p>UDP is TCP's simpler, faster sibling. It sits at the same Transport layer but provides <strong>almost nothing</strong> beyond IP: no connection setup, no reliability, no ordering, no flow control. Just <strong>ports + checksum + your data</strong>.</p>
 
   <h3>UDP Header (8 bytes total — that's it)</h3>
-  <div class="memory-map"><span class="h">UDP HEADER (8 bytes — compare to TCP's 20+)</span>
-<span class="d">┌───────────────────────┬───────────────────────┐</span>
-<span class="d">│</span> <span class="v">Source Port</span> (16 bits)  <span class="d">│</span> <span class="v">Dest Port</span> (16 bits)    <span class="d">│</span>
-<span class="d">│</span> <span class="num">52431</span>                 <span class="d">│</span> <span class="num">53</span>                     <span class="d">│</span>
-<span class="d">├───────────────────────┼───────────────────────┤</span>
-<span class="d">│</span> <span class="v">Length</span> (16 bits)       <span class="d">│</span> <span class="v">Checksum</span> (16 bits)     <span class="d">│</span>
-<span class="d">│</span> <span class="num">42</span> bytes               <span class="d">│</span> <span class="num">0xA1B2</span>                 <span class="d">│</span>
-<span class="d">└───────────────────────┴───────────────────────┘</span>
-<span class="d">│</span>
-<span class="h">PAYLOAD</span>
-<span class="d">┌───────────────────────────────────────────────┐</span>
-<span class="d">│</span> <span class="str">[Your data — DNS query, game state, video frame]</span><span class="d">│</span>
-<span class="d">└───────────────────────────────────────────────┘</span></div>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 340" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <style>
+          .udp-ttl { font-family: 'DM Sans', sans-serif; fill: #e2e6f0; font-size: 14px; font-weight: 600; }
+          .udp-sub { font-family: 'IBM Plex Mono', monospace; fill: #8891a8; font-size: 11px; }
+          .udp-val { font-family: 'IBM Plex Mono', monospace; fill: #fb923c; font-size: 12px; }
+          .udp-hdr { font-family: 'IBM Plex Mono', monospace; fill: #6ee7b7; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; }
+        </style>
+      </defs>
+
+      <text x="30" y="34" class="udp-hdr">UDP HEADER (8 bytes total)</text>
+
+      <g transform="translate(30,60)">
+        <text x="187.5" y="-10" class="udp-sub" text-anchor="middle">0-15</text>
+        <text x="562.5" y="-10" class="udp-sub" text-anchor="middle">16-31</text>
+
+        <rect x="0" y="0" width="375" height="78" rx="8" fill="#1a1e28" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="187.5" y="28" class="udp-ttl" text-anchor="middle">Source Port</text>
+        <text x="187.5" y="52" class="udp-val" text-anchor="middle">52431</text>
+
+        <rect x="375" y="0" width="375" height="78" rx="8" fill="#1a1e28" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="562.5" y="28" class="udp-ttl" text-anchor="middle">Destination Port</text>
+        <text x="562.5" y="52" class="udp-val" text-anchor="middle">53</text>
+
+        <rect x="0" y="100" width="375" height="78" rx="8" fill="#1a1e28" stroke="#fb923c" stroke-width="1.5"/>
+        <text x="187.5" y="128" class="udp-ttl" text-anchor="middle">Length</text>
+        <text x="187.5" y="152" class="udp-val" text-anchor="middle">42 bytes</text>
+
+        <rect x="375" y="100" width="375" height="78" rx="8" fill="#1a1e28" stroke="#fb923c" stroke-width="1.5"/>
+        <text x="562.5" y="128" class="udp-ttl" text-anchor="middle">Checksum</text>
+        <text x="562.5" y="152" class="udp-val" text-anchor="middle">0xA1B2</text>
+      </g>
+
+      <text x="30" y="272" class="udp-hdr">PAYLOAD</text>
+      <rect x="30" y="286" width="750" height="34" rx="8" fill="#1a1e28" stroke="#2a3040" stroke-width="1.5"/>
+      <text x="405" y="307" class="udp-sub" text-anchor="middle">DNS query, game state update, telemetry packet, video frame, etc.</text>
+    </svg>
+    <div class="diagram-caption">Structured UDP header layout: just four 16-bit fields, then the application payload. No sequence numbers, no ACKs, no window management.</div>
+  </div>
 
   <h3>TCP vs UDP — Head-to-Head</h3>
   <div class="table-wrap">
@@ -488,49 +684,58 @@
 
   <p>Here's what a single HTTP request looks like as it's wrapped layer by layer into a complete network packet ready to go on the wire.</p>
 
-  <div class="memory-map"><span class="h">APPLICATION LAYER — HTTP (your actual data)</span>
-<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
-<span class="d">│</span> <span class="str">POST /api/users HTTP/1.1\r\n</span>                                 <span class="d">│</span>
-<span class="d">│</span> <span class="str">Host: api.example.com\r\n</span>                                    <span class="d">│</span>
-<span class="d">│</span> <span class="str">Content-Type: application/json\r\n</span>                           <span class="d">│</span>
-<span class="d">│</span> <span class="str">\r\n</span>                                                         <span class="d">│</span>
-<span class="d">│</span> <span class="str">{"name":"Alice"}</span>                                             <span class="d">│</span>
-<span class="d">└──────────────────────────────────────────────────────────────┘</span>
-                    <span class="d">│  TCP wraps it</span>
-                    <span class="d">▼</span>
-<span class="h">TRANSPORT LAYER — TCP segment</span>
-<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
-<span class="d">│</span> <span class="b">TCP HEADER</span> (20 bytes)                                        <span class="d">│</span>
-<span class="d">│</span>  src_port:<span class="num">52431</span> dst_port:<span class="num">443</span> seq:<span class="num">0x00A3</span> ack:<span class="num">0x00F2</span>            <span class="d">│</span>
-<span class="d">│</span>  flags:<span class="str">PSH,ACK</span>  window:<span class="num">65535</span>  checksum:<span class="num">0xB1C2</span>                 <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="str">[HTTP data from above — now encrypted via TLS]</span>                <span class="d">│</span>
-<span class="d">└──────────────────────────────────────────────────────────────┘</span>
-                    <span class="d">│  IP wraps it</span>
-                    <span class="d">▼</span>
-<span class="h">NETWORK LAYER — IP packet</span>
-<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
-<span class="d">│</span> <span class="b">IP HEADER</span> (20 bytes)                                         <span class="d">│</span>
-<span class="d">│</span>  ver:<span class="num">4</span> ttl:<span class="num">64</span> proto:<span class="num">6</span>(TCP)                                    <span class="d">│</span>
-<span class="d">│</span>  src:<span class="num">192.168.1.42</span>  dst:<span class="num">142.250.80.46</span>                          <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="str">[TCP segment from above]</span>                                      <span class="d">│</span>
-<span class="d">└──────────────────────────────────────────────────────────────┘</span>
-                    <span class="d">│  Ethernet wraps it</span>
-                    <span class="d">▼</span>
-<span class="h">LINK LAYER — Ethernet frame</span>
-<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
-<span class="d">│</span> <span class="b">ETH HEADER</span> (14 bytes)                                        <span class="d">│</span>
-<span class="d">│</span>  dst_mac:<span class="num">AA:BB:CC:DD:EE:FF</span>  src_mac:<span class="num">11:22:33:44:55:66</span>       <span class="d">│</span>
-<span class="d">│</span>  type:<span class="num">0x0800</span> (IPv4)                                            <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="str">[IP packet from above]</span>                                        <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">ETH TRAILER</span> (4 bytes)  CRC/FCS checksum                      <span class="d">│</span>
-<span class="d">└──────────────────────────────────────────────────────────────┘</span>
-                    <span class="d">│</span>
-                    <span class="d">▼</span>
-        <span class="v">═══ BITS ON THE WIRE ═══</span></div>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 860" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="enc-arrow" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6" fill="#8891a8"/>
+        </marker>
+      </defs>
+
+      <rect x="140" y="20" width="580" height="116" rx="12" fill="#1a1e28" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="430" y="48" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#a78bfa">APPLICATION LAYER</text>
+      <text x="430" y="74" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="18" fill="#e2e6f0" font-weight="600">HTTP Request</text>
+      <rect x="170" y="90" width="520" height="28" rx="8" fill="#222734" stroke="#2a3040" stroke-width="1"/>
+      <text x="430" y="108" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6ee7b7">POST /api/users · headers · JSON body</text>
+
+      <path d="M430 140 L430 170" stroke="#8891a8" stroke-width="1.5" marker-end="url(#enc-arrow)"/>
+      <text x="448" y="158" font-family="IBM Plex Mono,monospace" font-size="11" fill="#5c6580">TCP wraps it</text>
+
+      <rect x="110" y="182" width="640" height="166" rx="12" fill="#1a1e28" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="430" y="210" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#60a5fa">TRANSPORT LAYER</text>
+      <text x="430" y="236" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="18" fill="#e2e6f0" font-weight="600">TCP Segment</text>
+      <rect x="136" y="252" width="588" height="38" rx="8" fill="#222734" stroke="#2a3040" stroke-width="1"/>
+      <text x="430" y="275" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#60a5fa">Header: src 52431 · dst 443 · seq · ack · flags · window</text>
+      <rect x="136" y="302" width="588" height="28" rx="8" fill="rgba(167,139,250,0.12)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="430" y="320" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#a78bfa">Payload: HTTP request bytes</text>
+
+      <path d="M430 356 L430 386" stroke="#8891a8" stroke-width="1.5" marker-end="url(#enc-arrow)"/>
+      <text x="448" y="374" font-family="IBM Plex Mono,monospace" font-size="11" fill="#5c6580">IP wraps it</text>
+
+      <rect x="110" y="398" width="640" height="156" rx="12" fill="#1a1e28" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="430" y="426" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6ee7b7">NETWORK LAYER</text>
+      <text x="430" y="452" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="18" fill="#e2e6f0" font-weight="600">IP Packet</text>
+      <rect x="136" y="468" width="588" height="38" rx="8" fill="#222734" stroke="#2a3040" stroke-width="1"/>
+      <text x="430" y="491" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6ee7b7">Header: IPv4 · TTL 64 · proto TCP</text>
+      <rect x="136" y="518" width="588" height="28" rx="8" fill="rgba(96,165,250,0.12)" stroke="#60a5fa" stroke-width="1"/>
+      <text x="430" y="536" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#60a5fa">Payload: TCP segment</text>
+
+      <path d="M430 562 L430 592" stroke="#8891a8" stroke-width="1.5" marker-end="url(#enc-arrow)"/>
+      <text x="448" y="580" font-family="IBM Plex Mono,monospace" font-size="11" fill="#5c6580">Ethernet wraps it</text>
+
+      <rect x="90" y="604" width="680" height="178" rx="12" fill="#1a1e28" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="430" y="632" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">LINK LAYER</text>
+      <text x="430" y="658" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="18" fill="#e2e6f0" font-weight="600">Ethernet Frame</text>
+      <rect x="116" y="674" width="648" height="38" rx="8" fill="#222734" stroke="#2a3040" stroke-width="1"/>
+      <text x="430" y="697" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c">Header: dst MAC · src MAC · type IPv4</text>
+      <rect x="116" y="724" width="648" height="28" rx="8" fill="rgba(110,231,183,0.12)" stroke="#6ee7b7" stroke-width="1"/>
+      <text x="430" y="742" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6ee7b7">Payload: full IP packet</text>
+      <text x="430" y="768" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#8891a8">CRC trailer is appended on the wire</text>
+
+      <text x="430" y="832" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="15" fill="#6ee7b7">BITS ON THE WIRE</text>
+    </svg>
+    <div class="diagram-caption">Encapsulation in RAM: each lower layer wraps the bytes from the layer above with its own header before transmission.</div>
+  </div>
 
   <div class="callout green">
     <div class="callout-label">The Total Overhead</div>
@@ -973,6 +1178,58 @@ print(<span class="str">f"{'='*50}\n"</span>)</pre>
   <h2>Interview Questions & Answers</h2>
   <p>Click to reveal answers. These are real FAANG-level questions.</p>
 
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design the network protocol choices for a global collaboration product.</strong> Documents sync, presence updates, and large file upload all live in the same product, but they should not all ride the network the same way. A good answer has to separate addressing and packet forwarding, reliable byte-stream transport, modern encrypted transport, and application semantics. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would break the system into traffic classes. Control-plane API calls and file upload metadata can stay on HTTP semantics over a reliable transport, because request ordering and retries matter there. Latency-sensitive interactive updates need a stronger discussion: if I need browser compatibility and encrypted multiplexed streams, HTTP/3 over QUIC is a practical default because loss on one stream does not stall all streams the way HTTP/2 over TCP can under packet loss. I would also pin down the application routing key: edits for one document or one room often need to land on the same collaboration shard, so I would say whether I route by <code class="inline">document_id</code>, <code class="inline">room_id</code>, or <code class="inline">user_id</code>. Transport choice does not remove that ownership problem. I would also mention that packet size and path behavior matter in the real world: Path MTU issues, NAT idle timers, and retransmission behavior are often what turn a “correct” protocol choice into a user-visible outage. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a> <a href="#ref9" class="ref">[9]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The classic push-back is: <em>what breaks on lossy mobile networks?</em> That is where I would explain head-of-line blocking on TCP, why QUIC keeps separate stream-level loss recovery, and why blindly sending larger packets can fail if a path cannot carry them. Another good push is: <em>what does “HTTP/3” buy you if your application semantics are still wrong?</em> I would answer that transport can reduce handshake cost and isolate stream loss, but it cannot fix bad retry policy, bad timeout policy, or unsafe application methods. If document-shard routing changes during failover, I would also call out stale route metadata: one client can still stream edits to the old owner while another has already switched, which becomes an ordering bug rather than a transport bug. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a> <a href="#ref9" class="ref">[9]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think a Figma- or Docs-style collaboration stack:</strong> HTTP semantics for metadata, QUIC for interactive streams on lossy networks, and an application shard keyed by <code class="inline">document_id</code> or <code class="inline">room_id</code>. The interview strength is showing that transport fixes some latency and loss problems, but not ownership, ordering, or failover semantics. <a href="#ref2" class="ref">[2]</a> <a href="#ref5" class="ref">[5]</a> <a href="#ref9" class="ref">[9]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    C["Browser or mobile"]
+    Q["QUIC / HTTP3 gateway"]
+    Coord["Coordinator: route by doc_id"]
+    Doc["Document Shard"]
+    Pres["Presence Stream"]
+    File["File Upload API"]
+    N1["One stream loss stays isolated"]
+    N2["Stale route reorders edits"]
+    N3["MTU NAT mobile loss still matters"]
+
+    C --> Q
+    Q --> Coord
+    Coord --> Doc
+    Coord --> Pres
+    Q --> File
+    Q -.-> N1
+    Coord -.-> N2
+    Q -.-> N3
+
+    classDef client fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C client;
+    class Q,Coord core;
+    class Doc,Pres,File data;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: separate transport choice from shard ownership, then explain where lossy networks and stale routing create different classes of failure.</div>
+  </div>
+
   <div class="qa">
     <div class="qa-q">Q1: Explain the difference between TCP and UDP. When would you use each?</div>
     <div class="qa-a">
@@ -1105,7 +1362,7 @@ print(<span class="str">f"{'='*50}\n"</span>)</pre>
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References & Further Reading</h2>
-  <p>Primary RFCs and papers cited throughout this document. Each broken down into digestible takeaways.</p>
+  <p>Primary RFCs and papers cited throughout this document. Each is broken down by the concrete protocol behavior, deployment tradeoff, or failure mode to extract from it.</p>
 
   <div id="ref1" class="callout green" style="margin-top: 28px;">
     <div class="callout-label">[1] RFC 791 — Internet Protocol (1981)</div>
@@ -1161,36 +1418,36 @@ print(<span class="str">f"{'='*50}\n"</span>)</pre>
     <div class="callout-label">[6] Cloudflare — HTTP RFCs Have Evolved: A View of HTTP Usage Trends (2022)</div>
     <p><strong>Pardue, L. & Belson, D.</strong> Cloudflare Blog, June 2022.<br>
     <a href="https://blog.cloudflare.com/cloudflare-view-http3-usage/" style="color:var(--blue);" target="_blank">https://blog.cloudflare.com/cloudflare-view-http3-usage/</a></p>
-    <p>• The post publishes real request-share measurements split by HTTP version, which is useful because protocol adoption is often discussed without traffic data.</p>
-    <p>• It shows the operational outcome of version negotiation at the edge: HTTP/3 may grow quickly while HTTP/2 still carries a large fraction of production traffic.</p>
-    <p>• The value of the source is empirical, not theoretical: it quantifies mixed-protocol deployment in the field.</p>
+    <p>• The useful detail is the <strong>measured negotiation outcome</strong> at the edge: even when HTTP/3 support exists, final protocol choice still depends on browser support, UDP reachability, Alt-Svc discovery, and fallback to HTTP/2.</p>
+    <p>• Read the charts as deployment evidence for <strong>multi-protocol serving</strong>: operators must keep H1/H2/H3 paths healthy at the same time because adoption is incremental, not a clean cutover.</p>
+    <p>• The source is valuable precisely because it converts protocol evolution from a standards story into an observed production-traffic distribution.</p>
   </div>
 
   <div id="ref7" class="callout green">
     <div class="callout-label">[7] Meta — How Facebook Is Bringing QUIC to Billions (2020)</div>
     <p><strong>Engineering at Meta.</strong> October 2020.<br>
     <a href="https://engineering.fb.com/2020/10/21/networking-traffic/how-facebook-is-bringing-quic-to-billions/" style="color:var(--accent);" target="_blank">https://engineering.fb.com/2020/10/21/networking-traffic/how-facebook-is-bringing-quic-to-billions/</a></p>
-    <p>• Meta describes the engineering path for large-scale QUIC rollout, including loss recovery tuning, congestion control behavior, and migration concerns at internet scale.</p>
-    <p>• The write-up is especially useful as an operator case study: it focuses on observed error-rate and tail-latency effects rather than only protocol elegance.</p>
-    <p>• It is a good complement to the RFC because it shows what transport behavior matters once QUIC meets real mobile and heterogeneous-network traffic.</p>
+    <p>• Meta’s write-up is most useful for the <strong>operator-level transport details</strong>: user-space loss recovery, congestion-control tuning, and pacing matter once QUIC is exposed to mobile loss and path variation.</p>
+    <p>• It also explains why <strong>connection migration</strong> is not just a neat feature: preserving sessions across network changes materially affects mobile reliability and tail latency.</p>
+    <p>• This complements RFC 9000 by showing which QUIC mechanisms dominate real rollout risk once the protocol leaves the lab and hits heterogeneous networks at scale.</p>
   </div>
 
   <div id="ref8" class="callout purple">
     <div class="callout-label">[8] Chrome for Developers — Remove HTTP/2 Server Push from Chrome (2022)</div>
     <p><strong>Pollard, B.</strong> Chrome for Developers, August 2022.<br>
     <a href="https://developer.chrome.com/blog/removing-push" style="color:var(--purple);" target="_blank">https://developer.chrome.com/blog/removing-push</a></p>
-    <p>• Documents why HTTP/2 Server Push underperformed in practice: poor cache-awareness at the server, hard-to-predict asset usefulness, and complex interaction with prioritization and browser caches.</p>
-    <p>• The deprecation note is technically useful because it shows that a feature can be standards-compliant yet still lose to simpler alternatives like `preload` and good caching.</p>
-    <p>• It is a practical example of protocol-surface reduction after real deployment evidence, not just a browser policy announcement.</p>
+    <p>• The technical lesson is why Server Push failed: the server cannot reliably know the browser cache state, so pushes often duplicated already-cached assets or displaced more useful traffic on the connection.</p>
+    <p>• The post also surfaces an interaction problem with <strong>prioritization and congestion budget</strong>: speculative pushed bytes can delay the truly critical response path.</p>
+    <p>• It is useful because it shows a concrete case where protocol surface area was reduced after production evidence favored simpler alternatives such as <code class="inline">preload</code> and better cache hints.</p>
   </div>
 
   <div id="ref9" class="callout red">
     <div class="callout-label">[9] Cloudflare — Path MTU Discovery in Practice (2015)</div>
     <p><strong>Majkowski, M.</strong> Cloudflare Blog, February 2015.<br>
     <a href="https://blog.cloudflare.com/path-mtu-discovery-in-practice/" style="color:var(--red);" target="_blank">https://blog.cloudflare.com/path-mtu-discovery-in-practice/</a></p>
-    <p>• Walks through a real PMTU failure mode in which oversized packets and missing/blocked ICMP feedback caused black-holed traffic for a subset of paths.</p>
-    <p>• The write-up is technically useful because it ties together MTU, ICMP “fragmentation needed” behavior, ECMP path variation, and transport-level symptoms.</p>
-    <p>• It gives concrete production motivation for MSS clamping, PMTU diagnostics, and careful handling of ICMP in network security policies.</p>
+    <p>• The failure mode is specific: packets were sent with sizes above the real path MTU, ICMP “fragmentation needed” feedback did not complete the loop, and flows were <strong>black-holed</strong> instead of cleanly degraded.</p>
+    <p>• The article is useful because it ties together DF-bit behavior, PMTU discovery, ICMP filtering, and TCP-level symptoms like stalled connections or retransmission loops.</p>
+    <p>• It gives concrete production motivation for MSS clamping, PMTU debugging, and treating ICMP as part of the transport-control path rather than as optional noise.</p>
   </div>
 </section>
 
@@ -1199,6 +1456,7 @@ print(<span class="str">f"{'='*50}\n"</span>)</pre>
 </footer>
 
 </div>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 <script src="../../assets/js/topic.js"></script>
 </body>
 </html>

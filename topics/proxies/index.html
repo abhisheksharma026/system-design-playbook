@@ -538,6 +538,58 @@ print(f<span class="str">"  Direct:  avg={d_avg:.0f}ms  p99={d_p99:.0f}ms"</span
   <div class="section-num">13</div>
   <h2>Interview Questions & Answers</h2>
 
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Put a reverse-proxy layer in front of a multi-service API.</strong> Explain what lives there, what absolutely should not, and how the backend still learns who the original client was. This is usually where an interview moves from “proxy definition” to practical production concerns like trust boundaries, retries, timeouts, and header propagation. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would say the reverse proxy is the shared network edge for concerns that should be enforced consistently: TLS termination, host and path routing, request buffering, compression, basic edge caching, auth integration, and observability. Then I would define the trust boundary clearly. If the backend reads <code class="inline">X-Forwarded-For</code> or <code class="inline">Forwarded</code>, it must trust only the proxy chain that is under our control; otherwise clients can spoof those headers. If the proxy also owns sticky routing, I would name the affinity key explicitly (cookie, user ID, source IP) and explain what happens when the backend pool changes; otherwise I would avoid making correctness depend on affinity and keep state outside the app servers. I would also explain that retries and timeouts belong at the proxy only if the request semantics are safe enough for them. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The push-back is usually operational: <em>what causes 502 or 504 from the proxy, and how do you prove whether the problem is the proxy or the upstream?</em> That is where I would talk about upstream connect timeout, request timeout, response timeout, circuit-breaking, and per-hop tracing headers. If the proxy fleet rolls out route or sticky-session changes asynchronously, I would also call out split behavior across proxies: one edge may still send a client to the old backend while another sends it to the new one. That is survivable for cache affinity, but dangerous if session state still lives on one app server. In a service-mesh setting, I would also mention that sidecars move cross-cutting traffic policy out of the application, but they do not remove the need to understand which hop owns retries, which hop owns TLS, and which hop is authoritative for client identity. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think Cloudflare-style edge or Envoy-style gateway:</strong> TLS terminates once, policy is enforced once, and forwarded identity is trusted only from the proxy chain you operate. The interview value is not naming the product. It is showing the edge responsibilities, the trust boundary, and what breaks if sticky routing or config rollout drifts across the proxy fleet. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    C["Clients"]
+    P["Reverse proxy"]
+    H["Trust only your proxies"]
+    S1["API Service A"]
+    S2["API Service B"]
+    S3["Session-bound service"]
+    N1["Sticky key? cookie user or IP"]
+    N2["Config drift splits traffic"]
+
+    C --> P
+    P --> S1
+    P --> S2
+    P --> S3
+    P -.-> H
+    P -.-> N1
+    P -.-> N2
+
+    classDef edge fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef proxy fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef service fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef risk fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C edge;
+    class P proxy;
+    class S1,S2 service;
+    class S3 risk;
+    class H,N1,N2 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: define what the proxy owns, what it forwards, and where sticky routing becomes a correctness risk rather than a convenience.</div>
+  </div>
+
   <div class="qa">
     <div class="qa-q">Q1: What's the difference between a forward proxy and a reverse proxy?</div>
     <div class="qa-a">
@@ -656,6 +708,7 @@ print(f<span class="str">"  Direct:  avg={d_avg:.0f}ms  p99={d_p99:.0f}ms"</span
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References & Further Reading</h2>
+  <p>Each source below is broken down by the mechanism, control point, or failure boundary you should extract from it.</p>
 
   <div id="ref1" class="callout green" style="margin-top:28px;">
     <div class="callout-label">[1] Sysoev + Alexeev — Nginx Architecture</div>
@@ -671,29 +724,30 @@ print(f<span class="str">"  Direct:  avg={d_avg:.0f}ms  p99={d_p99:.0f}ms"</span
     <div class="callout-label">[2] Envoy Architecture Overview</div>
     <p><strong>Envoy Proxy documentation.</strong><br>
     <a href="https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/arch_overview" style="color:var(--blue);" target="_blank">https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/arch_overview</a></p>
-    <p>• Defines Envoy’s core data plane abstraction: <strong>listeners</strong> accept downstream connections, <strong>filter chains</strong> inspect and transform traffic, and <strong>clusters</strong> represent upstream backends.</p>
-    <p>• Explains the separation between <strong>L4 filters</strong> (TCP proxy, TLS inspector) and <strong>L7 HTTP filters</strong> (routing, retries, authn/z, rate limiting, tracing).</p>
-    <p>• Documents <strong>xDS APIs</strong>, where a control plane pushes routes, endpoints, certificates, and policy to many sidecars without editing local config files.</p>
-    <p>• Shows why Envoy fits service meshes: per-hop timeouts, circuit breakers, retries, observability, and mTLS all execute in the proxy rather than application code.</p>
+    <p>• Defines Envoy’s core forwarding graph precisely: a <strong>listener</strong> owns one or more filter chains, each chain selects network or HTTP filters, and the request eventually resolves to an upstream <strong>cluster</strong> plus a concrete endpoint.</p>
+    <p>• The important technical split is <strong>L4 interception versus L7 request processing</strong>: TCP filters can proxy opaque streams, while HTTP connection managers decode requests so retries, routing, header mutation, and per-route policy happen above the socket layer.</p>
+    <p>• The xDS material is the real control-plane mechanism: CDS/LDS/RDS/EDS/SDS independently distribute clusters, listeners, routes, endpoints, and secrets so config can change incrementally without process restarts.</p>
+    <p>• Read Envoy as a stateful proxy runtime: upstream connection pools, circuit-breaker thresholds, timeout budgets, outlier detection, and retry policy all execute on the request path and directly change failure behavior.</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] Cloudflare Documentation</div>
     <p><strong>Cloudflare docs and product documentation.</strong><br>
     <a href="https://developers.cloudflare.com/fundamentals/" style="color:var(--orange);" target="_blank">https://developers.cloudflare.com/fundamentals/</a></p>
-    <p>• Documents Cloudflare’s reverse-proxy deployment model in which DNS points clients at Cloudflare edge IPs, the edge terminates TLS, applies caching/WAF policy, and then proxies to origin.</p>
-    <p>• Covers edge-origin request flow details such as origin certificates, cache-control behavior, and request/response headers injected by the proxy layer.</p>
-    <p>• Explains how a single reverse-proxy tier can combine CDN caching, bot mitigation, rate limiting, and programmable request handling at the network edge.</p>
+    <p>• The key architectural detail is the <strong>orange-cloud reverse-proxy path</strong>: authoritative DNS returns Cloudflare edge IPs, the nearest POP accepts the TCP/TLS connection, and the origin never talks directly to most clients.</p>
+    <p>• The docs are useful for the <strong>edge-to-origin control surface</strong>: origin certificates, connection reuse, cacheability rules, and request-header rewriting determine what context the origin actually receives.</p>
+    <p>• Read them as a proxy pipeline, not a product catalog: TLS termination, WAF evaluation, cache lookup, rate limiting, Workers execution, and origin fetch all happen as ordered stages on the same request path.</p>
+    <p>• The practical lesson is that reverse proxies are enforcement points with trust-boundary consequences, especially around client IP propagation and which headers the origin is allowed to trust.</p>
   </div>
 
   <div id="ref4" class="callout purple">
     <div class="callout-label">[4] RFC 7239 — Forwarded HTTP Extension</div>
     <p><strong>IETF RFC 7239.</strong><br>
     <a href="https://datatracker.ietf.org/doc/html/rfc7239" style="color:var(--purple);" target="_blank">https://datatracker.ietf.org/doc/html/rfc7239</a></p>
-    <p>• Standardizes the <code class="inline">Forwarded</code> header so proxies can preserve the original client-facing request context with parameters like <code class="inline">for=</code>, <code class="inline">by=</code>, <code class="inline">host=</code>, and <code class="inline">proto=</code>.</p>
-    <p>• Specifies grammar for multiple proxy hops, where each intermediary appends its own element rather than overwriting the chain.</p>
-    <p>• Addresses operational issues around IPv6 literals, quoted strings, obfuscated identifiers, and trust boundaries when parsing forwarded metadata.</p>
-    <p>• Gives the standards-track model behind the de facto <code class="inline">X-Forwarded-For</code> family and explains why backends must know which proxy hops are trusted.</p>
+    <p>• Standardizes the exact wire format for preserved client context: each proxy can append a <code class="inline">Forwarded</code> element with <code class="inline">for=</code>, <code class="inline">by=</code>, <code class="inline">host=</code>, and <code class="inline">proto=</code> parameters.</p>
+    <p>• The technical point is <strong>hop-by-hop provenance</strong>: the header is a list, not a singleton, so downstream services can reconstruct the proxy chain instead of trusting the most recent hop blindly.</p>
+    <p>• The RFC is also useful for parser edge cases that break real systems: IPv6 literals require brackets, identifiers may be obfuscated, and quoting rules matter if intermediaries normalize headers differently.</p>
+    <p>• This is the standards-track answer to “how does the backend learn the real client IP and scheme?” but it only works if the backend defines a strict trusted-proxy boundary.</p>
   </div>
 </section>
 
@@ -702,6 +756,7 @@ print(f<span class="str">"  Direct:  avg={d_avg:.0f}ms  p99={d_p99:.0f}ms"</span
 </footer>
 
 </div>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 <script src="../../assets/js/topic.js"></script>
 </body>
 </html>

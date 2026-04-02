@@ -662,6 +662,56 @@ LISTEN  0       128     0.0.0.0:<span class="num">3000</span>        node
   <h2>Interview Questions & Answers</h2>
   <p>Click any question to reveal a detailed answer. These are asked at FAANG-level interviews.</p>
 
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design the request path for a mobile checkout API.</strong> The interviewer is not only looking for “browser sends HTTP request.” They want to hear where naming, transport, retries, and server-side state boundaries sit, and where the operation can still go wrong if the network is flaky. The useful frame here is: request semantics at the HTTP layer, delivery behavior at the TCP layer, and correctness pushed to the application boundary instead of assumed from the network. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would start by naming the resource and the failure domain clearly: the client sends a checkout request to an API endpoint, DNS resolves the service name, TCP establishes a byte stream, TLS protects the channel, and HTTP carries the method, headers, and body. Then I would separate <strong>delivery</strong> from <strong>business correctness</strong>. TCP gives me ordered bytes, but it does not tell me whether the payment operation already committed. So if the client retries after a timeout, I need an application-level idempotency key and a server-side dedup record. If someone proposes sticky sessions, I would ask what the affinity key is and what happens when the server pool changes; correctness cannot depend on the next request landing on the same machine. I would also say out loud that the app tier should stay stateless so any healthy server can accept the retry, while durable state lives below it. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The push-back is usually: <em>what if the server commits the payment but the response never reaches the phone?</em> That is the point where I would say the network only gives me at-least-once retry behavior unless I build something stronger above it. If a later retry lands on a different app server, the dedup check still has to work because the correctness condition belongs with the operation, not with one TCP connection. I would also mention stale routing state explicitly: DNS caches, load balancers, and mobile reconnects can all send the retry somewhere new, so any design that needs one specific server to remember the checkout is brittle by construction. That is the end-to-end argument in practice: keep the network simple, but place the business guarantee at the application boundary that understands what “same checkout” means. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think a Stripe-style mobile checkout path:</strong> retries are normal, the network is flaky, and the server-side idempotency record is what turns at-least-once delivery into business correctness. The key interview move is to show the request path end to end, then point out exactly why stickiness and one TCP connection are insufficient. <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    M["Mobile App"]
+    D["DNS + LB"]
+    API["Stateless checkout API"]
+    I["Idempotency store: checkout_id"]
+    DB["Orders / Payments DB"]
+    N1["response lost -> retry"]
+    N2["Avoid sticky session"]
+    N3["Same key dedups anywhere"]
+
+    M --> D
+    D --> API
+    API --> I
+    API --> DB
+    M -.-> N1
+    D -.-> N2
+    I -.-> N3
+
+    classDef client fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class M client;
+    class D,API core;
+    class I,DB data;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: walk the request path, then show where retries land and where the idempotency guarantee actually lives.</div>
+  </div>
+
   <div class="qa">
     <div class="qa-q">Q1: What happens when you type a URL into your browser and press Enter?</div>
     <div class="qa-a">
@@ -681,7 +731,7 @@ LISTEN  0       128     0.0.0.0:<span class="num">3000</span>        node
     <div class="qa-q">Q3: Why is HTTP "stateless"? How do we add state?</div>
     <div class="qa-a">
       <p>HTTP is stateless: each request is independent. Server doesn't inherently remember previous requests. State is added via: <strong>(1) Cookies</strong> — server sends Set-Cookie, browser includes it in subsequent requests. <strong>(2) Session IDs</strong> — cookie holds a session ID, server looks up state in Redis/DB. <strong>(3) JWT tokens</strong> — self-contained tokens in Authorization header. <strong>(4) URL params</strong> (fragile, security risk). <strong>(5) Hidden form fields</strong>.</p>
-      <p>Tradeoff: stateless = easy to scale (any server handles any request) but harder to personalize. Stateful = richer experience but scaling/consistency challenges.</p>
+      <p>Tradeoff: stateless = easy to scale (any server handles any request) but harder to personalize. Stateful = richer experience but scaling/consistency challenges. If you add sticky sessions, define the affinity key and remember that pool changes can remap a user to a different server anyway, so correctness still needs a shared state store.</p>
     </div>
   </div>
 
@@ -795,7 +845,7 @@ LISTEN  0       128     0.0.0.0:<span class="num">3000</span>        node
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References & Further Reading</h2>
-  <p>Primary sources cited throughout this document. Each is broken down into digestible takeaways.</p>
+  <p>Primary sources cited throughout this document. Each is broken down by the concrete protocol or architectural mechanism it contributes.</p>
 
   <div id="ref1" class="callout blue" style="margin-top: 28px;">
     <div class="callout-label">[1] RFC 2616 — Hypertext Transfer Protocol — HTTP/1.1</div>
@@ -843,6 +893,7 @@ LISTEN  0       128     0.0.0.0:<span class="num">3000</span>        node
 </footer>
 
 </div>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 <script src="../../assets/js/topic.js"></script>
 </body>
 </html>
