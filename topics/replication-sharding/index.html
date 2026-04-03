@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Replication &amp; Sharding</title>
+<meta name="description" content="A system design guide to replication, sharding, consensus, replication lag, shard-key design, and the operational trade-offs behind scaling databases beyond one machine.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 13</div>
+  <h1><span>Replication</span> &amp; <span>Sharding</span></h1>
+  <p class="hero-sub">Replication gives you more copies. Sharding gives you more owners. Most distributed databases need both, and most painful trade-offs show up exactly where those two ideas meet.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms</a></li>
+    <li><a href="#s1">Why Replicate? Why Shard?</a></li>
+    <li><a href="#s2">Replication Topologies</a></li>
+    <li><a href="#s3">Synchronous vs Asynchronous Replication</a></li>
+    <li><a href="#s4">Consensus &amp; the Raft Protocol</a></li>
+    <li><a href="#s5">Sharding Strategies</a></li>
+    <li><a href="#s6">Rebalancing — The Hard Part</a></li>
+    <li><a href="#s7">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s8">Mini-Project: Sharded KV Store</a></li>
+    <li><a href="#s9">Production: Vitess (YouTube/Slack)</a></li>
+    <li><a href="#s10">Production: CockroachDB Range Replication</a></li>
+    <li><a href="#s11">Edge Cases &amp; Gotchas</a></li>
+    <li><a href="#s12">What If? — Interactive Exploration</a></li>
+    <li><a href="#s13">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s13b">Actual System Design Interview</a></li>
+    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Key Terms</h2>
+
+  <h3>Replication</h3>
+  <p>Replication means keeping multiple copies of the same data on different machines. You do it for <strong>fault tolerance</strong>, <strong>read scaling</strong>, and sometimes <strong>regional latency</strong>. The hard part is familiar: every extra copy makes failures safer, but it also makes writes more coordinated. That is where sync vs async replication, quorum rules, and replica lag all come from.</p>
+
+  <h3>Sharding</h3>
+  <p>Sharding means splitting one logical dataset across many machines so each machine owns only a <strong>subset</strong> of the rows. This is how storage footprint and write throughput scale past one box. The whole design hangs on the <strong>shard key</strong>: it decides where a row lives, which queries stay local, and whether one shard becomes the bottleneck while the rest sit mostly idle.</p>
+
+  <h3>Hot Spot</h3>
+  <p>A hot spot is one shard getting far more traffic than the others. That usually happens because the shard key was too low-cardinality, too time-skewed, or tied to a celebrity-style workload. Adding more shards does not fix the hot one unless the key space itself changes. That is why hot-spot reasoning is one of the first things interviewers push on in sharding questions.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>Why Replicate? Why Shard?</h2>
+
+  <div class="memory-map"><span class="h">REPLICATION vs SHARDING — DIFFERENT PROBLEMS, DIFFERENT SOLUTIONS</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">REPLICATION</span> (copy all data to N machines)
+<span class="d">│</span>   Problem solved: <span class="v">fault tolerance + read scaling</span>
+<span class="d">│</span>   Every replica holds the <span class="v">complete</span> dataset
+<span class="d">│</span>   Reads scale linearly (N replicas → N× read throughput)
+<span class="d">│</span>   Writes do NOT scale (every write goes to every replica)
+<span class="d">│</span>   Trade-off: sync replication (safe but slow) vs async (fast but data loss risk)
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">SHARDING</span> (split data across N machines)
+<span class="d">│</span>   Problem solved: <span class="v">write scaling + storage scaling</span>
+<span class="d">│</span>   Each shard holds a <span class="v">disjoint subset</span> of the data
+<span class="d">│</span>   Writes scale linearly (each write goes to exactly 1 shard)
+<span class="d">│</span>   Cross-shard queries are expensive (scatter-gather or avoided entirely)
+<span class="d">│</span>   Trade-off: balanced shards vs query locality vs operational complexity
+<span class="d">│</span>
+<span class="d">└──</span> <span class="b">PRODUCTION SYSTEMS USE BOTH</span>
+    Each shard is itself replicated (typically 3 copies)
+    Example: 10 shards × 3 replicas = 30 database instances
+    Writes go to the shard's leader; reads go to any of the shard's replicas</div>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Replication Topologies</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Topology</th><th>Mechanism</th><th>Consistency</th><th>Write Throughput</th><th>Use Case</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Single-leader</strong></td><td>One node accepts writes; followers receive a replicated stream (WAL shipping, binlog)</td><td>Strong reads from leader; eventual from followers</td><td>Limited by single leader</td><td>PostgreSQL, MySQL, MongoDB (default). Most web applications.</td></tr>
+        <tr><td><strong>Multi-leader</strong></td><td>Multiple nodes accept writes independently; changes are exchanged asynchronously</td><td>Eventual. Conflicts possible (same row updated on two leaders)</td><td>Higher (multiple write endpoints)</td><td>Multi-datacenter setups (CockroachDB, Cassandra). Collaborative editing (Google Docs).</td></tr>
+        <tr><td><strong>Leaderless</strong></td><td>Any node accepts reads/writes. Quorum (R+W &gt; N) ensures overlap.</td><td>Tunable. Strong if R+W &gt; N; eventual otherwise.</td><td>Highest (all nodes accept writes)</td><td>DynamoDB, Cassandra, Riak. High availability at the cost of complexity.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">DDIA Chapter 5 Insight</div>
+    <p>Kleppmann’s framing is useful because it turns topology into coordination cost. <strong>Single-leader</strong> is easy to reason about but caps write scale. <strong>Multi-leader</strong> buys more write availability, but now conflicts are your problem. <strong>Leaderless</strong> pushes even further toward availability, and in return you inherit quorums, reconciliation, and repair. More write freedom almost always means more correctness work. <a href="#ref2" class="ref">[2]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3 ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Synchronous vs Asynchronous Replication</h2>
+
+  <div class="code-block">
+    <div class="code-header"><span>The fundamental write-path decision</span></div>
+    <pre><span class="h">SYNCHRONOUS replication:</span>
+Client → Leader: <span class="str">"INSERT INTO orders ..."</span>
+Leader → Follower(s): <span class="str">"replicate this write"</span>
+Follower(s) → Leader: <span class="str">"ACK — write is durable on my disk"</span>
+Leader → Client: <span class="str">"COMMIT OK"</span>
+
+<span class="cm">Guarantee: if the leader dies AFTER returning "COMMIT OK",</span>
+<span class="cm">the follower has the data. ZERO data loss.</span>
+<span class="cm">Cost: every write waits for network round-trip to follower(s).</span>
+<span class="cm">If follower is slow or unreachable → write hangs.</span>
+
+<span class="h">ASYNCHRONOUS replication:</span>
+Client → Leader: <span class="str">"INSERT INTO orders ..."</span>
+Leader: writes to local WAL, <span class="kw">immediately</span> returns <span class="str">"COMMIT OK"</span>
+Leader → Follower(s): <span class="str">"here's the WAL stream"</span> (in background)
+
+<span class="cm">Guarantee: write is durable on the LEADER only.</span>
+<span class="cm">If leader dies BEFORE the follower catches up → data is LOST.</span>
+<span class="cm">Benefit: writes are fast (no waiting for followers).</span>
+<span class="cm">This is the PostgreSQL default: streaming replication is async.</span>
+
+<span class="h">SEMI-SYNCHRONOUS (compromise):</span>
+<span class="cm">Write waits for at least ONE follower to ACK (not all).</span>
+<span class="cm">If that follower dies, another is promoted to "sync standby."</span>
+<span class="cm">PostgreSQL: synchronous_commit = on (per-transaction configurable).</span>
+<span class="cm">MySQL: semi-sync replication plugin (rpl_semi_sync_master_enabled).</span></pre>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">The Replication Lag Problem</div>
+    <p>With async replication, followers are always slightly behind the leader — the <strong>replication lag</strong> (typically 10-500ms, but can spike to seconds under load). This creates three classic anomalies (DDIA Ch. 5): <strong>(1) Read-your-writes violation</strong>: you write on the leader, then read from a follower that hasn't caught up — your write appears lost. <strong>(2) Monotonic reads violation</strong>: two consecutive reads hit different followers at different lag states — you see a newer value then an older one. <strong>(3) Causal ordering violation</strong>: you see a reply to a comment before the comment itself. Fixes: route reads to the leader for recently-written data, pin a user to one replica per session, or use causal consistency protocols.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4 ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Consensus &amp; the Raft Protocol</h2>
+
+  <p>For strongly consistent replication, you need a <strong>consensus protocol</strong> — an algorithm where a majority of nodes must agree on every write before it's committed. <a href="#ref1" class="ref">[1]</a></p>
+
+  <h3>Raft in Three Sentences</h3>
+  <p><strong>Leader election:</strong> Nodes start as followers. If a follower doesn't hear from a leader within a random timeout (150-300ms), it becomes a candidate and requests votes from peers. A candidate that receives votes from a majority becomes the leader for that <strong>term</strong>.</p>
+  <p><strong>Log replication:</strong> The leader receives all writes, appends them to its log, and replicates log entries to followers. A log entry is <strong>committed</strong> only when a majority of nodes have persisted it. Committed entries are applied to the state machine in order.</p>
+  <p><strong>Safety:</strong> Raft guarantees that if a log entry is committed, it will be present in the logs of all future leaders. A candidate can only win an election if its log is at least as up-to-date as a majority of nodes — ensuring committed entries are never lost.</p>
+
+  <div class="callout blue">
+    <div class="callout-label">Where Raft Is Used</div>
+    <p><strong>etcd</strong> (Kubernetes control plane) uses Raft for all cluster state. <strong>CockroachDB</strong> uses Raft per range (each data range is a separate Raft group). <strong>TiKV</strong> (TiDB's storage engine) uses Raft. <strong>Consul</strong> uses Raft for service discovery. <strong>ClickHouse Keeper</strong> replaced ZooKeeper with a Raft-based implementation. The Raft paper was awarded Best Paper at USENIX ATC 2014 specifically because it made consensus understandable enough to implement correctly — a direct response to the decades of incorrect Paxos implementations.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5 ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Sharding Strategies</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Strategy</th><th>Mechanism</th><th>Strengths</th><th>Weaknesses</th><th>Production Example</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Hash-based</strong></td><td><code>shard = hash(key) % N</code> or consistent hashing</td><td>Even distribution. No hot spots for uniform workloads.</td><td>Destroys key ordering (no range queries across shards). Modulo-based remaps ~all keys on resize.</td><td>DynamoDB (partition key hash), Cassandra (MurmurHash3 token ring)</td></tr>
+        <tr><td><strong>Range-based</strong></td><td>Assign contiguous key ranges to shards (e.g., A-M → shard 1, N-Z → shard 2)</td><td>Range queries stay within one shard. Good for time-series (shard by date range).</td><td>Risk of hot spots (sequential writes go to one shard). Requires manual range boundaries or auto-splitting.</td><td>HBase, Bigtable, CockroachDB (auto-splitting ranges), MongoDB (range sharding)</td></tr>
+        <tr><td><strong>Directory-based</strong></td><td>A lookup table maps each key (or key range) to a shard. The directory is the single source of truth.</td><td>Maximum flexibility. Can move individual keys between shards.</td><td>The directory is a single point of failure and a potential bottleneck. Must be replicated and cached.</td><td>Vitess (VSchema routing), early sharded MySQL setups</td></tr>
+        <tr><td><strong>Geo-based</strong></td><td>Shard by geographic region (EU data → EU shard, US → US shard).</td><td>Data locality (low latency for regional users). Compliance (GDPR data stays in EU).</td><td>Uneven shard sizes (US may have 10× the data). Cross-region queries are expensive.</td><td>Spanner (geo-partitioned), CockroachDB (locality-aware placement)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">The Shard Key is the Most Important Decision</div>
+    <p>Once data is sharded, the shard key determines everything: which queries are efficient (single-shard lookup = fast, cross-shard scatter-gather = slow), how evenly load distributes, and how painful resharding will be. <strong>A good shard key has</strong>: high cardinality (millions of distinct values), even distribution (no one value dominates), and alignment with your query patterns (most queries include the shard key in the WHERE clause). <strong>Common choices</strong>: user_id (social apps), tenant_id (SaaS), workspace_id (Slack), order_id (e-commerce). <strong>Bad choices</strong>: country_code (too few values), created_at (today's shard gets all writes), status (most rows are "active"). Reference: DDIA Ch. 6. <a href="#ref2" class="ref">[2]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 6 ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Rebalancing — The Hard Part</h2>
+
+  <p>When you need to add or remove shards, data must move between machines. This is <strong>rebalancing</strong> — and getting it wrong causes downtime, data loss, or performance degradation.</p>
+
+  <h3>Rebalancing Approaches</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Approach</th><th>How It Works</th><th>Disruption</th><th>Used By</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Fixed partition count</strong></td><td>Create many more partitions than nodes (e.g., 1000 partitions on 10 nodes = 100 per node). To add a node, move some partitions to it.</td><td>Low. Only moved partitions are briefly unavailable.</td><td>Cassandra (256 vnodes default), Elasticsearch (5 primary shards default)</td></tr>
+        <tr><td><strong>Dynamic splitting</strong></td><td>Start with few partitions. When a partition exceeds a size threshold, split it in half. When a node is overloaded, migrate partitions to a new node.</td><td>Medium. Split requires a brief write pause to the affected partition.</td><td>HBase, Bigtable, CockroachDB (64MB default range size)</td></tr>
+        <tr><td><strong>Consistent hashing</strong></td><td>Nodes own positions on a hash ring. Adding a node absorbs only ~K/N keys from neighbors.</td><td>Low. Only the transferring key range is affected.</td><td>DynamoDB, Cassandra (token ring)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">Rebalancing War Story</div>
+    <p>A fintech company sharded their PostgreSQL by <code class="inline">hash(user_id) % 8</code>. When they needed to grow to 16 shards, modulo-based sharding remapped ~50% of all rows. The migration took 3 days, required double the storage (old + new layout simultaneously), and caused intermittent read failures when queries hit rows mid-migration. If they had used consistent hashing from the start, adding 8 shards would have moved only ~50% of data (K/N per new shard), and each migration chunk would have been small and atomic. <strong>Lesson: choose your partitioning strategy before you need to rebalance.</strong></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 7 ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: PostgreSQL Streaming Replication — See Lag in Real Time</h3>
+  <div class="code-block">
+    <div class="code-header"><span>See replication lag on a running PostgreSQL primary (macOS/Linux)</span></div>
+    <pre><span class="cm"># On the PRIMARY, query replication status</span>
+$ <span class="fn">psql</span> -c "
+SELECT client_addr,
+       state,
+       sent_lsn,
+       write_lsn,
+       flush_lsn,
+       replay_lsn,
+       pg_wal_lsn_diff(sent_lsn, replay_lsn) AS replay_lag_bytes,
+       (EXTRACT(EPOCH FROM replay_lag))::int AS replay_lag_seconds
+FROM pg_stat_replication;"
+
+ client_addr  |   state   | replay_lag_bytes | replay_lag_seconds
+--------------+-----------+------------------+-------------------
+ 10.0.1.42    | streaming |           <span class="num">1048</span>   |                <span class="num">0</span>
+ 10.0.1.43    | streaming |          <span class="num">32768</span>   |                <span class="num">1</span>
+
+<span class="cm"># Follower at 10.0.1.42: 1KB behind (sub-second lag) — healthy</span>
+<span class="cm"># Follower at 10.0.1.43: 32KB behind (1 second lag) — acceptable but worth monitoring</span>
+<span class="cm"># If lag_bytes grows into millions → follower is falling behind → investigate disk I/O</span></pre>
+  </div>
+
+  <h3>Demo 2: Simulate Sharding with SQLite</h3>
+  <div class="code-block">
+    <div class="code-header"><span>shard_demo.py — two-shard SQLite setup with hash routing (macOS/Linux/WSL)</span></div>
+    <pre>$ <span class="fn">python3</span> -c "
+<span class="kw">import</span> sqlite3, hashlib
+
+<span class="cm"># Create two 'shard' databases</span>
+shards = [sqlite3.connect(':memory:') <span class="kw">for</span> _ <span class="kw">in</span> range(2)]
+<span class="kw">for</span> db <span class="kw">in</span> shards:
+    db.execute('CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, email TEXT)')
+
+<span class="kw">def</span> <span class="fn">get_shard</span>(user_id):
+    h = int(hashlib.md5(user_id.encode()).hexdigest(), 16)
+    <span class="kw">return</span> h % len(shards)
+
+<span class="cm"># Insert users — they route to different shards based on hash(user_id)</span>
+users = [('u1','Alice','a@x.com'),('u2','Bob','b@x.com'),
+         ('u3','Charlie','c@x.com'),('u4','Diana','d@x.com'),
+         ('u5','Eve','e@x.com'),('u6','Frank','f@x.com')]
+
+<span class="kw">for</span> uid, name, email <span class="kw">in</span> users:
+    s = get_shard(uid)
+    shards[s].execute('INSERT INTO users VALUES (?,?,?)', (uid, name, email))
+    print(f'  {uid} ({name:>8}) → shard {s}')
+
+<span class="cm"># Count per shard</span>
+<span class="kw">for</span> i, db <span class="kw">in</span> enumerate(shards):
+    count = db.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+    rows = db.execute('SELECT name FROM users').fetchall()
+    print(f'Shard {i}: {count} users — {[r[0] <span class="kw">for</span> r <span class="kw">in</span> rows]}')
+"
+
+  u1 (   Alice) → shard <span class="num">1</span>
+  u2 (     Bob) → shard <span class="num">0</span>
+  u3 ( Charlie) → shard <span class="num">1</span>
+  u4 (   Diana) → shard <span class="num">0</span>
+  u5 (     Eve) → shard <span class="num">1</span>
+  u6 (   Frank) → shard <span class="num">0</span>
+Shard 0: <span class="num">3</span> users — ['Bob', 'Diana', 'Frank']
+Shard 1: <span class="num">3</span> users — ['Alice', 'Charlie', 'Eve']
+<span class="cm"># Perfectly balanced! Each shard has 3/6 = 50% of the data.</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 8 ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Mini-Project: Sharded KV Store</h2>
+  <h4>Simple: Feel What Sharding Does</h4>
+  <div class="code-block">
+    <div class="code-header"><span>sharded_kv.py — HTTP proxy + 2 shard workers (macOS/Linux/WSL, Python 3.7+)</span></div>
+    <pre><span class="kw">import</span> hashlib, json, http.server, urllib.request, threading
+
+SHARDS = {}  <span class="cm"># shard_id → {key: value}</span>
+NUM_SHARDS = <span class="num">3</span>
+
+<span class="kw">def</span> <span class="fn">route</span>(key):
+    <span class="kw">return</span> int(hashlib.md5(key.encode()).hexdigest(), <span class="num">16</span>) % NUM_SHARDS
+
+<span class="cm"># Initialize empty shards</span>
+<span class="kw">for</span> i <span class="kw">in</span> range(NUM_SHARDS):
+    SHARDS[i] = {}
+
+<span class="cm"># PUT: route to correct shard</span>
+key = <span class="str">"user:alice"</span>
+shard_id = route(key)
+SHARDS[shard_id][key] = {<span class="str">"name"</span>: <span class="str">"Alice"</span>, <span class="str">"city"</span>: <span class="str">"Berlin"</span>}
+print(f<span class="str">"PUT '{key}' → shard {shard_id}"</span>)
+
+<span class="cm"># GET: route to same shard</span>
+shard_id = route(key)
+val = SHARDS[shard_id].get(key)
+print(f<span class="str">"GET '{key}' → shard {shard_id} → {val}"</span>)
+
+<span class="cm"># Scatter: find a key WITHOUT knowing which shard it's on</span>
+<span class="cm"># Must check ALL shards — this is the cross-shard query problem.</span>
+search_key = <span class="str">"user:alice"</span>
+<span class="kw">for</span> sid, data <span class="kw">in</span> SHARDS.items():
+    <span class="kw">if</span> search_key <span class="kw">in</span> data:
+        print(f<span class="str">"SCATTER-GATHER: found '{search_key}' on shard {sid}"</span>)
+
+<span class="cm"># Show shard distribution for 1000 keys</span>
+dist = [<span class="num">0</span>] * NUM_SHARDS
+<span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">1000</span>):
+    dist[route(f<span class="str">"key_{i}"</span>)] += <span class="num">1</span>
+print(f<span class="str">"Distribution across {NUM_SHARDS} shards: {dist}"</span>)
+print(f<span class="str">"Ideal: {[1000//NUM_SHARDS]*NUM_SHARDS}"</span>)</pre>
+  </div>
+  <div class="code-block">
+    <div class="code-header"><span>Expected output</span></div>
+    <pre>PUT 'user:alice' → shard <span class="num">2</span>
+GET 'user:alice' → shard <span class="num">2</span> → {'name': 'Alice', 'city': 'Berlin'}
+SCATTER-GATHER: found 'user:alice' on shard <span class="num">2</span>
+Distribution across 3 shards: [<span class="num">336</span>, <span class="num">332</span>, <span class="num">332</span>]
+Ideal: [<span class="num">333</span>, <span class="num">333</span>, <span class="num">333</span>]</pre>
+  </div>
+</section>
+
+<!-- ============ PRODUCTION EXAMPLES ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production: Vitess (YouTube / Slack)</h2>
+
+  <p>Vitess is an open-source sharding middleware for MySQL, originally developed at YouTube (Google) to scale their MySQL infrastructure. Slack migrated to Vitess to shard their MySQL databases by workspace_id.</p>
+
+  <h3>How Vitess Works</h3>
+  <p><strong>VSchema:</strong> A declarative sharding configuration that maps logical tables to shards. The application sends queries to a Vitess proxy (VTGate), which parses the SQL, inspects the VSchema, and routes the query to the correct shard(s). If the query includes the shard key in the WHERE clause → single-shard (fast). If not → scatter-gather across all shards (slow).</p>
+  <p><strong>Online resharding:</strong> Vitess can split or merge shards without downtime. It creates new shards, starts replicating data to them, then atomically switches traffic — the application never sees a gap. This is the operational superpower: resharding is a zero-downtime operation, not a multi-day migration.</p>
+</section>
+
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production: CockroachDB Range Replication</h2>
+
+  <p>CockroachDB combines sharding and replication in a single system. Data is automatically divided into <strong>ranges</strong> (contiguous key spans, default 512MB). Each range is replicated via Raft across 3+ nodes.</p>
+
+  <h3>Key Design Decisions</h3>
+  <p><strong>Automatic range splitting:</strong> When a range exceeds the size threshold, CockroachDB splits it into two ranges — no operator intervention. The split is transparent to the application.</p>
+  <p><strong>Raft per range:</strong> Each range is an independent Raft group. A cluster with 1000 ranges has 1000 concurrent Raft groups. This provides fine-grained fault isolation — a leader failure for one range doesn't affect others.</p>
+  <p><strong>Leaseholder:</strong> One replica per range holds the <strong>lease</strong> — it serves all reads and proposes all writes. The leaseholder is typically the Raft leader. Reads from the leaseholder are strongly consistent without a Raft round-trip (the leaseholder knows it has the latest data because it proposed all writes).</p>
+</section>
+
+<!-- ============ EDGE CASES ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Edge Cases &amp; Gotchas</h2>
+
+  <h3>1. Split-Brain After Network Partition</h3>
+  <p>If a single-leader system's network partitions, the old leader (on one side) and a newly elected leader (on the other side) both accept writes. When the partition heals, conflicting writes must be resolved. Fix: fencing tokens (DDIA Ch. 8) — each leader gets a monotonically increasing token; storage rejects writes from stale tokens. Or use Raft, which prevents split-brain by requiring a majority vote.</p>
+
+  <h3>2. Cross-Shard Transactions</h3>
+  <p>A user transfer (debit shard A, credit shard B) requires atomicity across two shards. Without a coordination protocol, one shard can commit while the other aborts — money vanishes or appears from nowhere. Fix: two-phase commit (2PC) with a coordinator, or Saga pattern (compensating transactions on failure). 2PC blocks on coordinator failure; Sagas are eventually consistent but non-blocking.</p>
+
+  <h3>3. Replication Lag Amplified by Sharding</h3>
+  <p>With 100 shards, each with async replicas, the probability of at least one shard having high replication lag at any moment is much higher than for a single database. A user's request might scatter-gather across 10 shards, and if one shard's replica is lagging, the entire response reflects stale data from that shard. Fix: read from leaders for consistency-sensitive queries, or implement per-shard lag tracking and route away from lagging replicas.</p>
+
+  <h3>4. Resharding a Live System Without Vitess</h3>
+  <p>If you sharded manually (hash % N in application code), resharding means: (1) create new shards, (2) double-write to old and new shards, (3) backfill historical data, (4) verify consistency, (5) switch reads, (6) stop double-writes, (7) decommission old shards. Each step has failure modes. This can take weeks. This is why managed sharding layers (Vitess, Citus, CockroachDB) exist — they automate this nightmare.</p>
+
+  <h3>5. JOIN Across Shards</h3>
+  <p>If users are on shard A and orders are on shard B, a <code class="inline">SELECT * FROM users JOIN orders ON users.id = orders.user_id</code> must fetch data from both shards and join in the application layer. This is orders of magnitude slower than a local JOIN. Fix: co-locate related data on the same shard (shard both users and orders by user_id), or denormalize (embed user name in the orders table).</p>
+</section>
+
+<!-- ============ WHAT IF ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">Sync vs async replication</div>
+      <p><strong>Sync:</strong> Zero data loss on failover. But write latency increases by 1 RTT to the replica (~1-5ms in-region, 50-200ms cross-region). One slow replica stalls all writes.<br>
+      <strong>Async:</strong> Fast writes (no waiting). But if the leader crashes before replication, committed writes are lost. Replication lag creates consistency anomalies.<br>
+      <strong>Production default:</strong> Semi-sync (PostgreSQL synchronous_standby_names, MySQL semi-sync plugin). Waits for ONE replica, not all.</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">Hash sharding vs range sharding</div>
+      <p><strong>Hash:</strong> Even distribution, no hot spots. But range queries (ORDER BY created_at LIMIT 100) scatter across all shards — N-way merge required.<br>
+      <strong>Range:</strong> Efficient range scans and sorted queries. But sequential inserts (auto-increment IDs, timestamps) create a hot shard at the end of the range.<br>
+      <strong>Hybrid (CockroachDB):</strong> Hash the first part of the key for distribution, use a sorted suffix for range queries within a shard.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">More replicas vs more shards</div>
+      <p><strong>More replicas (same data):</strong> Scales reads. Does NOT scale writes. Every write still goes to every replica.<br>
+      <strong>More shards (split data):</strong> Scales writes AND reads. But introduces cross-shard query complexity and operational burden.<br>
+      <strong>Decision:</strong> Read-bound? → Add replicas. Write-bound? → Add shards. Most systems hit read bottlenecks first.</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">Application-level vs middleware sharding</div>
+      <p><strong>Application-level:</strong> Routing logic in your code (<code>hash(key) % N</code>). Simple, no new infrastructure. But resharding requires code changes and data migration.<br>
+      <strong>Middleware (Vitess, ProxySQL):</strong> Transparent routing. Application sees a single DB. Online resharding without code changes. But another system to operate.<br>
+      <strong>Auto-sharding DB (CockroachDB, Spanner):</strong> The database handles everything. Simplest operationally, but more expensive and less control.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INTERVIEW Q&A ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Interview Questions &amp; Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: Explain the difference between replication and sharding.</div>
+    <div class="qa-a">
+      <p><strong>Replication</strong> copies the entire dataset to multiple nodes. It provides fault tolerance (data survives node failure) and read scaling (spread reads across replicas), but does NOT scale writes — every write must be applied to every replica. <strong>Sharding</strong> splits the dataset into disjoint subsets across nodes. Each shard holds a portion of the data. It scales both writes (each write goes to exactly one shard) and storage (total capacity = sum of all shards). In production, systems use BOTH: each shard is replicated. Instagram's PostgreSQL: sharded by user_id into multiple databases, each with 2 replicas. The shard key determines write routing; replicas handle read scaling within each shard.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: How do you choose a shard key? What makes a bad choice?</div>
+    <div class="qa-a">
+      <p>A good shard key has: (1) <strong>High cardinality</strong> — millions of distinct values (user_id, order_id). (2) <strong>Even distribution</strong> — no single value dominates traffic. (3) <strong>Query alignment</strong> — most queries include the shard key in WHERE, enabling single-shard lookups. <strong>Bad choices:</strong> country_code (low cardinality — US shard is 10× larger), created_at (today's shard gets 100% of writes), status (90% of rows are "active" → one hot shard), boolean fields. <strong>Worst case:</strong> a key that creates hot spots under viral load. If a celebrity user_id suddenly gets 100× traffic, that user's shard becomes the bottleneck. Fix: compound shard key (user_id + random_suffix) to scatter even within a single user's data.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: What happens when you need to add shards to a running system?</div>
+    <div class="qa-a">
+      <p>With <strong>modulo-based sharding</strong> (hash % N), changing N remaps ~(N-1)/N of all keys — catastrophic. You'd need to double-write during migration, backfill historical data, and do a coordinated cutover. With <strong>consistent hashing</strong>, adding a shard remaps only ~K/N keys — much less disruptive. With <strong>managed middleware</strong> (Vitess), resharding is online: new shards are created, data is streamed to them while the old shards continue serving, and traffic is atomically cut over — zero downtime. With <strong>auto-sharding databases</strong> (CockroachDB, Spanner), you simply add a node and the system rebalances automatically. The lesson: plan your sharding strategy for growth from day one. Retrofitting is painful.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: You have a single-leader PostgreSQL with async replication. A user writes a comment, refreshes the page, and doesn't see their comment. Why?</div>
+    <div class="qa-a">
+      <p>The write went to the <strong>leader</strong>. The page refresh read from a <strong>follower</strong> that hasn't received the replication update yet — the follower is behind by the replication lag (maybe 200ms). This is the <strong>read-your-writes consistency violation</strong> (DDIA Ch. 5). Fixes: (1) <strong>Read from leader for own writes</strong> — if the user just wrote, route their subsequent reads to the leader for the next N seconds. (2) <strong>Sticky sessions</strong> — pin the user to one replica per session (ensures monotonic reads). (3) <strong>Semi-sync replication</strong> — wait for at least one replica to ACK before returning commit (adds ~1-5ms latency). (4) <strong>Client-side optimistic rendering</strong> — show the comment locally immediately, before the server confirms persistence.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: How does Raft prevent split-brain?</div>
+    <div class="qa-a">
+      <p>Raft requires a <strong>majority vote</strong> (quorum) for both leader election and log commitment. In a 5-node cluster, any action requires 3 votes. If the network partitions into groups of [2] and [3], only the group of 3 can elect a leader — the group of 2 cannot reach a majority. The old leader in the minority partition will stop accepting writes (its AppendEntries RPCs to 2 followers succeed, but that's not a majority). When the partition heals, the minority group's leader steps down (its term is lower), and nodes catch up to the majority leader's log. <strong>Key invariant:</strong> at most one leader per term, and a leader must have a log at least as up-to-date as any majority — guaranteeing committed entries are never lost. <a href="#ref1" class="ref">[1]</a></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ACTUAL SYSTEM DESIGN INTERVIEW ============ -->
+<section class="section" id="s13b">
+  <div class="section-num">13b</div>
+  <h2>Actual System Design Interview — "Design a Global Chat System" (Meta-style)</h2>
+  <p>This is really a replication-and-sharding question disguised as a chat app. The interviewer wants to hear how you pick the shard key, where replicas sit, and which consistency trade-offs you are willing to make to keep delivery fast.</p>
+
+  <div class="callout blue">
+    <div class="callout-label">The Prompt</div>
+    <p>"Design the storage layer for a global messaging service. Users send text messages to other users. Requirements: 2 billion users, 100 billion messages per day, messages must be deliverable within 500ms, and data must survive an entire datacenter failure."</p>
+  </div>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    S["Sender"]
+    C["Chat Service"]
+    H1["Shard 1 leader"]
+    H2["Shard 2 leader"]
+    HN["Shard N leader"]
+    R1["Replica in DC-2"]
+    R2["Replica in DC-2"]
+    N1["Shard by conversation_id so one chat stays on one shard"]
+    N2["Async cross-DC replication keeps the write path fast"]
+    N3["Append-friendly storage matches message writes"]
+
+    S --> C
+    C --> H1
+    C --> H2
+    C --> HN
+    H1 -.-> R1
+    H2 -.-> R2
+    C -.-> N1
+    H1 -.-> N2
+    HN -.-> N3
+
+    classDef user fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef shard fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef replica fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class S user;
+    class C core;
+    class H1,H2,HN shard;
+    class R1,R2 replica;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Sharded and replicated message storage: route by conversation ID, write to the shard leader, then replicate across datacenters on the side.</div>
+  </div>
+
+  <h3>Interviewer Follow-ups</h3>
+
+  <div class="qa">
+    <div class="qa-q">"Why shard by conversation_id and not by user_id?"</div>
+    <div class="qa-a">
+      <p>A message belongs to a <strong>conversation</strong>, not a single user. If you shard by user_id, sending a message in a group chat requires writing to N shards (one per participant) — an N-way cross-shard transaction. Sharding by conversation_id means all messages in a conversation are co-located on one shard. Writing a message is a single-shard append. Reading conversation history is a single-shard range scan (ordered by timestamp within the conversation). The trade-off: fetching a user's list of conversations requires a scatter-gather (each conversation might be on a different shard). Fix: maintain a secondary index — a per-user "inbox" table (sharded by user_id) that maps user_id → list of conversation_ids. This is the multi-table, multi-shard pattern used by Meta's messaging infrastructure.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"How do you handle the 500ms delivery SLA while replicating across datacenters?"</div>
+    <div class="qa-a">
+      <p>Use <strong>async replication to the remote DC</strong>. The write path: (1) message arrives at the local DC, (2) is written to the shard leader's WAL and committed locally (~5-10ms), (3) the sender receives "delivered" ACK, (4) the message is pushed to the recipient via WebSocket (if online) or queued for push notification. Cross-DC replication happens in the background (~50-200ms). The 500ms budget is for end-to-end delivery, not replication. If the local DC dies before replication, some very recent messages may be lost — this is the trade-off for speed. For strict durability, you'd need sync replication to at least one remote DC (adding ~50-100ms to every write), which would leave tight margin for the 500ms SLA. In practice, major messaging services accept the tiny risk of async data loss during catastrophic DC failure — the last few seconds of messages may be lost, but the system stays fast for billions of messages daily.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"A celebrity with 10 million followers sends a message to a public channel. How does your design handle this?"</div>
+    <div class="qa-a">
+      <p>This is the <strong>fan-out on read vs fan-out on write</strong> problem (DDIA Ch. 11). <strong>Fan-out on write:</strong> Write the message to each follower's inbox — 10M writes. Even at 100K writes/sec, this takes 100 seconds. Unacceptable. <strong>Fan-out on read:</strong> Store the message once on the channel's shard. When a follower opens the app, they query the channel's shard for new messages. 10M reads will hit the shard, but these can be served from replicas and cached aggressively (the message is immutable). <strong>Hybrid approach (what Meta and Twitter actually do):</strong> For users with &lt;10K followers, fan-out on write (push to each follower's feed). For celebrities with millions of followers, fan-out on read (pull from the celebrity's timeline when each follower loads their feed). The threshold is tuned based on SLA and infrastructure capacity.</p>
+    </div>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">What the Interviewer Is Testing</div>
+    <p>(1) <strong>Shard key reasoning</strong> — why conversation_id over user_id (co-location of conversation messages). (2) <strong>Replication trade-offs</strong> — async for speed, accepting tiny data loss window during DC failure. (3) <strong>Fan-out modeling</strong> — understanding that celebrity broadcasts are fundamentally different from 1:1 messages. (4) <strong>Numbers</strong> — 100B messages/day = ~1.15M messages/sec. With 1000 shards, each handles ~1150 writes/sec — easily within a single DB instance's capacity. (5) <strong>Multi-index pattern</strong> — message table sharded by conv_id + inbox table sharded by user_id.</p>
+  </div>
+</section>
+
+<!-- ============ CHEAT SHEET ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Replication copies data for fault tolerance and read scaling. Sharding splits data for write scaling and storage scaling. Production uses BOTH.<br>
+    <strong>2.</strong> Three replication topologies: single-leader (simple, limited writes), multi-leader (higher writes, conflict resolution), leaderless (highest availability, most complex).<br>
+    <strong>3.</strong> Sync replication: zero data loss, slower writes. Async: fast writes, risk of data loss. Semi-sync: one replica ACK, best compromise.<br>
+    <strong>4.</strong> Raft: leader election + log replication + safety. Majority vote prevents split-brain. Used by etcd, CockroachDB, TiKV.<br>
+    <strong>5.</strong> Shard key choice is the #1 design decision. Needs: high cardinality, even distribution, query alignment. Bad: country, status, timestamps.<br>
+    <strong>6.</strong> Hash sharding: even distribution, no range queries. Range sharding: efficient range scans, risk of hot spots from sequential writes.<br>
+    <strong>7.</strong> Rebalancing is hard. Fixed partition count (Cassandra), dynamic splitting (CockroachDB), or consistent hashing (DynamoDB) minimize disruption.<br>
+    <strong>8.</strong> Cross-shard JOINs are expensive. Co-locate related data on the same shard (shard users + orders both by user_id).<br>
+    <strong>9.</strong> Replication lag creates read-your-writes, monotonic reads, and causal ordering violations. Fixes: read from leader, sticky sessions, causal tokens.<br>
+    <strong>10.</strong> In interviews: always state the shard key first, then explain what queries become fast (single-shard) vs slow (scatter-gather).</p>
+  </div>
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Replication &amp; Sharding Decision Flow</h2>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart TB
+    Q{"Single DB hitting its limits?"}
+    R["Add read replicas"]
+    W["Shard the data"]
+    B["Shard + replicate"]
+    N1["Read-bound?"]
+    N2["Write-bound?"]
+    N3["Try vertical scaling, pooling, caching, and query fixes first"]
+
+    Q --> N1
+    Q --> N2
+    Q --> B
+    N1 --> R
+    N2 --> W
+    W -.-> N3
+
+    classDef question fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef read fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef write fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef both fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class Q,N1,N2 question;
+    class R read;
+    class W write;
+    class B both;
+    class N3 note;
+    </pre>
+    <div class="diagram-caption">Scaling decision flow: decide whether the real limit is reads, writes, or both before you reach for replicas or shards.</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Replication is about copies. Sharding is about division.</strong> Replication makes your data survive failures and speeds up reads — but every write still hits every copy. Sharding makes your data fit in more machines and speeds up writes — but queries that cross shard boundaries get expensive. The art of distributed database design is choosing the shard key that keeps most queries within a single shard, while replicating each shard for fault tolerance. Get the shard key right, and the system scales. Get it wrong, and no amount of hardware can save you.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References &amp; Further Reading</h2>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Ongaro &amp; Ousterhout — "In Search of an Understandable Consensus Algorithm" (USENIX ATC 2014)</div>
+    <p><strong>Diego Ongaro, John Ousterhout.</strong> Stanford University. USENIX ATC 2014, pp. 305-319. Best Paper Award.<br>
+    <a href="https://raft.github.io/raft.pdf" style="color:var(--accent);" target="_blank">https://raft.github.io/raft.pdf</a></p>
+    <p>&#x2022; Decomposes consensus into three sub-problems that can be reasoned about independently: <strong>leader election</strong> (randomized election timeouts, majority vote per term), <strong>log replication</strong> (leader appends entries, followers replicate in order), and <strong>safety</strong> (a committed entry is present in all future leaders' logs, proven via the Election Restriction: a candidate's log must be at least as up-to-date as a majority).</p>
+    <p>&#x2022; The <strong>strong leader</strong> property distinguishes Raft from Paxos: log entries only flow from leader to followers (never the reverse). This eliminates the complexity of merging logs from multiple proposers that makes multi-decree Paxos implementations notoriously error-prone.</p>
+    <p>&#x2022; <strong>Cluster membership changes</strong> use a joint consensus approach: the old and new configurations overlap, requiring a majority from BOTH configurations during the transition. This avoids the window where two independent majorities could elect different leaders.</p>
+    <p>&#x2022; Formal <strong>user study with 43 students</strong> at Stanford and UC Berkeley: after learning both Raft and Paxos, 33 of 43 students answered Raft questions more correctly than Paxos questions. The paper's thesis is that understandability is a first-class design goal — a protocol that's easier to understand produces fewer implementation bugs.</p>
+    <p>&#x2022; Performance is equivalent to multi-Paxos: leader election completes in one round-trip (median 12ms in the paper's experiments), and log replication requires one round-trip per entry (leader → majority ACK). The bottleneck is disk fsync at each node, not the consensus protocol itself.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Kleppmann — "Designing Data-Intensive Applications" (2017), Ch. 5-7</div>
+    <p><strong>Martin Kleppmann.</strong> O'Reilly Media, 2017.<br>
+    <a href="https://dataintensive.net/" style="color:var(--blue);" target="_blank">https://dataintensive.net/</a></p>
+    <p>&#x2022; Chapter 5 defines five consistency guarantees as a hierarchy: <strong>read-your-writes</strong> (you always see your own writes), <strong>monotonic reads</strong> (you never see time go backward), <strong>consistent prefix reads</strong> (you see causally ordered writes in order), culminating in <strong>linearizability</strong> (all operations appear to happen in a single total order). Each guarantee requires increasing coordination cost.</p>
+    <p>&#x2022; Chapter 6 on partitioning introduces the concept of <strong>secondary indexes on partitioned data</strong>: a document-partitioned (local) index is fast to write but requires scatter-gather on read; a term-partitioned (global) index is efficient to read but requires cross-partition writes. This trade-off appears in every sharded system.</p>
+    <p>&#x2022; Chapter 6 distinguishes three rebalancing strategies: <strong>fixed number of partitions</strong> (create N >> nodes, redistribute whole partitions), <strong>dynamic partitioning</strong> (split when too large, merge when too small), and <strong>proportional to nodes</strong> (fixed partitions per node, split on node addition). Each has different operational characteristics.</p>
+    <p>&#x2022; Chapter 7 analyzes <strong>write skew</strong> as a phenomenon unique to sharded/replicated systems: two transactions read the same data, make decisions based on it, then write to different rows — the combined result violates an invariant that neither transaction individually violated. Only Serializable isolation prevents this.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Vitess Documentation — VSchema, Routing, and Resharding</div>
+    <p><strong>Vitess project.</strong><br>
+    <a href="https://vitess.io/docs/" style="color:var(--orange);" target="_blank">https://vitess.io/docs/</a></p>
+    <p>&#x2022; The key technical idea is the <strong>VSchema</strong>: Vitess separates the application's logical schema from the physical shard layout, so routing decisions like "which keyspace and shard owns this row?" are computed from metadata instead of being hard-coded into clients.</p>
+    <p>&#x2022; The sharding docs make the <strong>routing contract</strong> explicit. Queries that include the sharding key can be routed to one shard. Queries that do not include it can become scatter-gather fan-out operations across many shards, which is why shard-key choice dominates performance.</p>
+    <p>&#x2022; The resharding material is the operational lesson. Vitess uses <strong>filtered replication</strong> to copy a moving subset of rows into the new shard layout while the old layout still serves traffic, then cuts reads and writes over once lag is under control.</p>
+    <p>&#x2022; Read the Vitess docs for the mechanics that real teams eventually face: online resharding, tablet role promotion, primary failover, and query routing through a control plane that has to stay correct while shards are moving.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals &middot; built for deep understanding
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+</body>
+</html>

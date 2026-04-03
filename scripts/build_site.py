@@ -118,6 +118,14 @@ GRAPH_LAYOUT = {
         "deps": ["storage", "relational-databases", "key-value-stores"],
         "orbit_rotation": 12,
     },
+    "replication-sharding": {
+        "x": 1170,
+        "y": 230,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["storage", "relational-databases", "availability", "hashing"],
+        "orbit_rotation": -8,
+    },
 }
 
 
