@@ -46,10 +46,10 @@
   <h2>Prerequisites & Key Terms</h2>
 
   <h3>Cache</h3>
-  <p>A fast-access storage layer that sits between the requester and the authoritative data source. Its purpose is to serve frequently-requested data without hitting the slower source every time. Caches exist at every level of a system — from CPU L1 caches (nanoseconds) to CDN edge servers (global scale). The fundamental trade-off: caches are fast but may serve <strong>stale</strong> data if the source has changed since the cache was populated.</p>
+  <p>A fast storage layer that sits between the requester and the source of truth. Its job is to serve frequently requested data without hitting the slower source every time. Caches show up everywhere, from CPU L1 to CDN edges. The trade-off is always the same: speed in exchange for possible <strong>staleness</strong>.</p>
 
   <h3>Cache Hit</h3>
-  <p>The requested data is found in the cache. The response is served directly from the cache, bypassing the slower source. This is the happy path — fast, cheap, and the entire reason caches exist.</p>
+  <p>The requested data is already in the cache, so the system serves it directly and skips the slower source. This is the good path. It is why caches exist in the first place.</p>
 
   <h3>Cache Miss</h3>
   <p>The requested data is <em>not</em> in the cache. The system must fall back to the slower source (database, API, disk), retrieve the data, serve it, and typically populate the cache for future requests. Individual misses are usually slower than going directly to the source because you paid the cache-lookup cost <em>plus</em> the source-lookup cost.</p>
@@ -325,7 +325,7 @@ keyspace_misses:<span class="num">1</span>
   <div class="section-num">08</div>
   <h2>Mini-Project: Feel What Caching Means</h2>
 
-  <p>Before building an LRU cache, let's start with the simplest possible example — a server with two routes: one that always hits the "database" (slow), and one that checks a local dictionary first (fast). This is the visceral experience of caching.</p>
+  <p>Before getting into LRU, start with the smallest useful example: one route always hits the "database" and one checks a local dictionary first. You can feel caching immediately when the slow path and fast path sit side by side.</p>
 
   <div class="code-block">
     <div class="code-header"><span>cache_feel.py — run with: python3 cache_feel.py (macOS/Linux/WSL)</span></div>
@@ -513,7 +513,7 @@ With Zipf distribution, caching just 10% of keys captures ~90% of requests!</pre
 
   <div class="callout green">
     <div class="callout-label">Key Insight</div>
-    <p>Cloudflare's architecture shows that <strong>caching is not one layer — it's a hierarchy</strong>. Browser → edge PoP → optional upper tier → origin. Each tier absorbs some fraction of requests, reducing repeated work at the origin. This is the same principle as the storage hierarchy (L1 → L2 → L3 → RAM → disk), applied to network-scale caching.</p>
+    <p>Cloudflare is a good reminder that <strong>caching is usually a stack, not a single box</strong>. Browser, edge PoP, optional upper tier, then origin. Each layer catches some repeat traffic before it falls through to the next one.</p>
   </div>
 </section>
 
@@ -535,11 +535,11 @@ With Zipf distribution, caching just 10% of keys captures ~90% of requests!</pre
   <p>When a cache server restarts, it's empty. All requests become misses, flooding the database. Fix: <strong>pre-warm</strong> the cache on startup by loading the most popular keys from the database, or use <strong>persistent caching</strong> (Redis with RDB/AOF) so the cache survives restarts.</p>
 
   <h3>5. Inconsistency Between Cache and DB</h3>
-  <p>The cache says "price = $99" but the DB says "price = $79" because an invalidation was lost. This is the fundamental tension of caching — speed vs freshness. Fix: use TTLs as a safety net (bounded staleness), event-driven invalidation for critical data, and monitor the gap between cache and DB versions.</p>
+  <p>The cache says "price = $99" but the DB says "price = $79" because an invalidation never made it through. That is the core cache trade-off: speed bought with the risk of staleness. Use TTLs as a backstop, event-driven invalidation where freshness matters, and version checks if the gap itself is operationally important.</p>
 
   <div class="callout red">
     <div class="callout-label">Production War Story</div>
-    <p>Flash sales, viral events, and synchronized TTL expiry routinely turn popular cache keys into outage triggers. The lesson is stable even when the specific company story changes: if many clients can miss the same hot key at once, you need coalescing, stale-while-revalidate, or early refresh to stop the database from becoming the blast radius.</p>
+    <p>Flash sales, viral events, and synchronized TTL expiry all create the same failure mode: too many clients miss the same hot key at the same time. If you do not coalesce, refresh early, or serve stale data briefly, the database eats the blast.</p>
   </div>
 </section>
 
@@ -665,6 +665,64 @@ stats = defaultdict(int)
 <section class="section" id="s13">
   <div class="section-num">13</div>
   <h2>Interview Questions & Answers</h2>
+
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design the caching layer for a product-detail or social-feed service under read spikes.</strong> The interviewer is usually checking whether you know that caching is not one box in front of a database. It is a set of choices about where the cache lives, how keys are invalidated, how hot keys behave, and what happens when the cache itself becomes part of the failure path. <a href="#ref1" class="ref">[1]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would begin with access pattern and staleness budget. If reads dominate and slight staleness is acceptable, cache-aside is usually the first pattern I would describe because it keeps the source of truth in the database and lets the application control invalidation. Then I would layer the caches: browser or CDN for shared edge content, distributed cache for hot objects, and local in-process cache only where object churn is manageable. The answer gets much stronger if I say how each layer is keyed, how long entries live, and which layer is allowed to serve stale data during backend trouble. If the distributed cache is sharded, I would name the placement key explicitly and say how clients find the owner: consistent hashing or rendezvous hashing, plus how quickly routing metadata changes propagate when cache nodes join or leave. <a href="#ref1" class="ref">[1]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The push-back is usually about stampede and invalidation races. If one celebrity post or one product SKU turns into a hot key, naive TTL expiry can dump the entire read surge onto the backing store. A good answer mentions request coalescing, stale-while-revalidate, lease-style protection, or explicit admission control during refill. I would also expect a follow-up on membership churn: adding a cache node should only move a slice of keys, but those keys are cold on the new node, and if different app servers have different ring views they can read stale data from the old owner while others refill on the new owner. I would also expect the interviewer to ask what happens when the cache cluster itself is unavailable. That is where the Facebook memcache lesson matters: once the cache is load-bearing, the database probably cannot survive a full cold miss storm without graceful degradation. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think Facebook Memcache:</strong> look-aside caching, lease tokens for refill races, and a cluster that is so load-bearing that a full cold-miss storm can drown the database. The interview edge is showing where the key lives, how the shard owner is chosen, and what happens when a hot object or membership change makes the “cache” part of the write/read correctness story. <a href="#ref1" class="ref">[1]</a> <a href="#ref3" class="ref">[3]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    A["App Servers"]
+    L1["Local L1 Cache"]
+    Ring["Cache ring: hash product_id"]
+    C1["Cache Shard A"]
+    C2["Cache Shard B hot key"]
+    C3["Cache Shard C new node"]
+    DB["Primary DB"]
+    N1["Refill lease or coalescing"]
+    N2["Only ~K/N keys move"]
+    N3["Old ring view = stale reads"]
+
+    A --> L1
+    L1 --> Ring
+    Ring --> C1
+    Ring --> C2
+    Ring --> C3
+    C1 --> DB
+    C2 --> DB
+    C3 --> DB
+    Ring -.-> N2
+    C2 -.-> N1
+    Ring -.-> N3
+
+    classDef app fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef place fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef risk fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class A,L1 app;
+    class Ring place;
+    class C1,C3,DB data;
+    class C2 risk;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: define the cache key, define the shard owner, then explain stampede protection, cold-node churn, and ring-view drift.</div>
+  </div>
 
   <div class="qa">
     <div class="qa-q">Q1: What is caching and when should you use it?</div>
@@ -793,6 +851,7 @@ stats = defaultdict(int)
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References & Further Reading</h2>
+  <p>Each source below is summarized by the cache mechanism or failure mode it teaches, rather than by a generic topic label.</p>
 
   <div id="ref1" class="callout green" style="margin-top:28px;">
     <div class="callout-label">[1] Nishtala et al. — "Scaling Memcache at Facebook" (NSDI 2013)</div>
@@ -839,9 +898,10 @@ stats = defaultdict(int)
     <p><strong>Cloudflare Documentation.</strong><br>
     <a href="https://developers.cloudflare.com/cache/how-to/tiered-cache/" style="color:var(--accent);" target="_blank">https://developers.cloudflare.com/cache/how-to/tiered-cache/</a><br>
     <a href="https://developers.cloudflare.com/cache/advanced-configuration/cache-reserve/" style="color:var(--accent);" target="_blank">https://developers.cloudflare.com/cache/advanced-configuration/cache-reserve/</a></p>
-    <p>• Tiered Cache introduces an explicit <strong>parent / child cache topology</strong> so many edge POPs can collapse misses through an upper tier instead of stampeding the origin independently.</p>
-    <p>• Cache Reserve adds a persistent backing layer for long-tail objects that would otherwise age out of edge memory/disk caches but are still worth keeping off origin.</p>
-    <p>• Together the docs show that CDN caching is not a single store; it is a layered hierarchy with different admission, persistence, and refill behaviors at each level.</p>
+    <p>• Tiered Cache is useful because it shows <strong>miss collapsing by topology</strong>: a cold edge does not immediately hit origin, it first asks an upper-tier cache that centralizes refill traffic.</p>
+    <p>• Cache Reserve adds a different storage class to the hierarchy: long-tail objects can survive edge eviction in a persistent backing tier, then be promoted back upward on later demand.</p>
+    <p>• The important technical detail is the <strong>refill path</strong>: edge miss → upper-tier lookup → reserve/origin fetch, with each layer trading latency for origin offload and object retention.</p>
+    <p>• Read these docs as evidence that CDN caching is a multi-tier admission and refill system, not a flat “edge cache hit or miss” story.</p>
   </div>
 </section>
 
@@ -880,5 +940,6 @@ stats = defaultdict(int)
   calc();
 })();
 </script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 </body>
 </html>

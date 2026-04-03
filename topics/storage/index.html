@@ -194,7 +194,7 @@
 
   <div class="callout purple">
     <div class="callout-label">Interview Insight — IOPS Matters More Than Throughput</div>
-    <p>When designing database storage, <strong>IOPS (I/O Operations Per Second)</strong> matters more than raw throughput for OLTP workloads. An HDD does ~150 random IOPS. An NVMe SSD does ~500,000. That's a 3,000× difference. This is why databases moved from HDD to SSD — not for the bandwidth, but for the random access performance. When you hear "the database is slow," the first question is often: "is it on SSD or HDD?"</p>
+    <p>When designing database storage, <strong>IOPS (I/O Operations Per Second)</strong> matters more than raw throughput for OLTP workloads. An HDD does ~150 random IOPS. An NVMe SSD does ~500,000. That is roughly a 3,000× gap. Databases moved from HDD to SSD mostly because random access got dramatically better, not because the sequential bandwidth looked nicer on a slide.</p>
   </div>
 </section>
 
@@ -203,7 +203,7 @@
   <div class="section-num">05</div>
   <h2>Persistence vs Volatility</h2>
 
-  <p>This is the core concept of storage in system design: <strong>volatile storage</strong> (RAM) is fast but loses data on failure. <strong>Persistent storage</strong> (disk) is slower but survives failures. The tension between these two defines how every database and storage system is built.</p>
+  <p>This is the storage trade-off in one sentence: <strong>RAM is fast and forgetful</strong>, while <strong>disk is slower and durable</strong>. Every database and storage engine is built around that tension.</p>
 
   <div class="diagram-wrap">
     <svg viewBox="0 0 780 320" xmlns="http://www.w3.org/2000/svg" fill="none">
@@ -323,45 +323,119 @@
   <div class="section-num">07</div>
   <h2>Memory Map — What Lives Where</h2>
 
-  <div class="memory-map"><span class="h">SERVER MEMORY (RAM) — 64 GB example</span>
-<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
-<span class="d">│</span> <span class="b">OS Kernel</span>                                      <span class="num">~2 GB</span>        <span class="d">│</span>
-<span class="d">│</span>   Network buffers, page tables, filesystem cache              <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">OS Page Cache</span>                                   <span class="num">~20 GB</span>       <span class="d">│</span>
-<span class="d">│</span>   Recently read disk blocks cached by the OS                  <span class="d">│</span>
-<span class="d">│</span>   <span class="cm">→ This is why "free" memory looks low on Linux</span>              <span class="d">│</span>
-<span class="d">│</span>   <span class="cm">→ It's used, not wasted — will be reclaimed if needed</span>       <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">Database Buffer Pool</span> (e.g., PostgreSQL shared_buffers)       <span class="d">│</span>
-<span class="d">│</span>                                                <span class="num">~16 GB</span>       <span class="d">│</span>
-<span class="d">│</span>   Hot table pages, index pages, temp sort buffers             <span class="d">│</span>
-<span class="d">│</span>   <span class="cm">→ Managed by DB, not OS. LRU/clock eviction.</span>               <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">Application Heap</span>                                <span class="num">~8 GB</span>        <span class="d">│</span>
-<span class="d">│</span>   Your app server's objects, connection pools, request state   <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">Redis / Cache Layer</span>                             <span class="num">~16 GB</span>       <span class="d">│</span>
-<span class="d">│</span>   In-memory key-value store for session data, hot queries      <span class="d">│</span>
-<span class="d">│</span>   <span class="cm">→ All in RAM. Data lost if process restarts (by default).</span>    <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">Free / Available</span>                                <span class="num">~2 GB</span>        <span class="d">│</span>
-<span class="d">└──────────────────────────────────────────────────────────────┘</span>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 860" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <text x="220" y="36" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="15" fill="#6ee7b7">SERVER MEMORY (RAM) — 64 GB</text>
+      <text x="640" y="36" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="15" fill="#fb923c">SERVER DISK (SSD) — 1 TB</text>
 
-<span class="h">SERVER DISK (SSD) — 1 TB example</span>
-<span class="d">┌──────────────────────────────────────────────────────────────┐</span>
-<span class="d">│</span> <span class="b">Database Data Files</span>          <span class="num">~400 GB</span>                          <span class="d">│</span>
-<span class="d">│</span>   Table data, indexes (B-trees), TOAST for large values       <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">WAL (Write-Ahead Log)</span>        <span class="num">~50 GB</span>                           <span class="d">│</span>
-<span class="d">│</span>   Sequential append-only log for crash recovery               <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">Application Logs</span>             <span class="num">~20 GB</span>                           <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">OS + Binaries</span>                <span class="num">~30 GB</span>                           <span class="d">│</span>
-<span class="d">├──────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span> <span class="b">Free</span>                         <span class="num">~500 GB</span>                          <span class="d">│</span>
-<span class="d">└──────────────────────────────────────────────────────────────┘</span></div>
+      <rect x="40" y="60" width="360" height="720" rx="14" fill="#171b25" stroke="#2a3040" stroke-width="1.5"/>
+      <rect x="460" y="60" width="360" height="720" rx="14" fill="#171b25" stroke="#2a3040" stroke-width="1.5"/>
+
+      <rect x="66" y="86" width="308" height="92" rx="12" fill="#1f2531" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="220" y="116" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">OS Kernel</text>
+      <text x="220" y="141" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~2 GB</text>
+      <text x="220" y="159" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="220" dy="0">network buffers · page tables</tspan>
+        <tspan x="220" dy="13">filesystem code</tspan>
+      </text>
+
+      <rect x="66" y="184" width="308" height="132" rx="12" fill="#1f2531" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="220" y="214" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">OS Page Cache</text>
+      <text x="220" y="239" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~20 GB</text>
+      <text x="220" y="258" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="220" dy="0">recent file-system blocks</tspan>
+        <tspan x="220" dy="13">cached by the kernel</tspan>
+      </text>
+      <text x="220" y="287" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="220" dy="0">reclaimable under pressure;</tspan>
+        <tspan x="220" dy="13">why "free" RAM looks low</tspan>
+      </text>
+
+      <rect x="66" y="332" width="308" height="132" rx="12" fill="#1f2531" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="220" y="362" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">Database Buffer Pool</text>
+      <text x="220" y="387" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~16 GB</text>
+      <text x="220" y="406" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="220" dy="0">shared_buffers · hot table pages</tspan>
+        <tspan x="220" dy="13">index pages</tspan>
+      </text>
+      <text x="220" y="435" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="220" dy="0">DB-managed eviction, separate</tspan>
+        <tspan x="220" dy="13">from OS cache</tspan>
+      </text>
+
+      <rect x="66" y="480" width="308" height="108" rx="12" fill="#1f2531" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="220" y="510" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">Application Heap</text>
+      <text x="220" y="535" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~8 GB</text>
+      <text x="220" y="554" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="220" dy="0">objects · request state</tspan>
+        <tspan x="220" dy="13">connection pools</tspan>
+      </text>
+
+      <rect x="66" y="604" width="308" height="132" rx="12" fill="#1f2531" stroke="#34d399" stroke-width="1.5"/>
+      <text x="220" y="634" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">Redis / Cache Layer</text>
+      <text x="220" y="659" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~16 GB</text>
+      <text x="220" y="678" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="220" dy="0">session data · hot query results</tspan>
+        <tspan x="220" dy="13">ephemeral KV state</tspan>
+      </text>
+      <text x="220" y="707" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="220" dy="0">all in RAM unless backed by</tspan>
+        <tspan x="220" dy="13">snapshots or AOF</tspan>
+      </text>
+
+      <rect x="66" y="752" width="308" height="42" rx="12" fill="#1f2531" stroke="#5c6580" stroke-width="1.5"/>
+      <text x="220" y="779" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="15" font-weight="600" fill="#e2e6f0">Free / Available ~2 GB</text>
+
+      <rect x="486" y="86" width="308" height="132" rx="12" fill="#1f2531" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="640" y="116" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">Database Data Files</text>
+      <text x="640" y="141" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~400 GB</text>
+      <text x="640" y="160" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="640" dy="0">heap files · B-tree indexes</tspan>
+        <tspan x="640" dy="13">large-value storage</tspan>
+      </text>
+      <text x="640" y="189" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="640" dy="0">authoritative on-disk state</tspan>
+        <tspan x="640" dy="13">after checkpoint</tspan>
+      </text>
+
+      <rect x="486" y="234" width="308" height="108" rx="12" fill="#1f2531" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="640" y="264" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">WAL</text>
+      <text x="640" y="289" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~50 GB</text>
+      <text x="640" y="308" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="640" dy="0">append-only log for crash</tspan>
+        <tspan x="640" dy="13">recovery and replication</tspan>
+      </text>
+
+      <rect x="486" y="358" width="308" height="92" rx="12" fill="#1f2531" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="640" y="388" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">Application Logs</text>
+      <text x="640" y="413" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~20 GB</text>
+      <text x="640" y="432" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="640" dy="0">request logs · metrics spill</tspan>
+        <tspan x="640" dy="13">audit trails</tspan>
+      </text>
+
+      <rect x="486" y="466" width="308" height="92" rx="12" fill="#1f2531" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="640" y="496" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">OS + Binaries</text>
+      <text x="640" y="521" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~30 GB</text>
+      <text x="640" y="540" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="640" dy="0">kernel image · packages</tspan>
+        <tspan x="640" dy="13">database binaries</tspan>
+      </text>
+
+      <rect x="486" y="574" width="308" height="220" rx="12" fill="#1f2531" stroke="#5c6580" stroke-width="1.5"/>
+      <text x="640" y="604" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" font-weight="600" fill="#e2e6f0">Free</text>
+      <text x="640" y="629" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#fb923c">~500 GB</text>
+      <text x="640" y="648" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="640" dy="0">headroom for table growth</tspan>
+        <tspan x="640" dy="13">WAL bursts · backups</tspan>
+        <tspan x="640" dy="13">compaction · vacuum</tspan>
+        <tspan x="640" dy="13">restore operations</tspan>
+      </text>
+
+      <text x="430" y="835" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#8891a8">Structured storage map: RAM holds active working state and caches; SSD holds durable state, logs, and growth headroom.</text>
+    </svg>
+    <div class="diagram-caption">Example breakdown of a database-heavy host: managed memory layers on the left, durable disk artifacts on the right.</div>
+  </div>
 </section>
 
 <!-- ============ SECTION 8: TERMINAL DEMOS ============ -->
@@ -548,7 +622,7 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
 
   <div class="callout green">
     <div class="callout-label">What You'll Learn</div>
-    <p>Memory writes are usually much faster than disk writes that include <code class="inline">fsync()</code>, often by one or more orders of magnitude. But after killing and restarting the process, only the disk data survives. This is the fundamental tradeoff. Every database, cache, and storage system is a different answer to: "how much latency am I willing to pay for durability?"</p>
+    <p>Memory writes are usually much faster than disk writes that wait for <code class="inline">fsync()</code>. Kill the process and restart it, though, and only the disk state is still there. Every storage system ends up answering the same question: how much latency are you willing to pay for durability?</p>
   </div>
 </section>
 
@@ -586,7 +660,7 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
 
   <div class="callout green">
     <div class="callout-label">Key Insight — The Buffer Hit Ratio</div>
-    <p>In a read-heavy PostgreSQL system, engineers usually want a <strong>high buffer cache hit ratio</strong> so most reads come from memory instead of disk. You can inspect it with <code class="inline">SELECT sum(blks_hit) / sum(blks_hit + blks_read) FROM pg_stat_database;</code>, but the right target depends on workload, indexing, and whether the working set fits in memory. A low ratio is a signal to investigate RAM pressure, poor locality, or missing indexes rather than a universal "bad number." <a href="#ref3" class="ref">[3]</a></p>
+    <p>In a read-heavy PostgreSQL system, you usually want a <strong>high buffer cache hit ratio</strong> so most reads stay in memory. You can inspect it with <code class="inline">SELECT sum(blks_hit) / sum(blks_hit + blks_read) FROM pg_stat_database;</code>, but the number only matters in context. A low ratio is a reason to check locality, RAM pressure, or missing indexes, not a universal red alert by itself. <a href="#ref3" class="ref">[3]</a></p>
   </div>
 </section>
 
@@ -611,11 +685,11 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
   <p>Cloud block storage (AWS EBS, GCP Persistent Disk, Azure Managed Disks) adds network hops on top of storage latency. Local NVMe is usually much lower latency; network-attached block storage is usually in the millisecond range instead of the low hundreds of microseconds. For latency-sensitive databases, instance-local NVMe can be attractive, but the tradeoff is operational: local storage disappears when the instance is terminated.</p>
 
   <h3>6. Cold Start / Empty Cache</h3>
-  <p>After a database restart, the buffer pool is empty — every query hits disk. Performance can be dramatically worse until the cache "warms up." Some databases support <strong>buffer pool pre-warming</strong> (loading hot pages from disk on startup). PostgreSQL has <code class="inline">pg_prewarm</code>; MySQL has buffer pool dump/restore.</p>
+  <p>After a database restart, the buffer pool is empty, so every query falls through to disk until the cache warms back up. Some engines can pre-warm hot pages on startup. PostgreSQL has <code class="inline">pg_prewarm</code>; MySQL has buffer pool dump/restore.</p>
 
   <div class="callout red">
     <div class="callout-label">Production War Story</div>
-    <p>In 2017, GitLab suffered a major database incident that resulted in hours of downtime and roughly six hours of lost database data. The failure exposed gaps in backup coverage and restore readiness, not just in primary storage. The lesson: persistence is not only about <code class="inline">fsync()</code>; it is also about <strong>verified, tested backups</strong> across multiple storage tiers. A backup that has never been restored successfully is not a backup. <a href="#ref6" class="ref">[6]</a></p>
+    <p>In 2017, GitLab had a major database incident that led to hours of downtime and roughly six hours of lost data. The failure was not just about primary storage. It exposed weak backup coverage and weak restore readiness. Persistence is broader than <code class="inline">fsync()</code>. If a backup has never been restored successfully, it has not earned much trust. <a href="#ref6" class="ref">[6]</a></p>
   </div>
 </section>
 
@@ -623,6 +697,60 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
 <section class="section" id="s13">
   <div class="section-num">13</div>
   <h2>Interview Questions & Answers</h2>
+
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design the write path for an orders database where an acknowledged write must survive a machine crash.</strong> This is where interviewers stop accepting “write it to the DB” as an answer. They want to hear exactly what gets logged, what gets flushed, what can stay in memory for now, and what recovery replays after restart. <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would say the write path usually has two different artifacts: the <strong>WAL record</strong> and the <strong>in-memory page update</strong>. Before I go deep on that, I would pin down ownership: is this one primary database, or are writes partitioned by something like <code class="inline">order_id</code> or <code class="inline">customer_id</code>? If it is sharded, I need a deterministic routing key and a versioned shard map so retries do not land on different owners during rebalancing. The transaction logic changes the page in memory and emits log records that describe the change, but the commit is not acknowledged until the relevant WAL records, including the commit record, are forced durable with <code class="inline">fsync()</code>. The table files themselves can lag because recovery can replay the WAL later. That is the key separation: the WAL is the durability contract, while the buffer pool is the speed layer. If the interviewer asks about throughput, I would bring up group commit immediately because the limiting factor is often how often I force durable flushes, not how fast the CPU can execute SQL. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The push-back is usually: <em>what if the process crashes after the client gets “success,” but before dirty pages hit the main table files?</em> The answer is that recovery replays the WAL and reconstructs those page updates. The sharper edge case is: <em>what if the WAL write only reached the OS page cache but never reached stable storage?</em> Then a power loss can still erase an “accepted” write, which is exactly why the discussion has to include <code class="inline">fsync()</code>, cache flush semantics, and not just “write().” If the database is partitioned, I would also expect a follow-up on shard movement: stale routing metadata can send a retry to the old owner after the write already committed on the new owner, so ownership changes need epochs, leases, or an authoritative router. A stronger answer also distinguishes replication from backup: a replica helps with node or disk failure; a backup helps when the data itself is corrupted, deleted, or logically wrong on every replica. <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think PostgreSQL/MySQL-style write path under sharding pressure:</strong> the WAL is the durability contract, the buffer pool is the speed layer, and any shard router has to move ownership carefully enough that retries do not hit the wrong primary. The interview gain comes from separating local crash recovery from distributed ownership changes. <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    App["Order API"]
+    R["Router: hash order_id"]
+    P["Primary Shard"]
+    W["WAL append + fsync"]
+    B["Buffer Pool"]
+    Rep["Standby Replica"]
+    Ack["Commit ACK"]
+    N1["Remap retry needs epoch"]
+    N2["WAL durable before ACK"]
+    N3["Data files lag; WAL replays"]
+
+    App --> R
+    R --> P
+    P --> W
+    W --> B
+    W --> Rep
+    B --> Ack
+    R -.-> N1
+    W -.-> N2
+    B -.-> N3
+
+    classDef app fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class App app;
+    class R,P core;
+    class W,B,Rep,Ack data;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: separate routing ownership from local durability, then explain WAL durability, replay, and what shard movement does to retries.</div>
+  </div>
 
   <div class="qa">
     <div class="qa-q">Q1: What's the difference between memory and disk? When would you use each?</div>
@@ -761,14 +889,16 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References & Further Reading</h2>
+  <p>Each source below is reduced to the storage invariant, recovery mechanism, or durability tradeoff that actually matters in practice.</p>
 
   <div id="ref1" class="callout blue" style="margin-top:28px;">
     <div class="callout-label">[1] Latency Numbers Every Programmer Should Know</div>
     <p><strong>Jeff Dean, Google.</strong> Originally presented ~2009, widely updated. Compiled by Colin Scott.<br>
     <a href="https://colin-scott.github.io/personal_website/research/interactive_latency.html" style="color:var(--blue);" target="_blank">https://colin-scott.github.io/personal_website/research/interactive_latency.html</a></p>
-    <p>• Quantifies the hierarchy from CPU caches through DRAM, SSDs, HDDs, and network round trips, giving the latency constants that drive storage-placement decisions.</p>
-    <p>• The important technical point is the widening ratio between memory and storage classes: a random disk access is not “slower RAM,” it is a different bottleneck regime entirely.</p>
-    <p>• These constants explain why write-ahead logs, buffer pools, batching, and sequential I/O dominate storage-system design.</p>
+    <p>• The technical value is the <strong>magnitude gap</strong> between nanosecond memory access and microsecond-to-millisecond storage/network access. That gap is the input to any storage cost model for cache misses, fsyncs, quorum writes, or remote reads.</p>
+    <p>• Read the table by operation type, not just by device: <strong>random access latency</strong>, <strong>sequential transfer time</strong>, and <strong>cross-machine RTT</strong> are different terms in the storage critical path and dominate different architectures.</p>
+    <p>• A single blocking disk seek or durable log flush can cost as much wall-clock time as millions of CPU instructions; that is the systems reason storage engines batch, prefetch, reorder writes, and keep hot pages in DRAM.</p>
+    <p>• The source is useful as a boundary-condition table for storage design math: if your design adds one extra sync, one extra network hop, or one extra random read per operation, these constants tell you roughly what budget you just spent.</p>
   </div>
 
   <div id="ref2" class="callout green">
@@ -776,48 +906,50 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
     <p><strong>Jim Gray, Gianfranco Putzolu.</strong> ACM SIGMOD, 1987. Revised in 1997, 2007, and 2017.<br>
     <a href="https://jimgray.azurewebsites.net/5_min_rule_sigmod.pdf" style="color:var(--accent);" target="_blank">https://jimgray.azurewebsites.net/5_min_rule_sigmod.pdf</a> (1997 revision)<br>
     <a href="https://cacm.acm.org/research/the-five-minute-rule-30-years-later-and-its-impact-on-the-storage-hierarchy/" style="color:var(--accent);" target="_blank">CACM 2019 — 30-year revision</a></p>
-    <p>• Derives a break-even rule comparing the cost of keeping a page in memory with the cost of re-reading it from storage at some access interval.</p>
-    <p>• The equation is an economics model over <strong>memory price, storage price, page size, and I/O rate</strong>, not a hardware-specific heuristic.</p>
-    <p>• The later revisions show how the break-even interval moves as DRAM, HDD, and SSD prices/performance shift, which is why the “five-minute rule” changes over time.</p>
-    <p>• This is the right mental model for cache sizing: a page belongs in a faster tier when its expected reuse interval is shorter than the economically justified threshold.</p>
+    <p>• The paper derives a <strong>break-even interval</strong> for a page: keep the page in DRAM if the expected rereference interval is shorter than the time at which memory cost equals disk-I/O cost for rereading it.</p>
+    <p>• That interval is computed from explicit variables: page size, DRAM cost per byte, storage cost per access path, and the number of I/Os a device can sustain. It is an economic formula, not folklore.</p>
+    <p>• The revisions matter because the inequality shifts as the storage hierarchy changes: SSDs reduce read latency and increase IOPS, so the optimal cache residency threshold moves relative to HDD-era designs.</p>
+    <p>• This gives a rigorous way to reason about <strong>buffer-pool sizing</strong> and multi-tier storage: a hotter page justifies occupying a more expensive tier if its saved miss cost exceeds that tier’s carrying cost.</p>
   </div>
 
   <div id="ref3" class="callout orange">
     <div class="callout-label">[3] PostgreSQL Documentation — Reliability and the Write-Ahead Log</div>
     <p><strong>The PostgreSQL Global Development Group.</strong><br>
     <a href="https://www.postgresql.org/docs/current/wal-reliability.html" style="color:var(--orange);" target="_blank">https://www.postgresql.org/docs/current/wal-reliability.html</a></p>
-    <p>• States the WAL rule precisely: the log record describing a page change must reach durable storage before the corresponding data page is written back.</p>
-    <p>• Explains why commit acknowledgment depends on WAL flush, not on immediate flushing of every dirty table page.</p>
-    <p>• Documents <code class="inline">full_page_writes</code> as protection against torn-page / partial-write scenarios after checkpoints.</p>
-    <p>• The reliability notes are especially useful because they discuss real failure semantics around controller caches, barriers, and what an <code class="inline">fsync</code> failure implies for subsequent recovery confidence.</p>
+    <p>• States the WAL invariant exactly: for any page update with LSN = X, the log records up through X must be persisted before the corresponding data page can be flushed to its home location.</p>
+    <p>• That invariant is what allows <strong>steal/no-force</strong> buffer management: dirty data pages may be evicted before commit, and committed transactions do not require immediate full-page database flushes.</p>
+    <p>• The docs explain the torn-page hazard and why <code class="inline">full_page_writes</code> logs a whole-page image after checkpoints so recovery can repair a page whose on-disk write was only partially completed.</p>
+    <p>• The subtle but important engineering point is that WAL correctness depends on the real behavior of storage hardware and kernels: write barriers, controller caches, flush ordering, and failed <code class="inline">fsync</code> semantics all affect whether recovery assumptions still hold.</p>
   </div>
 
   <div id="ref4" class="callout purple">
     <div class="callout-label">[4] Mohan et al. — "ARIES: A Transaction Recovery Method" (1992)</div>
     <p><strong>C. Mohan, Don Haderle, Bruce Lindsay, Hamid Pirahesh, Peter Schwarz.</strong> ACM TODS, Vol. 17, No. 1, March 1992.<br>
     <a href="https://cs.stanford.edu/people/chrismre/cs345/rl/aries.pdf" style="color:var(--purple);" target="_blank">https://cs.stanford.edu/people/chrismre/cs345/rl/aries.pdf</a></p>
-    <p>• ARIES formalizes recovery as three phases: <strong>analysis</strong> rebuilds the dirty-page table and transaction table, <strong>redo</strong> reapplies history, and <strong>undo</strong> rolls back loser transactions.</p>
-    <p>• It uses <strong>physiological logging</strong>: log records are page-oriented but encode logical operations within a page, giving enough structure for idempotent redo with lower overhead than full physical images.</p>
-    <p>• The paper introduces <strong>log sequence numbers (LSNs)</strong>, pageLSN checks, and compensation log records (CLRs) to make redo/undo restartable and crash-safe even if recovery itself is interrupted.</p>
-    <p>• This is the technical foundation behind modern WAL-based recovery systems, not just the high-level idea of “write the log first.”</p>
+    <p>• ARIES defines recovery as <strong>repeating history during redo</strong> and then selectively undoing loser transactions. That is a stronger statement than “replay committed changes”: the system first reconstructs the exact pre-crash state trajectory.</p>
+    <p>• The paper formalizes the metadata needed for that process: transaction table, dirty-page table, pageLSN on every page, and monotonically increasing LSNs in the log.</p>
+    <p>• Redo is bounded by <code class="inline">recLSN</code> in the dirty-page table, and redo of a log record is skipped if the target page already has <code class="inline">pageLSN &gt;= recordLSN</code>; that is the idempotence test that prevents unnecessary reapplication.</p>
+    <p>• Compensation Log Records (CLRs) make undo itself durable and restartable, so even if the system crashes during rollback, recovery can resume without violating atomicity.</p>
   </div>
 
   <div id="ref5" class="callout green">
     <div class="callout-label">[5] Redis Documentation — Persistence</div>
     <p><strong>Redis Open Source Docs.</strong><br>
     <a href="https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/" style="color:var(--accent);" target="_blank">https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/</a></p>
-    <p>• Documents the persistence tradeoff surface explicitly: periodic <strong>RDB snapshots</strong>, append-only logging (<strong>AOF</strong>), or combining both for faster restart plus bounded recent-data loss.</p>
-    <p>• AOF durability is parameterized by the flush policy: <code class="inline">always</code>, <code class="inline">everysec</code>, or OS-managed flushing.</p>
-    <p>• The docs also describe AOF rewrite/compaction, which turns a long mutation log into a smaller equivalent command sequence for restart efficiency.</p>
+    <p>• The docs distinguish two fundamentally different persistence representations: <strong>RDB</strong> stores a point-in-time heap image, while <strong>AOF</strong> stores an ordered command log that must be replayed to reconstruct state.</p>
+    <p>• That difference creates different recovery behavior: RDB has bounded restart cost but loses all writes since the last snapshot, while AOF preserves a finer-grained history but makes restart proportional to the replayed mutation stream.</p>
+    <p>• The <code class="inline">appendfsync</code> setting is the real durability contract: <code class="inline">always</code>, <code class="inline">everysec</code>, and <code class="inline">no</code> correspond to different acknowledgment points relative to kernel and device persistence.</p>
+    <p>• AOF rewrite is not just compaction; it transforms a long operational history into a shorter equivalent state-producing history, which changes restart complexity and limits unbounded log growth.</p>
   </div>
 
   <div id="ref6" class="callout red">
     <div class="callout-label">[6] GitLab — Postmortem of Database Outage of January 31 (2017)</div>
     <p><strong>GitLab Engineering.</strong> February 2017.<br>
     <a href="https://about.gitlab.com/blog/postmortem-of-database-outage-of-january-31/" style="color:var(--red);" target="_blank">https://about.gitlab.com/blog/postmortem-of-database-outage-of-january-31/</a></p>
-    <p>• The postmortem is technically useful because it details multiple failed recovery paths rather than a single root cause: replication lag, delayed failover, inconsistent backups, and restore tooling gaps all compounded.</p>
-    <p>• It shows that durability is an end-to-end property involving primary data, replicas, backups, and verified restore procedures.</p>
-    <p>• The failure narrative is a concrete example of why storage design must include operational recovery drills, not just theoretically redundant copies of data.</p>
+    <p>• The failure sequence shows the difference between <strong>high availability</strong> and <strong>recoverability</strong>: a replica existed, but replication lag and promotion constraints meant it could not immediately replace the damaged primary without data loss.</p>
+    <p>• The backup path was also constrained by mechanics, not intent: restoring required a consistent base backup plus the necessary WAL/archive stream to roll forward to a usable point.</p>
+    <p>• The postmortem is technically valuable because it exposes the full recovery graph: primary state, streaming replication, snapshot backups, WAL continuity, failover tooling, and operator decision time all became part of the outage duration.</p>
+    <p>• The systems lesson is that storage durability claims are only credible if you can demonstrate a working restore procedure from the exact artifacts your design depends on.</p>
   </div>
 </section>
 
@@ -826,6 +958,7 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
 </footer>
 
 </div>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 <script src="../../assets/js/topic.js"></script>
 </body>
 </html>

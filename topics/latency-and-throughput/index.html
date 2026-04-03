@@ -604,6 +604,60 @@ $ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python
   <div class="section-num">14</div>
   <h2>Interview Questions & Answers</h2>
 
+  <h3>Actual System Design Interview</h3>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design a search-autocomplete service with a hard p99 latency target.</strong> This is where interviewers want to see whether you can turn “fast” into numbers, and whether you understand that tail latency, concurrency, and fan-out are linked by queueing rather than by hand-waving. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would start with a latency budget. If the end-to-end p99 target is 150ms, I cannot let one backend consume 140ms by itself. Then I would use Little's Law to convert throughput and latency into concurrency so the design has a capacity model instead of a vibe. Before I talk about fan-out, I would pin down the routing shape: does one query hit one shard, a bounded subset, or every shard? If the index is partitioned by prefix or term range, I would say out loud that a “good” partitioning scheme still fails on hot prefixes unless I over-partition or cap scatter-gather. If the request fans out to many shards or services, I would say explicitly that averages are misleading because the slowest branch often determines the user-visible latency. That is where parallelism helps the median but can still hurt the tail if every request now depends on many backends returning in time. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The interviewer usually pushes on overload: <em>what happens when traffic doubles and the average still looks okay?</em> That is where queueing shows up. Once utilization gets high, waiting time grows much faster than service time, so p99 blows up before CPU necessarily hits 100%. A good answer mentions admission control, load shedding, caching, and bounded fan-out instead of promising to “optimize later.” I would also expect a follow-up on rebalancing: when a shard is added or moved, only some queries should re-route, but stale shard maps and cold partitions can still spike the tail. If they ask about hedged requests, I would mention them as a tail-latency tool, but only where the backend can tolerate the duplicate work. <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think a search-style fan-out path:</strong> the gateway owns the latency budget, a coordinator fans out only as far as necessary, and caches or shard-local indexes absorb the common case. What matters in interview discussion is showing where the p99 budget is spent and why adding shards or parallelism can improve the median while hurting the tail. <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    U["User Query"]
+    G["API edge: p99 budget"]
+    C["Coordinator: bounded fan-out"]
+    Cache["Prefix Cache"]
+    S1["Shard 1"]
+    S2["Shard 2"]
+    S3["Shard 3"]
+    N1["Hot prefix overloads shard"]
+    N2["Stale shard map hurts p99"]
+    N3["Tail = slowest branch"]
+
+    U --> G
+    G --> C
+    C --> Cache
+    C --> S1
+    C --> S2
+    C --> S3
+    C -.-> N1
+    C -.-> N2
+    C -.-> N3
+
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class U user;
+    class G,C core;
+    class Cache,S1,S2,S3 data;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: define the latency budget, bound the fan-out, and explain where hot partitions or stale shard maps turn into tail-latency failures.</div>
+  </div>
+
   <div class="qa">
     <div class="qa-q">Q1: What's the difference between latency and throughput?</div>
     <div class="qa-a">
@@ -750,14 +804,14 @@ $ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python
   </div>
 
   <h3>Diagram Interpretation</h3>
-  <p><strong>Top: the queueing model.</strong> Requests arrive at 900/s. The server processes at 1000/s capacity (1ms each). At 90% utilization, the system looks fine on paper — headroom exists. But the queue tells a different story.</p>
-  <p><strong>The curve:</strong> This is the M/M/1 queueing model. At low utilization (10-50%), latency is barely above the processing time (~1ms). At 70%, it's ~3ms. At 90%, it's ~10ms (10× processing time). At 95%, it's ~20ms. At 99%, it's ~100ms. The curve is exponential — latency doesn't degrade linearly, it <strong>explodes</strong>.</p>
-  <p><strong>The danger zone (>80%):</strong> This is where most production systems break. Traffic spikes push utilization from 70% to 90%, and latency jumps 5× in seconds. Users start seeing timeouts, retries add more load, and the system enters a death spiral. This is why capacity planning targets ~60-70% utilization — the remaining headroom absorbs spikes without entering the hockey stick.</p>
-  <p><strong>The fix:</strong> Either add capacity (more servers → lower utilization per server) or reduce processing time (optimize queries, add caching → shift the curve left). Both work, but caching is usually cheaper and faster to implement.</p>
+  <p><strong>Top: the queueing model.</strong> Requests arrive at 900/s. The server can process 1000/s. On paper that sounds comfortable. In practice, the queue starts to matter long before the machine looks "full."</p>
+  <p><strong>The curve:</strong> This is M/M/1 queueing. At low utilization, latency stays close to service time. Around 70%, it starts bending upward. By 90% and beyond, queueing delay is doing most of the damage.</p>
+  <p><strong>The danger zone:</strong> once the system lives near that bend, a small traffic spike can shove it into timeout territory. Retries add more load, which makes the queue longer, which triggers more retries. That loop is how ordinary load turns into an outage.</p>
+  <p><strong>The fix:</strong> either lower utilization by adding capacity, or shorten service time so each request leaves faster. Query work, caching, and concurrency limits all change the shape of this graph.</p>
 
   <div class="callout green">
     <div class="callout-label">Key Intuition</div>
-    <p><strong>Latency is flat until utilization crosses ~70%, then it explodes exponentially.</strong> This is the single most important graph in system design. When someone says "the system is slow under load," this curve is why. Never run a production system above 70-80% average utilization — the remaining headroom isn't waste, it's your insurance against the hockey stick.</p>
+    <p><strong>Latency stays tame for a while, then queueing takes over.</strong> That is why average utilization targets matter. The gap between 60% and 80% is not waste. It is the space that keeps normal spikes from turning into a queueing mess.</p>
   </div>
 </section>
 
@@ -765,6 +819,7 @@ $ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References & Further Reading</h2>
+  <p>Each note below highlights the specific invariant, queueing result, or performance mechanism to extract from the source.</p>
 
   <div id="ref1" class="callout green" style="margin-top:28px;">
     <div class="callout-label">[1] Jeff Dean / Peter Norvig — "Latency Numbers Every Programmer Should Know"</div>
@@ -822,6 +877,7 @@ $ <span class="fn">curl</span> -s localhost:9090/stats | <span class="fn">python
 </footer>
 
 </div>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 <script src="../../assets/js/topic.js"></script>
 </body>
 </html>

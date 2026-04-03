@@ -33,8 +33,9 @@
     <li><a href="#s10">Production Example 2: Google Maglev Hashing</a></li>
     <li><a href="#s11">Edge Cases &amp; Gotchas</a></li>
     <li><a href="#s12">What If? — Interactive Exploration</a></li>
-    <li><a href="#s13">Interview Questions &amp; Answers</a></li>
-    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#s13">Actual System Design Interview</a></li>
+    <li><a href="#s14">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s15">Key Takeaways Cheat Sheet</a></li>
     <li><a href="#mental">Mental Model</a></li>
     <li><a href="#refs">References &amp; Further Reading</a></li>
   </ol>
@@ -551,9 +552,74 @@ Ideal (K/N):                    remapped:  <span class="num">1666</span> (<span 
   </div>
 </section>
 
-<!-- ============ INTERVIEW Q&A ============ -->
+<!-- ============ ACTUAL INTERVIEW ============ -->
 <section class="section" id="s13">
   <div class="section-num">13</div>
+  <h2>Actual System Design Interview</h2>
+
+  <div class="callout blue">
+    <div class="callout-label">The Kind of Prompt You Actually Hear</div>
+    <p><strong>Design a distributed cache for user profiles.</strong> It needs to scale out, survive cache-node adds/removes, and not melt the database during rebalancing. This usually turns into a hashing discussion very quickly, but the interviewer is really probing whether you can reason about placement, churn, hot keys, and stale routing metadata. <a href="#ref1" class="ref">[1]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    A["Clients: hash user_id"]
+    P["Placement: ring plus vnodes"]
+    C1["Cache A"]
+    C2["Cache B: hot partition"]
+    C3["Cache C: new node"]
+    N1["Who owns the map?"]
+    N2["Only ~K/N keys move"]
+    N3["Old map breaks routing"]
+
+    A --> P
+    P --> C1
+    P --> C2
+    P --> C3
+    A -.-> N1
+    P -.-> N2
+    P -.-> N3
+
+    classDef topic fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef client fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef cache fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef cacheRisk fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class A client;
+    class P topic;
+    class C1,C3 cache;
+    class C2 cacheRisk;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard version: define the key, define who owns the ring, then walk through rebalancing, cold-node behavior, and stale membership.</div>
+  </div>
+
+  <h3>If I Were Answering This Out Loud</h3>
+  <div class="callout green">
+    <div class="callout-label">Candidate Notes</div>
+    <p><strong>First thing I would pin down:</strong> what exactly is the routing key? If it is a profile cache, I am probably hashing <code class="inline">user_id</code>. If I cannot name the placement key, the rest of the answer gets fuzzy fast. <a href="#ref4" class="ref">[4]</a></p>
+    <p><strong>Next I would choose where the ring lives:</strong> in the clients, or behind a proxy/router tier. Client-side routing saves a hop but now every app server needs an up-to-date membership view. Proxy-side routing is easier to coordinate, but it means the proxy layer becomes part of the control plane. <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+    <p><strong>Then I would explain why modulo hashing is a trap:</strong> the first autoscaling event turns into a remapping storm. So I would switch to consistent hashing or rendezvous hashing and say out loud that I care about minimizing churn, not just placing keys “somewhere.” <a href="#ref1" class="ref">[1]</a> <a href="#ref3" class="ref">[3]</a></p>
+    <p><strong>Then I would volunteer the thing interviewers usually ask next:</strong> hot keys. A perfect hash still loses if one celebrity profile gets 1000× more traffic than the median. That is where key splitting, request coalescing, local L1 caches, or selective replication come in. <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+    <p><strong>Finally I would talk about placement-map updates:</strong> whenever the membership changes, the routing map changes too. One version of the fleet may still think key <code class="inline">user_123</code> belongs on the old node, while another version now sends it to the new node. In a cache, that creates misses, stale reads, or duplicate warming. In a primary data store, it is more dangerous because different clients can write the same key to different owners. So the real design question is not just “which hash function do we use?” but also “how do all clients converge on the same routing view quickly enough?” <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+
+  <h3>Where Interviewers Usually Push Back</h3>
+  <div class="callout orange">
+    <div class="callout-label">Things They Will Not Let You Skip</div>
+    <p><strong>Node added during peak traffic:</strong> yes, only ~K/N keys move, but those keys are cold on the new node. A good answer mentions warm-up, throttled migration, or enough spare capacity that the backing store survives the cold-start burst. <a href="#ref1" class="ref">[1]</a> <a href="#ref5" class="ref">[5]</a></p>
+    <p><strong>Heterogeneous nodes:</strong> equal key ownership is wrong if hardware is unequal. Say weighted virtual nodes or weighted rendezvous hashing and move on. <a href="#ref3" class="ref">[3]</a></p>
+    <p><strong>Membership flapping:</strong> if health checks bounce, the ring keeps changing and the cache never settles. This is where hysteresis, draining, and conservative failure detection matter. <a href="#ref4" class="ref">[4]</a></p>
+    <p><strong>Replication and read path:</strong> if a key exists on more than one node, say who is primary, who is backup, and what the read rule is. Otherwise “replication” is just a hand-wave. <a href="#ref4" class="ref">[4]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+</section>
+
+<!-- ============ INTERVIEW Q&A ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
   <h2>Interview Questions &amp; Answers</h2>
 
   <div class="qa">
@@ -597,11 +663,35 @@ Ideal (K/N):                    remapped:  <span class="num">1666</span> (<span 
       <p>When the new server joins, ~K/N keys are reassigned from their old server to the new one. The new server's cache is empty for those keys. If the old server is still alive and hasn't evicted those keys, you now have <strong>two servers with potentially different versions of the same data</strong> — the old server has a stale cached copy, and the new server has nothing (will fetch fresh from DB). But if the app client's ring view is slightly out of sync (propagation delay), some clients may still route those keys to the old server, getting stale data, while others route to the new server, getting fresh data. <strong>Fix:</strong> (1) Invalidate affected keys on the old server when ring membership changes. (2) Use a consensus service (ZooKeeper/etcd) to ensure all clients see the same ring state atomically. (3) TTL as a safety net — stale data expires eventually.</p>
     </div>
   </div>
+
+  <div class="qa">
+    <div class="qa-q">Q7: The interviewer says, “One node is twice as powerful as the others. What changes?”</div>
+    <div class="qa-a">
+      <p><strong>Answer:</strong> Equal placement is no longer correct because equal ownership will underutilize the stronger node and overload the weaker ones. In a ring-based design, give the stronger node proportionally more virtual nodes. In rendezvous hashing, use weighted rendezvous so the stronger server wins a larger fraction of keys.</p>
+      <p><strong>Thought process:</strong> First identify what is actually uneven: CPU, memory, or network. Then make the placement algorithm capacity-aware. Fairness is relative to server capacity, not just key count.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q8: “What if the hash function is perfect but one key is 1000× hotter than the rest?”</div>
+    <div class="qa-a">
+      <p><strong>Answer:</strong> The problem is no longer poor distribution; it is skew. A perfect hash only balances the number of keys, not the request rate per key. Split the hot key into subkeys, replicate the hot object, add an L1 cache near the application, or introduce request coalescing so concurrent misses do not stampede the backing store.</p>
+      <p><strong>Thought process:</strong> Say plainly that hashing solves placement variance, not workload skew. Even perfect distribution can still leave you with one disastrous hot key.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q9: “Clients update ring membership asynchronously. Is that acceptable?”</div>
+    <div class="qa-a">
+      <p><strong>Answer:</strong> It depends on the workload. For an eventually consistent cache, a short period of disagreement may be acceptable if you tolerate misses and stale entries. For a partitioned primary data store, divergent views can route writes to the wrong owner and create correctness bugs.</p>
+      <p><strong>Thought process:</strong> Classify the system first: cache, shard router, or authoritative datastore. Then explain how views converge with versioned metadata, leases, epochs, and safe rollout windows. The real question is not just "async or sync?" It is "what correctness does this layer owe?"</p>
+    </div>
+  </div>
 </section>
 
 <!-- ============ CHEAT SHEET ============ -->
-<section class="section" id="s14">
-  <div class="section-num">14</div>
+<section class="section" id="s15">
+  <div class="section-num">15</div>
   <h2>Key Takeaways Cheat Sheet</h2>
 
   <div class="callout green">
@@ -626,9 +716,8 @@ Ideal (K/N):                    remapped:  <span class="num">1666</span> (<span 
 
   <div class="diagram-wrap">
     <svg viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <!-- Ring -->
       <circle cx="300" cy="200" r="160" stroke="#3d4663" stroke-width="2" fill="none"/>
-      <!-- Servers on ring (yellow markers) -->
+
       <circle cx="440" cy="120" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
       <text x="458" y="118" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">A</text>
       <circle cx="410" cy="320" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
@@ -638,7 +727,6 @@ Ideal (K/N):                    remapped:  <span class="num">1666</span> (<span 
       <circle cx="160" cy="140" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
       <text x="133" y="140" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">D</text>
 
-      <!-- Keys on ring (red markers) -->
       <circle cx="350" cy="50" r="5" fill="#f87171"/>
       <text x="362" y="48" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k1</text>
       <circle cx="460" cy="210" r="5" fill="#f87171"/>
@@ -648,19 +736,16 @@ Ideal (K/N):                    remapped:  <span class="num">1666</span> (<span 
       <circle cx="140" cy="220" r="5" fill="#f87171"/>
       <text x="115" y="224" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k4</text>
 
-      <!-- Clockwise arrows from keys to servers -->
       <path d="M352 55 Q 400 60 435 115" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
       <path d="M458 215 Q 430 280 415 315" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
       <path d="M248 352 Q 200 340 185 315" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
       <path d="M142 216 Q 145 175 155 145" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
 
-      <!-- Labels -->
       <text x="390" y="75" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k1 &#x2192; A</text>
       <text x="445" y="275" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k2 &#x2192; B</text>
       <text x="155" y="348" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k3 &#x2192; C</text>
       <text x="102" y="186" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k4 &#x2192; D</text>
 
-      <!-- Annotation box -->
       <rect x="520" y="30" width="220" height="200" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
       <text x="540" y="55" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7" font-weight="600">HOW IT WORKS</text>
       <text x="540" y="80" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">1. Hash servers to ring</text>
@@ -671,7 +756,6 @@ Ideal (K/N):                    remapped:  <span class="num">1666</span> (<span 
       <text x="540" y="186" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">Only keys between E's</text>
       <text x="540" y="204" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">neighbors remap (~K/N)</text>
 
-      <!-- Pressure box -->
       <rect x="520" y="260" width="220" height="130" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
       <text x="540" y="285" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171" font-weight="600">FAILURE MODE</text>
       <text x="540" y="310" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">&#x25B8; Without vnodes: arcs</text>
@@ -697,6 +781,7 @@ Ideal (K/N):                    remapped:  <span class="num">1666</span> (<span 
 <section class="section" id="refs">
   <div class="section-num">REF</div>
   <h2>References &amp; Further Reading</h2>
+  <p>Each source below is broken down by the formal property, disruption bound, or routing consequence you should take from it.</p>
 
   <div id="ref1" class="callout green" style="margin-top:28px;">
     <div class="callout-label">[1] Karger et al. — "Consistent Hashing and Random Trees" (STOC 1997)</div>
@@ -730,12 +815,32 @@ Ideal (K/N):                    remapped:  <span class="num">1666</span> (<span 
     <p>&#x2022; The O(N) per-key computation cost is explicitly acknowledged as the tradeoff — acceptable for N in the dozens (proxy clusters) but impractical for N in the thousands. The paper suggests caching the assignment mapping to amortize this cost for frequently accessed keys.</p>
     <p>&#x2022; The hash function used must be <strong>jointly uniform</strong> over (key, server) pairs — the paper specifies that independent universal hashing suffices, and provides specific constructions using bitwise operations and primes that avoid expensive cryptographic hashes.</p>
   </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] Martin Kleppmann — "Designing Data-Intensive Applications" (2017)</div>
+    <p><strong>Martin Kleppmann.</strong> O'Reilly Media, 2017. Chapters 6 and 7 are the most relevant here.<br>
+    <a href="https://dataintensive.net/" style="color:var(--purple);" target="_blank">https://dataintensive.net/</a></p>
+    <p>&#x2022; Distinguishes <strong>hash-based partitioning</strong> from key-range partitioning: hashing destroys locality to improve balance, while range partitioning preserves locality but risks skew. The operational point is that partition strategy encodes a tradeoff between balanced ownership and query shape.</p>
+    <p>&#x2022; Treats <strong>rebalancing</strong> as a data-movement problem under load. Fixed partitioning, dynamic partitioning, and node-per-partition models all exist to control how much data must move when cluster membership changes.</p>
+    <p>&#x2022; Calls out <strong>skew and hot spots</strong> as first-class failure modes: even if keys are evenly partitioned, one partition can dominate traffic. Hashing reduces average imbalance; it does not remove skewed-access pathologies.</p>
+    <p>&#x2022; Emphasizes that a partitioning scheme also determines the shape of <strong>request routing metadata</strong>: clients either need a local partition map, a routing tier, or an indirection layer. In interviews, this is the hidden control-plane question behind “how do requests find the right shard?”</p>
+  </div>
+
+  <div id="ref5" class="callout yellow">
+    <div class="callout-label">[5] DeCandia et al. — "Dynamo: Amazon's Highly Available Key-value Store" (SOSP 2007)</div>
+    <p><strong>Giuseppe DeCandia, Deniz Hastorun, Madan Jampani, et al.</strong> Amazon. ACM SOSP, 2007.<br>
+    <a href="https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf" style="color:var(--yellow);" target="_blank">https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf</a></p>
+    <p>&#x2022; Dynamo uses consistent hashing to place partitions on a ring, but the operational detail that matters is the <strong>preference list</strong>: each key maps to an ordered set of replica nodes, not just one owner.</p>
+    <p>&#x2022; The paper is useful for what happens under churn: <strong>virtual nodes</strong> smooth balance, and <strong>hinted handoff</strong> keeps writes moving when the preferred replica is unavailable.</p>
+    <p>&#x2022; Read it as proof that hashing is only the placement layer. Replication, sloppy quorum behavior, and membership propagation are what turn placement into a working distributed store.</p>
+  </div>
 </section>
 
 <footer class="site-footer">System Design Fundamentals</footer>
 
 </div>
 <script src="../../assets/js/topic.js"></script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 <script>
 // ── Hashing Comparison Simulator ──
 (function(){

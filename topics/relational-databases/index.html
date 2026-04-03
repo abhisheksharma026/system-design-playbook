@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Relational Databases</title>
+<meta name="description" content="A system design guide to relational databases, SQL, ACID transactions, indexes, query planning, PostgreSQL, and Spanner.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 10</div>
+  <h1><span>Relational Databases</span></h1>
+  <p class="hero-sub">Tables, rows, columns, foreign keys, ACID transactions, and SQL — the data model that has dominated software engineering for over 50 years, and for good reason. Understanding relational databases deeply is non-negotiable for system design.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Prerequisites &amp; Key Terms</a></li>
+    <li><a href="#s1">What Is a Relational Database?</a></li>
+    <li><a href="#s2">ACID — The Transaction Contract</a></li>
+    <li><a href="#s3">Indexes — Making Queries Fast</a></li>
+    <li><a href="#s4">Normalization vs Denormalization</a></li>
+    <li><a href="#s5">The Query Planner — How SQL Becomes I/O</a></li>
+    <li><a href="#s6">Transactions &amp; Isolation Levels</a></li>
+    <li><a href="#s7">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s8">Mini-Project: Schema Design &amp; Queries</a></li>
+    <li><a href="#s9">Production Example 1: PostgreSQL</a></li>
+    <li><a href="#s10">Production Example 2: Google Spanner</a></li>
+    <li><a href="#s11">Edge Cases &amp; Gotchas</a></li>
+    <li><a href="#s12">What If? — Interactive Exploration</a></li>
+    <li><a href="#s13">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s13b">Actual System Design Interview</a></li>
+    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Prerequisites &amp; Key Terms</h2>
+
+  <h3>Relational Database</h3>
+  <p>A relational database stores data in <strong>tables</strong> made of <strong>rows</strong> and <strong>columns</strong>. Tables point at each other through <strong>foreign keys</strong>, which is what makes <strong>joins</strong> possible. What matters is that you define the schema up front and the database enforces it. That model comes from Edgar F. Codd's 1970 work at IBM. <a href="#ref1" class="ref">[1]</a> Common examples are PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, SQLite, and CockroachDB.</p>
+
+  <h3>SQL (Structured Query Language)</h3>
+  <p>SQL is the language relational databases speak. You use it to define tables (<code class="inline">CREATE TABLE</code>), insert rows (<code class="inline">INSERT</code>), query data (<code class="inline">SELECT ... FROM ... WHERE ... JOIN</code>), update rows (<code class="inline">UPDATE</code>), and delete them (<code class="inline">DELETE</code>). There is a standard core, but every engine adds its own extra features. PostgreSQL has <code class="inline">JSONB</code>. MySQL has <code class="inline">INSERT ... ON DUPLICATE KEY UPDATE</code>. The shared core transfers well; the extensions do not.</p>
+
+  <h3>ACID Transaction</h3>
+  <p>A transaction is a bundle of operations that the database treats as one unit. ACID is the contract around that unit: <strong>Atomicity</strong> means all of it happens or none of it does, <strong>Consistency</strong> means constraints still hold at commit, <strong>Isolation</strong> means concurrent work does not leak half-finished state, and <strong>Durability</strong> means committed data survives a crash. This is why relational databases are still the default for money, inventory, billing, and account data.</p>
+
+  <h3>Database Index</h3>
+  <p>An index is an extra data structure, usually a B-tree, that lets the database find matching rows without reading the whole table. It is the same idea as the index at the back of a book: you jump to the pages that matter instead of scanning everything. The catch is that every write now has more work to do because the index has to stay in sync. PostgreSQL defaults to B-tree indexes, but it also supports hash, GiST, GIN, and BRIN for more specific access patterns.</p>
+
+  <h3>Strong Consistency</h3>
+  <p>After a write is acknowledged, every later read sees it, no matter which client asks or which replica serves the request. That is normal on a single database node. In a distributed system, it takes coordination, usually Paxos or Raft, and that coordination costs latency. The alternative is <strong>eventual consistency</strong>, where some reads can stay stale for a while after the write.</p>
+
+  <h3>Eventual Consistency</h3>
+  <p>With eventual consistency, replicas will converge if writes stop, but the system does not promise when. A read in that window may return older data. That trade-off is fine for feeds, analytics, and caches. It is not fine for balances, inventory, or anything else where stale reads create the wrong answer.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>What Is a Relational Database?</h2>
+
+  <p>A relational database keeps data in <strong>tables</strong>. Each row is a record. Each column has a type. Tables connect through <strong>foreign keys</strong>, which lets you join related data instead of copying it everywhere.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>A simple relational schema</span></div>
+    <pre><span class="cm">-- Two tables with a foreign key relationship</span>
+
+<span class="kw">CREATE TABLE</span> <span class="fn">users</span> (
+    id        <span class="str">SERIAL PRIMARY KEY</span>,
+    username  <span class="str">VARCHAR(50) UNIQUE NOT NULL</span>,
+    email     <span class="str">VARCHAR(100) UNIQUE NOT NULL</span>,
+    created_at <span class="str">TIMESTAMP DEFAULT NOW()</span>
+);
+
+<span class="kw">CREATE TABLE</span> <span class="fn">orders</span> (
+    id        <span class="str">SERIAL PRIMARY KEY</span>,
+    user_id   <span class="str">INTEGER REFERENCES users(id)</span>,  <span class="cm">-- foreign key → users table</span>
+    amount    <span class="str">DECIMAL(10,2) NOT NULL</span>,
+    status    <span class="str">VARCHAR(20) DEFAULT 'pending'</span>,
+    placed_at <span class="str">TIMESTAMP DEFAULT NOW()</span>
+);
+
+<span class="cm">-- The schema ENFORCES: every order must reference an existing user.</span>
+<span class="cm">-- Try INSERT INTO orders (user_id, amount) VALUES (999, 50.00);</span>
+<span class="cm">-- → ERROR: violates foreign key constraint (user 999 doesn't exist)</span></pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>A spreadsheet analogy gets you close, but only up to a point. A relational database is a spreadsheet that refuses bad data. It can reject nulls, duplicate values, or foreign keys that point nowhere. That enforcement layer is the real value. SQL is just how you talk to it.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>ACID — The Transaction Contract</h2>
+
+  <p>A <strong>transaction</strong> is the database saying, "I will treat this whole block as one thing." ACID spells out what that promise means.</p>
+
+  <div class="memory-map"><span class="h">ACID — WHAT EACH PROPERTY ACTUALLY MEANS</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Atomicity</span>
+<span class="d">│</span>   <span class="cm">All operations in a transaction succeed, or none do.</span>
+<span class="d">│</span>   <span class="cm">If step 3 of 5 fails → steps 1 &amp; 2 are rolled back.</span>
+<span class="d">│</span>   <span class="cm">Mechanism: WAL (write-ahead log) records all changes before applying them.</span>
+<span class="d">│</span>   <span class="cm">On crash: replay WAL to redo committed txns, undo uncommitted ones.</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Consistency</span>
+<span class="d">│</span>   <span class="cm">The database transitions from one valid state to another.</span>
+<span class="d">│</span>   <span class="cm">All constraints (NOT NULL, UNIQUE, CHECK, foreign keys) hold after commit.</span>
+<span class="d">│</span>   <span class="cm">If a transaction would violate a constraint → it's rejected entirely.</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Isolation</span>
+<span class="d">│</span>   <span class="cm">Concurrent transactions behave as if they ran one at a time.</span>
+<span class="d">│</span>   <span class="cm">Reality: strict serialization is expensive. Databases offer LEVELS:</span>
+<span class="d">│</span>   <span class="cm">Read Uncommitted → Read Committed → Repeatable Read → Serializable</span>
+<span class="d">│</span>   <span class="cm">Each level trades isolation for concurrency (throughput).</span>
+<span class="d">│</span>
+<span class="d">└──</span> <span class="b">Durability</span>
+    <span class="cm">Once committed, the data is written to non-volatile storage (disk).</span>
+    <span class="cm">Mechanism: fsync() the WAL to disk BEFORE returning "commit OK."</span>
+    <span class="cm">Even if the machine loses power 1ms after commit → data survives.</span>
+    <span class="cm">Cost: fsync is the single biggest bottleneck in write-heavy workloads.</span></div>
+
+  <div class="code-block">
+    <div class="code-header"><span>ACID in action: transferring money between accounts</span></div>
+    <pre><span class="cm">-- Transfer $100 from Alice to Bob. MUST be atomic.</span>
+<span class="kw">BEGIN</span>;
+  <span class="kw">UPDATE</span> <span class="fn">accounts</span> <span class="kw">SET</span> balance = balance - <span class="num">100</span> <span class="kw">WHERE</span> username = <span class="str">'alice'</span>;
+  <span class="kw">UPDATE</span> <span class="fn">accounts</span> <span class="kw">SET</span> balance = balance + <span class="num">100</span> <span class="kw">WHERE</span> username = <span class="str">'bob'</span>;
+<span class="kw">COMMIT</span>;
+
+<span class="cm">-- If the server crashes between the two UPDATEs:</span>
+<span class="cm">-- WITHOUT transactions: Alice lost $100, Bob got nothing. Money vanished.</span>
+<span class="cm">-- WITH transactions (Atomicity): both UPDATEs are rolled back. No change.</span>
+
+<span class="cm">-- If another transaction reads Alice's balance DURING the transfer:</span>
+<span class="cm">-- WITH isolation (Read Committed): sees Alice's balance BEFORE the debit.</span>
+<span class="cm">-- WITH isolation (Serializable): waits until the transfer commits or aborts.</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 3 ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Indexes — Making Queries Fast</h2>
+
+  <p>Without an index, the database falls back to a <strong>sequential scan</strong> and reads the table row by row until it finds the matches. On a 10 million row table, that means touching 10 million rows. With a B-tree index, the same lookup usually turns into a short tree walk plus a few heap fetches.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Index Type</th><th>Structure</th><th>Best For</th><th>PostgreSQL Syntax</th></tr></thead>
+      <tbody>
+        <tr><td><strong>B-tree</strong></td><td>Balanced tree, sorted keys, O(log N) lookup</td><td>Equality and range queries (<code>=</code>, <code>&lt;</code>, <code>&gt;</code>, <code>BETWEEN</code>, <code>ORDER BY</code>). Default for most columns.</td><td><code>CREATE INDEX ON orders(user_id);</code></td></tr>
+        <tr><td><strong>Hash</strong></td><td>Hash table, O(1) lookup</td><td>Equality-only queries (<code>=</code>). Faster than B-tree for exact match but no range support.</td><td><code>CREATE INDEX ON users USING hash(email);</code></td></tr>
+        <tr><td><strong>GIN</strong></td><td>Generalized Inverted Index</td><td>Full-text search, JSONB containment, array element search.</td><td><code>CREATE INDEX ON docs USING gin(body_tsvector);</code></td></tr>
+        <tr><td><strong>GiST</strong></td><td>Generalized Search Tree</td><td>Geometric data (PostGIS), nearest-neighbor, range types.</td><td><code>CREATE INDEX ON places USING gist(location);</code></td></tr>
+        <tr><td><strong>BRIN</strong></td><td>Block Range Index (metadata per block)</td><td>Very large, naturally ordered tables (time-series, logs). Tiny index size.</td><td><code>CREATE INDEX ON events USING brin(created_at);</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">The Index Trade-off</div>
+    <p><strong>Indexes buy read speed by making writes heavier.</strong> Every INSERT, UPDATE, or DELETE on an indexed column has to keep that index in sync. On a table with 10 indexes, one write can turn into 10 index changes. So index the columns that drive real queries, especially <code class="inline">WHERE</code>, <code class="inline">JOIN</code>, and <code class="inline">ORDER BY</code>. Do not index on instinct. Check the plan first.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4 ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Normalization vs Denormalization</h2>
+
+  <h3>Normalization: Eliminate Redundancy</h3>
+  <p>Normalization removes duplication. Instead of copying a user's name into every order, store <code class="inline">user_id</code> in the order row and join back to the <code class="inline">users</code> table when you need the name. Then a name change touches one row, not ten thousand.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Normalized: user name stored once</span></div>
+    <pre><span class="cm">-- users table: single source of truth for user info</span>
+users:  { id: <span class="num">1</span>, name: <span class="str">"Alice"</span>, email: <span class="str">"alice@example.com"</span> }
+
+<span class="cm">-- orders table: references user by ID, not by name</span>
+orders: { id: <span class="num">101</span>, user_id: <span class="num">1</span>, amount: <span class="num">49.99</span> }
+orders: { id: <span class="num">102</span>, user_id: <span class="num">1</span>, amount: <span class="num">29.99</span> }
+
+<span class="cm">-- To get "Alice's orders": JOIN users ON orders.user_id = users.id</span>
+<span class="cm">-- If Alice changes her name → update ONE row in users. Orders are fine.</span></pre>
+  </div>
+
+  <h3>Denormalization: Trade Redundancy for Speed</h3>
+  <p>Denormalization duplicates data on purpose so reads can skip joins. You might copy the user's name into the orders table and serve a dashboard from one table instead of five. That helps reads. It also means every update has more places to touch, and missed backfills leave stale copies behind.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Property</th><th>Normalized</th><th>Denormalized</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Reads</strong></td><td>Slower (requires JOINs)</td><td>Faster (data is pre-joined)</td></tr>
+        <tr><td><strong>Writes</strong></td><td>Faster (update one place)</td><td>Slower (update many copies)</td></tr>
+        <tr><td><strong>Storage</strong></td><td>Less (no duplication)</td><td>More (duplicated data)</td></tr>
+        <tr><td><strong>Consistency</strong></td><td>Strong (single source of truth)</td><td>Risk of inconsistency</td></tr>
+        <tr><td><strong>When to use</strong></td><td>OLTP (user accounts, transactions)</td><td>OLAP (analytics, dashboards, read-heavy)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">Interview Insight</div>
+    <p>In an interview, start with the clean normalized version. Then wait for the pressure that justifies breaking it. If the dashboard now joins five tables and misses its latency target, add a summary table or materialized view and explain the trade. That answer is stronger than denormalizing everything up front.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5 ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>The Query Planner — How SQL Becomes I/O</h2>
+
+  <p>When you write <code class="inline">SELECT * FROM orders WHERE user_id = 42</code>, the engine does not blindly follow the text. The <strong>query planner</strong> checks table statistics, available indexes, and estimated costs, then chooses a plan.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>EXPLAIN ANALYZE — see what the database actually does</span></div>
+    <pre><span class="cm">-- Without index:</span>
+<span class="kw">EXPLAIN ANALYZE</span> <span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="fn">orders</span> <span class="kw">WHERE</span> user_id = <span class="num">42</span>;
+
+Seq Scan on orders  (cost=<span class="num">0.00..18334.00</span> rows=<span class="num">5</span> width=<span class="num">44</span>)
+  Filter: (user_id = 42)
+  <span class="v">Rows Removed by Filter: 999995</span>
+  <span class="cm">Planning Time: 0.08 ms</span>
+  <span class="v">Execution Time: 92.4 ms</span>        <span class="cm">← scanned ALL 1M rows to find 5</span>
+
+<span class="cm">-- Add an index:</span>
+<span class="kw">CREATE INDEX</span> idx_orders_user <span class="kw">ON</span> <span class="fn">orders</span>(user_id);
+
+<span class="cm">-- With index:</span>
+<span class="kw">EXPLAIN ANALYZE</span> <span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="fn">orders</span> <span class="kw">WHERE</span> user_id = <span class="num">42</span>;
+
+Index Scan using idx_orders_user on orders  (cost=<span class="num">0.42..8.44</span> rows=<span class="num">5</span>)
+  Index Cond: (user_id = 42)
+  <span class="cm">Planning Time: 0.12 ms</span>
+  <span class="str">Execution Time: 0.04 ms</span>        <span class="cm">← B-tree traversal, read only 5 rows</span>
+
+<span class="cm">-- 92.4ms → 0.04ms = 2,310× faster. One index. That's the power.</span></pre>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">EXPLAIN is Your Best Friend</div>
+    <p>If you work with databases, you need to be comfortable reading <code class="inline">EXPLAIN ANALYZE</code>. Start with the obvious questions. Is there a <strong>Seq Scan</strong> on a large table? Which join type did the planner pick? Do <strong>actual rows</strong> and <strong>estimated rows</strong> line up? Big gaps there usually mean stale stats or a bad estimate somewhere upstream.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 6 ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Transactions &amp; Isolation Levels</h2>
+
+  <p>Isolation levels decide what one transaction is allowed to observe about another. Stronger isolation blocks more anomalies, but it usually costs throughput or retry rate.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Isolation Level</th><th>Dirty Reads</th><th>Non-repeatable Reads</th><th>Phantom Reads</th><th>Performance</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Read Uncommitted</strong></td><td>Possible</td><td>Possible</td><td>Possible</td><td>Fastest (no locks)</td></tr>
+        <tr><td><strong>Read Committed</strong></td><td>Prevented</td><td>Possible</td><td>Possible</td><td>Fast (PostgreSQL default)</td></tr>
+        <tr><td><strong>Repeatable Read</strong></td><td>Prevented</td><td>Prevented</td><td>Possible</td><td>Moderate (MySQL/InnoDB default)</td></tr>
+        <tr><td><strong>Serializable</strong></td><td>Prevented</td><td>Prevented</td><td>Prevented</td><td>Slowest (full isolation)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>Dirty read:</strong> Transaction A reads a value that Transaction B has not committed yet. If B rolls back, A saw something that never became real. <strong>Non-repeatable read:</strong> A reads a row twice and gets two different answers because B committed a change in between. <strong>Phantom read:</strong> A reruns a range query and sees new rows that now match the predicate.</p>
+
+  <div class="callout orange">
+    <div class="callout-label">PostgreSQL's Implementation Detail</div>
+    <p>PostgreSQL uses <strong>MVCC</strong>, so reads usually do not take read locks on rows. Each transaction gets a <em>snapshot</em>. Writers create new tuple versions. Readers keep seeing the version that matches their snapshot. That is why PostgreSQL handles concurrent reads well. The price is dead tuples, and dead tuples mean you need <code class="inline">VACUUM</code> to keep the system healthy.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 7 ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: SQLite — Zero-Install Relational DB</h3>
+  <div class="code-block">
+    <div class="code-header"><span>SQLite is pre-installed on macOS and most Linux distros. No server needed.</span></div>
+    <pre><span class="cm"># Create a database, make a table, insert, query — all from the terminal</span>
+$ <span class="fn">sqlite3</span> /tmp/demo.db &lt;&lt;'SQL'
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE
+);
+INSERT OR IGNORE INTO users (name, email) VALUES ('Alice', 'alice@example.com');
+INSERT OR IGNORE INTO users (name, email) VALUES ('Bob', 'bob@example.com');
+INSERT OR IGNORE INTO users (name, email) VALUES ('Charlie', 'charlie@example.com');
+
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    amount REAL NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+INSERT INTO orders (user_id, amount) VALUES (1, 49.99);
+INSERT INTO orders (user_id, amount) VALUES (1, 29.99);
+INSERT INTO orders (user_id, amount) VALUES (2, 99.50);
+
+-- Query: total spent per user
+SELECT u.name, COUNT(o.id) AS order_count, SUM(o.amount) AS total_spent
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+GROUP BY u.id
+ORDER BY total_spent DESC;
+SQL
+
+<span class="cm"># Expected output:</span>
+Alice|<span class="num">2</span>|<span class="num">79.98</span>
+Bob|<span class="num">1</span>|<span class="num">99.5</span>
+Charlie|<span class="num">0</span>|          <span class="cm">← LEFT JOIN shows Charlie even with 0 orders</span></pre>
+  </div>
+
+  <h3>Demo 2: See ACID in Action — Atomicity</h3>
+  <div class="code-block">
+    <div class="code-header"><span>SQLite transaction demo (macOS/Linux/WSL)</span></div>
+    <pre><span class="cm"># Create accounts table</span>
+$ <span class="fn">sqlite3</span> /tmp/bank.db "
+CREATE TABLE IF NOT EXISTS accounts (
+    username TEXT PRIMARY KEY,
+    balance REAL NOT NULL CHECK(balance >= 0)
+);
+INSERT OR REPLACE INTO accounts VALUES ('alice', 500.00);
+INSERT OR REPLACE INTO accounts VALUES ('bob', 200.00);
+SELECT * FROM accounts;"
+
+alice|<span class="num">500.0</span>
+bob|<span class="num">200.0</span>
+
+<span class="cm"># Try a transfer that violates the CHECK constraint:</span>
+$ <span class="fn">sqlite3</span> /tmp/bank.db "
+BEGIN;
+UPDATE accounts SET balance = balance - 600 WHERE username = 'alice';
+UPDATE accounts SET balance = balance + 600 WHERE username = 'bob';
+COMMIT;"
+
+<span class="v">Error: CHECK constraint failed: balance >= 0</span>
+<span class="cm"># Alice only has $500 — can't debit $600.</span>
+<span class="cm"># The ENTIRE transaction was rolled back. Neither account changed.</span>
+
+$ <span class="fn">sqlite3</span> /tmp/bank.db "SELECT * FROM accounts;"
+alice|<span class="num">500.0</span>   <span class="cm">← unchanged! Atomicity preserved.</span>
+bob|<span class="num">200.0</span>     <span class="cm">← unchanged!</span></pre>
+  </div>
+
+  <h3>Demo 3: EXPLAIN — See the Query Plan</h3>
+  <div class="code-block">
+    <div class="code-header"><span>SQLite query plan (macOS/Linux/WSL)</span></div>
+    <pre><span class="cm"># Without index: SCAN TABLE (reads every row)</span>
+$ <span class="fn">sqlite3</span> /tmp/demo.db "EXPLAIN QUERY PLAN SELECT * FROM orders WHERE user_id = 1;"
+SCAN orders    <span class="cm">← sequential scan (no index on user_id)</span>
+
+<span class="cm"># Add an index</span>
+$ <span class="fn">sqlite3</span> /tmp/demo.db "CREATE INDEX idx_user ON orders(user_id);"
+
+<span class="cm"># With index: SEARCH using index</span>
+$ <span class="fn">sqlite3</span> /tmp/demo.db "EXPLAIN QUERY PLAN SELECT * FROM orders WHERE user_id = 1;"
+SEARCH orders USING INDEX idx_user (user_id=?)   <span class="cm">← B-tree lookup!</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 8 ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Mini-Project: Schema Design &amp; Queries</h2>
+
+  <h4>Simple: Feel What a Relational Database Does</h4>
+  <div class="code-block">
+    <div class="code-header"><span>mini_rdb.py — Python + SQLite, zero dependencies (macOS/Linux/WSL)</span></div>
+    <pre><span class="kw">import</span> sqlite3, time
+
+db = sqlite3.connect(<span class="str">":memory:"</span>)  <span class="cm"># In-memory DB — dies when script ends</span>
+db.execute(<span class="str">"PRAGMA journal_mode=WAL"</span>)  <span class="cm"># Enable WAL for better concurrency</span>
+
+<span class="cm"># ── Schema ──</span>
+db.executescript(<span class="str">"""
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL
+);
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    product TEXT NOT NULL,
+    amount REAL NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_orders_user ON orders(user_id);
+"""</span>)
+
+<span class="cm"># ── Seed data ──</span>
+users = [(<span class="str">"Alice"</span>, <span class="str">"alice@example.com"</span>), (<span class="str">"Bob"</span>, <span class="str">"bob@example.com"</span>), (<span class="str">"Charlie"</span>, <span class="str">"charlie@example.com"</span>)]
+db.executemany(<span class="str">"INSERT INTO users (name, email) VALUES (?, ?)"</span>, users)
+
+orders = [
+    (<span class="num">1</span>, <span class="str">"Widget"</span>, <span class="num">49.99</span>), (<span class="num">1</span>, <span class="str">"Gadget"</span>, <span class="num">29.99</span>), (<span class="num">1</span>, <span class="str">"Gizmo"</span>, <span class="num">9.99</span>),
+    (<span class="num">2</span>, <span class="str">"Widget"</span>, <span class="num">49.99</span>), (<span class="num">2</span>, <span class="str">"Thingamajig"</span>, <span class="num">199.00</span>),
+]
+db.executemany(<span class="str">"INSERT INTO orders (user_id, product, amount) VALUES (?, ?, ?)"</span>, orders)
+db.commit()
+
+<span class="cm"># ── Queries ──</span>
+print(<span class="str">"=== Total spent per user ==="</span>)
+<span class="kw">for</span> row <span class="kw">in</span> db.execute(<span class="str">"""
+    SELECT u.name, COUNT(o.id) AS orders, COALESCE(SUM(o.amount), 0) AS total
+    FROM users u LEFT JOIN orders o ON u.id = o.user_id
+    GROUP BY u.id ORDER BY total DESC
+"""</span>):
+    print(f<span class="str">"  {row[0]:&lt;10} {row[1]} orders  ${row[2]:.2f}"</span>)
+
+print(<span class="str">"\n=== ACID test: atomic transfer ==="</span>)
+<span class="kw">try</span>:
+    db.execute(<span class="str">"BEGIN"</span>)
+    <span class="cm"># Simulate: move an order from Alice to a nonexistent user</span>
+    db.execute(<span class="str">"UPDATE orders SET user_id = 999 WHERE id = 1"</span>)
+    <span class="cm"># This would violate FK... but SQLite doesn't enforce FK by default!</span>
+    <span class="cm"># Enable enforcement:</span>
+    db.execute(<span class="str">"PRAGMA foreign_keys = ON"</span>)
+    db.execute(<span class="str">"COMMIT"</span>)
+    print(<span class="str">"  Transfer committed (FK not enforced in this demo)"</span>)
+<span class="kw">except</span> Exception <span class="kw">as</span> e:
+    db.execute(<span class="str">"ROLLBACK"</span>)
+    print(f<span class="str">"  Rolled back: {e}"</span>)
+
+print(<span class="str">"\n=== Index vs no-index benchmark ==="</span>)
+<span class="cm"># Insert 100K rows for a realistic test</span>
+db.executemany(<span class="str">"INSERT INTO orders (user_id, product, amount) VALUES (?, 'Bulk', ?)"</span>,
+              [((i % <span class="num">3</span>) + <span class="num">1</span>, round(i * <span class="num">0.01</span>, <span class="num">2</span>)) <span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">100000</span>)])
+db.commit()
+
+t0 = time.perf_counter()
+db.execute(<span class="str">"SELECT * FROM orders WHERE user_id = 2"</span>).fetchall()
+with_idx = (time.perf_counter() - t0) * <span class="num">1000</span>
+
+db.execute(<span class="str">"DROP INDEX idx_orders_user"</span>)
+t0 = time.perf_counter()
+db.execute(<span class="str">"SELECT * FROM orders WHERE user_id = 2"</span>).fetchall()
+no_idx = (time.perf_counter() - t0) * <span class="num">1000</span>
+print(f<span class="str">"  With index:    {with_idx:.1f}ms"</span>)
+print(f<span class="str">"  Without index: {no_idx:.1f}ms"</span>)
+print(f<span class="str">"  Speedup:       {no_idx/with_idx:.0f}×"</span>)</pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 9 ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production Example 1: PostgreSQL</h2>
+
+  <p>PostgreSQL is the default relational database for a lot of modern systems, from small internal tools to large production services.</p>
+
+  <h3>Why PostgreSQL Dominates</h3>
+  <p><strong>MVCC keeps concurrency sane:</strong> readers work from a snapshot, so they usually do not block writers.</p>
+  <p><strong>The extension model is unusually strong:</strong> PostGIS, <code class="inline">pg_trgm</code>, <code class="inline">JSONB</code>, and <code class="inline">pgvector</code> all expand what you can do without leaving Postgres.</p>
+  <p><strong>WAL is the foundation:</strong> writes hit the log before data files, which is what gives you crash recovery and streaming replication.</p>
+
+  <div class="callout green">
+    <div class="callout-label">When to Use PostgreSQL</div>
+    <p><strong>Use PostgreSQL unless you have a good reason not to.</strong> It is a solid fit for ACID transactions, joins, reporting queries, and most OLTP workloads. You usually leave it only when the workload wants something very different: huge write fan-in, globally distributed SQL with very low cross-region latency, or a simple key-value access pattern.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 10 ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production Example 2: Google Spanner</h2>
+
+  <p>Spanner is Google's globally distributed relational database. It gives you <strong>ACID transactions across regions</strong>, which is exactly why it keeps showing up in database discussions. <a href="#ref2" class="ref">[2]</a></p>
+
+  <h3>How Spanner Works</h3>
+  <p><strong>TrueTime:</strong> the clock API returns an interval <code class="inline">[earliest, latest]</code> with bounded uncertainty. Spanner uses that uncertainty directly in its commit protocol.</p>
+  <p><strong>Externally consistent transactions:</strong> if transaction T1 commits before T2 starts in real time, T1's timestamp sorts before T2's. That is strict serializability with real-time order attached.</p>
+  <p><strong>Split-based sharding:</strong> data is broken into key-range splits, each replicated across zones with Paxos. Reads can stay local; writes go through the leader for that split.</p>
+
+  <div class="callout orange">
+    <div class="callout-label">Key Lesson from Spanner</div>
+    <p>Spanner does not break CAP. It just spends a lot of engineering effort making the consistency cost tolerable. Better clocks shrink the uncertainty window, but partitions still force a choice and Spanner still lands on the CP side.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 11 ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Edge Cases &amp; Gotchas</h2>
+
+  <h3>1. N+1 Query Problem</h3>
+  <p>Your ORM fetches 100 users, then runs 100 more queries to fetch each user's orders. That is 101 queries where one join would do. Fix it with eager loading, or the equivalent feature in your ORM.</p>
+
+  <h3>2. Missing Indexes on Foreign Keys</h3>
+  <p>PostgreSQL does not automatically index foreign key columns. If you keep joining on <code class="inline">orders.user_id</code> without an index there, the engine has no cheap access path. Add the index yourself.</p>
+
+  <h3>3. Long-Running Transactions Block Vacuum</h3>
+  <p>MVCC leaves dead row versions behind. <code class="inline">VACUUM</code> removes them, but it cannot remove tuples that an open transaction might still need to see. One forgotten transaction can hold that floor in place for hours and quietly bloat the table.</p>
+
+  <h3>4. Full-Table Locks on ALTER TABLE</h3>
+  <p>Some schema changes take an <code class="inline">ACCESS EXCLUSIVE</code> lock. On a large table, that can pause reads and writes long enough to become an incident. Use concurrent operations where PostgreSQL offers them, and plan the rest like real production work, not a casual migration.</p>
+
+  <h3>5. Connection Exhaustion</h3>
+  <p>PostgreSQL uses one process per connection. Enough idle connections can burn gigabytes of memory before query work even starts. That is why PgBouncer exists.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story</div>
+    <p>A dashboard went from 200ms to 45 seconds because someone added <code class="inline">WHERE new_column = 'active'</code> on a 50M-row table and never added the index. Every request turned into a full scan. One B-tree fixed it. Boring problem, expensive outage.</p>
+  </div>
+</section>
+
+<!-- ============ WHAT IF ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">Add more indexes</div>
+      <p><strong>Improves:</strong> indexed reads.<br>
+      <strong>Costs:</strong> slower writes, more disk, more VACUUM work.<br>
+      <strong>Worth it when:</strong> the column shows up repeatedly in real <code class="inline">WHERE</code>, <code class="inline">JOIN</code>, or <code class="inline">ORDER BY</code> paths.</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">Relational (PostgreSQL) vs Document (MongoDB)</div>
+      <p><strong>Relational:</strong> strict schema, joins, transactions, stronger invariants.<br>
+      <strong>Document:</strong> flexible shape, nested records, easier denormalized modeling.<br>
+      <strong>Reality:</strong> PostgreSQL with <code class="inline">JSONB</code> often covers the middle ground.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">Read Committed vs Serializable isolation</div>
+      <p><strong>Read Committed:</strong> usually enough for CRUD-style app traffic.<br>
+      <strong>Serializable:</strong> stricter, safer, and more likely to abort and retry conflicting work.<br>
+      <strong>Default:</strong> use the weaker level unless the invariant says otherwise.</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">Vertical scaling vs read replicas</div>
+      <p><strong>Vertical:</strong> bigger box, simpler system, hard ceiling.<br>
+      <strong>Read replicas:</strong> more read capacity, plus lag and consistency caveats.<br>
+      <strong>Switch when:</strong> reads are the bottleneck and the app can tolerate stale replicas where needed.</p>
+    </div>
+  </div>
+
+  <h3>Toy Simulation: Index vs No-Index at Scale</h3>
+  <div class="code-block">
+    <div class="code-header"><span>index_bench.py — measure the speedup as table size grows (macOS/Linux/WSL)</span></div>
+    <pre><span class="kw">import</span> sqlite3, time
+
+<span class="kw">for</span> n_rows <span class="kw">in</span> [<span class="num">1_000</span>, <span class="num">10_000</span>, <span class="num">100_000</span>, <span class="num">1_000_000</span>]:
+    db = sqlite3.connect(<span class="str">":memory:"</span>)
+    db.execute(<span class="str">"CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER, data TEXT)"</span>)
+    db.executemany(<span class="str">"INSERT INTO t VALUES (?,?,?)"</span>,
+                   [(i, i % <span class="num">100</span>, <span class="str">"x"</span> * <span class="num">50</span>) <span class="kw">for</span> i <span class="kw">in</span> range(n_rows)])
+    db.commit()
+
+    <span class="cm"># Without index</span>
+    t0 = time.perf_counter()
+    db.execute(<span class="str">"SELECT * FROM t WHERE val = 42"</span>).fetchall()
+    no_idx = (time.perf_counter() - t0) * <span class="num">1000</span>
+
+    <span class="cm"># With index</span>
+    db.execute(<span class="str">"CREATE INDEX idx ON t(val)"</span>)
+    t0 = time.perf_counter()
+    db.execute(<span class="str">"SELECT * FROM t WHERE val = 42"</span>).fetchall()
+    with_idx = (time.perf_counter() - t0) * <span class="num">1000</span>
+
+    speedup = no_idx / with_idx <span class="kw">if</span> with_idx > <span class="num">0</span> <span class="kw">else</span> <span class="num">0</span>
+    print(f<span class="str">"  {n_rows:>10,} rows | No index: {no_idx:6.1f}ms | With index: {with_idx:5.2f}ms | {speedup:5.0f}×"</span>)
+    db.close()</pre>
+  </div>
+  <div class="code-block">
+    <div class="code-header"><span>Expected output (approximate — varies by hardware)</span></div>
+    <pre>       <span class="num">1,000</span> rows | No index:    <span class="num">0.3</span>ms | With index:  <span class="num">0.05</span>ms |     <span class="num">6</span>×
+      <span class="num">10,000</span> rows | No index:    <span class="num">2.1</span>ms | With index:  <span class="num">0.06</span>ms |    <span class="num">35</span>×
+     <span class="num">100,000</span> rows | No index:   <span class="num">19.5</span>ms | With index:  <span class="num">0.08</span>ms |   <span class="num">244</span>×
+   <span class="num">1,000,000</span> rows | No index:  <span class="num">195.0</span>ms | With index:  <span class="num">0.10</span>ms |  <span class="num">1950</span>×
+
+<span class="cm"># Without index: O(N) — time grows linearly with table size.</span>
+<span class="cm"># With index: O(log N) — time barely changes regardless of size.</span>
+<span class="cm"># At 1M rows, the index is ~2000× faster. This is why indexes exist.</span></pre>
+  </div>
+</section>
+
+<!-- ============ INTERVIEW Q&A ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Interview Questions &amp; Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What are ACID properties and why do they matter?</div>
+    <div class="qa-a">
+      <p><strong>Atomicity</strong> means the whole transaction commits or none of it does. <strong>Consistency</strong> means constraints still hold after commit. <strong>Isolation</strong> means concurrent work does not expose broken intermediate state. <strong>Durability</strong> means the commit survives a crash. Without ACID, a crash can leave you with half-finished transfers, broken foreign keys, or missing writes.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: What is a database index and when should you create one?</div>
+    <div class="qa-a">
+      <p>An index gives the planner a faster path than scanning the whole table. Create them on columns that drive real filters, joins, and sorts. Skip the rest. Every extra index costs write time and disk. If you want to know whether one is missing, look at <code>EXPLAIN ANALYZE</code> and find out why the planner chose a sequential scan.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: When would you choose a relational database over a NoSQL database?</div>
+    <div class="qa-a">
+      <p>Pick relational when the data is connected, the invariants matter, and joins are part of the workload. Pick a NoSQL system when the records stand mostly on their own, the schema changes constantly, or the workload is really key-value or high-ingest append traffic. A lot of teams land in the middle and use PostgreSQL with <code>JSONB</code> for the parts that do not fit cleanly into fixed columns.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: Explain PostgreSQL's MVCC and why it matters for concurrency.</div>
+    <div class="qa-a">
+      <p>Under MVCC, each transaction reads from a <strong>snapshot</strong>. Updates create new tuple versions instead of overwriting old ones in place. That keeps readers and writers from stepping on each other as often, which is one reason PostgreSQL handles mixed workloads well. The downside is cleanup. Dead tuples build up, and if VACUUM falls behind, performance falls apart slowly and then all at once.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: How would you scale a relational database that's hitting its limits?</div>
+    <div class="qa-a">
+      <p>I would scale it in layers. First, use a bigger machine and fix the obvious query problems. Then add connection pooling, replicas, and cache shielding for hot reads. After that, partition the biggest tables. Sharding comes last because it changes everything: routing, migrations, rebalancing, and cross-shard transactions.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: A query that was fast yesterday is now slow. How do you diagnose it?</div>
+    <div class="qa-a">
+      <p>Start with <code>EXPLAIN ANALYZE</code>. Did the plan change? Did row estimates go bad? Then check for bloat, blocked sessions, dropped or unused indexes, and plain old data growth. A query can stay logically identical while the table grows from manageable to painful. If the plan still looks fine, check the host: disk, cache hit rate, and memory pressure.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ACTUAL INTERVIEW ============ -->
+<section class="section" id="s13b">
+  <div class="section-num">13b</div>
+  <h2>Actual System Design Interview</h2>
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p><strong>Design a URL shortener with 100M new links per month and 10× more reads than writes.</strong> The database part is not just "pick PostgreSQL." You need to talk about schema shape, unique code generation, read scaling, replica lag, and what changes when the table stops fitting comfortably on one machine. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout green">
+    <div class="callout-label">How I'd Structure the Answer</div>
+    <p>I would start with the relational core: one <code class="inline">urls</code> table, one unique <code class="inline">short_code</code>, and the metadata that actually matters. Then I would split the write path from the read path. Writes need collision-safe code generation plus a uniqueness constraint the database can enforce. Reads are just exact-key lookups on <code class="inline">short_code</code>, so I would call out the B-tree index immediately and put a cache in front of it for hot links. If the system later shards, I would define the ownership key and say how routers learn shard placement during rebalance. <a href="#ref1" class="ref">[1]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The first push is usually read pressure: the table keeps growing, but the redirect still needs to feel instant. That is where cache hit rate, replicas, and replica lag enter the answer. The next push is table size. If every query is still equality on <code class="inline">short_code</code>, a very large B-tree can be fine for longer than people think. But once vacuum, index maintenance, or working-set size stop fitting the host, you start talking about partitioning, archival, or sharding. Analytics is separate. Do not take row locks in the hot redirect path. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref5" class="ref">[5]</a></p>
+  </div>
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p><strong>Think in terms of a Bitly-style redirect service:</strong> one exact-match lookup is the hot path, replicas take some of the read load, Redis absorbs viral traffic, and a queue keeps analytics away from the redirect latency budget. The good answer is the one that separates what the database must enforce from what the surrounding systems can handle asynchronously. <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+  </div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    C["Client"]
+    R["Redirect API"]
+    Cache["Redis cache"]
+    DB["URLs table"]
+    Replica["Read replica"]
+    Q["Click queue"]
+    A["Analytics store"]
+    N1["Index short_code"]
+    N2["Replica lag"]
+    N3["Hot links hit cache"]
+
+    C --> R
+    R --> Cache
+    Cache --> DB
+    DB --> Replica
+    R --> Q
+    Q --> A
+    DB -.-> N1
+    Replica -.-> N2
+    Cache -.-> N3
+
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef stream fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C user;
+    class R core;
+    class Cache,DB,Replica data;
+    class Q,A stream;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: define the exact-match relational lookup first, then explain cache shielding, replica lag, and analytics off the hot path.</div>
+  </div>
+
+  <h3>Step 1: Schema Design (2 minutes)</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Initial schema — start simple and normalized</span></div>
+    <pre><span class="kw">CREATE TABLE</span> <span class="fn">urls</span> (
+    id          <span class="str">BIGSERIAL PRIMARY KEY</span>,
+    short_code  <span class="str">VARCHAR(8) UNIQUE NOT NULL</span>,
+    original_url <span class="str">TEXT NOT NULL</span>,
+    user_id     <span class="str">BIGINT REFERENCES users(id)</span>,  <span class="cm">-- nullable for anonymous</span>
+    created_at  <span class="str">TIMESTAMP DEFAULT NOW()</span>,
+    expires_at  <span class="str">TIMESTAMP</span>,                    <span class="cm">-- optional TTL</span>
+    click_count <span class="str">BIGINT DEFAULT 0</span>
+);
+
+<span class="kw">CREATE UNIQUE INDEX</span> idx_short_code <span class="kw">ON</span> <span class="fn">urls</span>(short_code);
+<span class="cm">-- This is the critical index: every redirect does a lookup by short_code.</span>
+<span class="cm">-- Without this index, every redirect is a full table scan on 100M+ rows.</span></pre>
+  </div>
+
+  <h3>Step 2: Interviewer Follow-ups (the real test)</h3>
+
+  <div class="qa">
+    <div class="qa-q">"How do you generate the short code? What about collisions?"</div>
+    <div class="qa-a">
+      <p><strong>Approach 1, ID to Base62:</strong> generate a unique numeric ID and encode it. No collisions. Simple lookup path. The downside is predictability if IDs are sequential.</p>
+      <p><strong>Approach 2, hash the URL:</strong> derive the code from the URL itself. That can deduplicate naturally, but collisions become part of the design and you need a retry or suffix strategy.</p>
+      <p><strong>Approach 3, pre-generated code pool:</strong> mint codes in advance, store them, and claim one on insert. Operationally heavier, but easy to reason about.</p>
+      <p><strong>I would usually pick the first approach</strong> and hide predictability with a less obvious ID scheme if needed.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"100M writes/month is ~40 writes/sec. That's easy. But 1B reads/month is ~400 reads/sec on the database. What if traffic spikes to 10K reads/sec during a viral link?"</div>
+    <div class="qa-a">
+      <p><strong>First, cache the hot links.</strong> URL traffic is usually skewed, so Redis can peel a lot of reads away from PostgreSQL.</p>
+      <p><strong>Then use read replicas</strong> for the misses that remain. That pushes more traffic off the primary, but it introduces lag.</p>
+      <p><strong>For truly viral links, let the CDN cache the redirect itself.</strong> If the edge can answer, the origin does not matter.</p>
+      <p>The real question here is whether stale reads are acceptable. For a shortener, a small lag window usually is.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"The table now has 2 billion rows. Queries are slowing down. How do you handle this?"</div>
+    <div class="qa-a">
+      <p><strong>First check the plan.</strong> If the query is still using the <code class="inline">short_code</code> index, the raw row count is not automatically the problem. B-trees stay shallow.</p>
+      <p><strong>If the table is now painful operationally,</strong> partition by time, archive expired links, or shard by <code class="inline">short_code</code>. Those are answers to maintenance pressure and working-set size, not just row count vanity.</p>
+      <p>Since the access pattern is exact-key lookup, hash-based distribution usually fits better than range partitioning.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"A user creates a short URL and immediately shares it. Their friend clicks it but gets a 404. Why?"</div>
+    <div class="qa-a">
+      <p>This is a <strong>read-your-writes</strong> problem. The write committed on the primary, but the friend read from a replica that has not caught up yet.</p>
+      <p><strong>Fixes:</strong> send very recent reads to the primary, require synchronous replication for that path, or write through to Redis so the redirect path sees the new code immediately.</p>
+      <p>The trade-off is straightforward: low-latency async replication gives you a lag window. Closing that window costs write latency or extra system design.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"How do you handle analytics — tracking clicks, referrers, geolocations — without slowing down the redirect?"</div>
+    <div class="qa-a">
+      <p><strong>Do not update analytics synchronously in the redirect path.</strong> Hot links would turn one row into a write hotspot immediately.</p>
+      <p>Return the redirect first. Then enqueue a click event with the metadata you care about. A downstream consumer can batch those events into analytics storage and roll up counts later.</p>
+      <p>The redirect path wants low latency. The analytics path wants throughput. Treat them like different systems.</p>
+    </div>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">What the Interviewer Is Testing</div>
+    <p>The interviewer is looking for schema design, access paths, read/write trade-offs, scaling order, and consistency reasoning. A clean answer starts simple, then evolves only when the new constraint forces it.</p>
+  </div>
+</section>
+
+<!-- ============ CHEAT SHEET ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Relational databases store data in tables with enforced schemas and foreign-key relationships.<br>
+    <strong>2.</strong> ACID is why they are trusted with money, inventory, and account state.<br>
+    <strong>3.</strong> B-tree indexes change a table scan into a cheap lookup path.<br>
+    <strong>4.</strong> Normalize first. Denormalize only when the workload forces it.<br>
+    <strong>5.</strong> <code class="inline">EXPLAIN ANALYZE</code> tells you what the engine actually did, not what you hoped it did.<br>
+    <strong>6.</strong> MVCC helps concurrency, but it creates cleanup work. That is why VACUUM matters.<br>
+    <strong>7.</strong> Isolation levels are trade-offs, not moral categories.<br>
+    <strong>8.</strong> Scale in layers before you jump to sharding.<br>
+    <strong>9.</strong> PostgreSQL is the default answer for a reason.<br>
+    <strong>10.</strong> Spanner shows what global SQL costs when you insist on strong consistency.</p>
+  </div>
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Query Execution Under Load</h2>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 680" xmlns="http://www.w3.org/2000/svg" fill="none">
+      <defs>
+        <marker id="qm-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L8,3 L0,6" fill="#8891a8"/>
+        </marker>
+      </defs>
+      <rect x="60" y="24" width="270" height="58" rx="10" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="195" y="51" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#60a5fa" font-weight="600">
+        <tspan x="195" dy="0">SELECT * FROM orders</tspan>
+        <tspan x="195" dy="14">WHERE user_id = 42</tspan>
+      </text>
+
+      <path d="M195 82 L195 112" stroke="#8891a8" stroke-width="1.5" marker-end="url(#qm-arrow)"/>
+
+      <rect x="110" y="122" width="170" height="78" rx="12" fill="#1f2531" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="195" y="150" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Query Planner</text>
+      <text x="195" y="171" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="195" dy="0">cost estimates · stats</tspan>
+        <tspan x="195" dy="13">index choices</tspan>
+      </text>
+
+      <path d="M160 200 L120 232" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#qm-arrow)"/>
+      <path d="M230 200 L270 232" stroke="#f87171" stroke-width="1.5" marker-end="url(#qm-arrow)"/>
+
+      <rect x="36" y="244" width="170" height="142" rx="12" fill="#1f2531" stroke="#6ee7b7" stroke-width="1.5"/>
+      <text x="121" y="274" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Index Scan</text>
+      <text x="121" y="297" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6ee7b7">B-tree on user_id</text>
+      <text x="121" y="322" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="121" dy="0">touches ~3-4 pages</tspan>
+        <tspan x="121" dy="13">often served from</tspan>
+        <tspan x="121" dy="13">buffer pool</tspan>
+      </text>
+      <rect x="62" y="398" width="118" height="30" rx="8" fill="rgba(110,231,183,0.12)" stroke="#6ee7b7" stroke-width="1"/>
+      <text x="121" y="417" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6ee7b7">~0.1 ms</text>
+
+      <rect x="224" y="244" width="170" height="142" rx="12" fill="#1f2531" stroke="#f87171" stroke-width="1.5"/>
+      <text x="309" y="274" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Seq Scan</text>
+      <text x="309" y="297" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#f87171">no usable index</text>
+      <text x="309" y="322" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
+        <tspan x="309" dy="0">reads every heap page</tspan>
+        <tspan x="309" dy="13">competes for disk</tspan>
+        <tspan x="309" dy="13">and cache</tspan>
+      </text>
+      <rect x="250" y="398" width="118" height="30" rx="8" fill="rgba(248,113,113,0.12)" stroke="#f87171" stroke-width="1"/>
+      <text x="309" y="417" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#f87171">~200 ms</text>
+
+      <rect x="438" y="24" width="362" height="338" rx="12" fill="#14171e" stroke="#2a3040" stroke-width="1.5"/>
+      <text x="462" y="54" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">LOAD EFFECTS</text>
+      <text x="462" y="86" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">1. Without an index, every concurrent query</text>
+      <text x="462" y="106" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">re-reads a large fraction of the table and</text>
+      <text x="462" y="126" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">burns I/O bandwidth on work that does not narrow fast.</text>
+      <text x="462" y="158" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">2. With an index, the critical path is tiny enough</text>
+      <text x="462" y="178" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">that index pages and hot heap pages stay resident</text>
+      <text x="462" y="198" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">in the buffer pool for repeated requests.</text>
+      <text x="462" y="230" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24">3. Buffer pool size changes whether</text>
+      <text x="462" y="250" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24">“read a page” means DRAM or disk.</text>
+      <text x="462" y="282" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">4. MVCC keeps readers off writer locks, but</text>
+      <text x="462" y="302" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">dead tuples still create extra scan work until</text>
+      <text x="462" y="322" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">VACUUM cleans them up.</text>
+
+      <rect x="438" y="388" width="362" height="268" rx="12" fill="#14171e" stroke="#2a3040" stroke-width="1.5"/>
+      <text x="462" y="418" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fbbf24" font-weight="600">WRITE PATH BOTTLENECK</text>
+      <rect x="462" y="436" width="314" height="48" rx="8" fill="#1f2531" stroke="#fbbf24" stroke-width="1"/>
+      <text x="619" y="457" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fbbf24">
+        <tspan x="619" dy="0">row change → WAL append</tspan>
+        <tspan x="619" dy="14">→ fsync → commit ACK</tspan>
+      </text>
+      <text x="462" y="512" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">The commit latency floor is usually set by</text>
+      <text x="462" y="532" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">durable WAL flush, not by how quickly PostgreSQL</text>
+      <text x="462" y="552" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">can modify in-memory pages.</text>
+      <text x="462" y="584" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">Group commit improves throughput by</text>
+      <text x="462" y="604" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">amortizing one fsync across many</text>
+      <text x="462" y="624" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">transactions while data files lag safely behind.</text>
+    </svg>
+    <div class="diagram-caption">Query execution: index scan (fast path) vs sequential scan (slow path), with concurrency and write-path annotations</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Most relational database performance problems come back to three levers: indexes, cache residency, and WAL fsync.</strong> Indexes decide how much data a read has to touch. The buffer pool decides whether those reads hit RAM or disk. WAL flush decides how quickly a write becomes durable. If you keep those three in view, most slow-query stories get a lot less mysterious.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References &amp; Further Reading</h2>
+  <p>These are the sources to study if you want the machinery underneath a relational database: algebra, plans, snapshots, logging, recovery, and replication.</p>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Codd — "A Relational Model of Data for Large Shared Data Banks" (CACM 1970)</div>
+    <p><strong>Edgar F. Codd.</strong> IBM Research. Communications of the ACM, Vol. 13, No. 6, June 1970, pp. 377-387.<br>
+    <a href="https://www.seas.upenn.edu/~zives/03f/cis550/codd.pdf" style="color:var(--accent);" target="_blank">https://www.seas.upenn.edu/~zives/03f/cis550/codd.pdf</a></p>
+    <p>&#x2022; Codd defines a <strong>relation</strong> as a set of tuples over named domains. That immediately rules out any dependence on physical row order, which is why SQL needs <code class="inline">ORDER BY</code> when order matters.</p>
+    <p>&#x2022; His treatment of <strong>nonsimple domains</strong> is the real normalization move: take repeating groups or nested records, split them into separate relations, and reconnect them with keys.</p>
+    <p>&#x2022; <strong>Data independence</strong> is the part that still matters day to day. A query should keep the same meaning even if the engine swaps one file layout or index strategy for another.</p>
+    <p>&#x2022; The algebra is small and concrete: <strong>restriction, projection, join</strong>. Physical operators come later. First you describe the result; then the engine decides how to get it.</p>
+    <p>&#x2022; That split is the whole game in relational systems. <strong>Constraints define correctness. Physical design defines cost.</strong></p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Corbett et al. — "Spanner: Google's Globally-Distributed Database" (OSDI 2012)</div>
+    <p><strong>James C. Corbett et al.</strong> Google Inc. 10th USENIX OSDI, October 2012.<br>
+    <a href="https://research.google.com/archive/spanner-osdi2012.pdf" style="color:var(--blue);" target="_blank">https://research.google.com/archive/spanner-osdi2012.pdf</a></p>
+    <p>&#x2022; <strong>TrueTime</strong> gives an interval, not a timestamp. Spanner treats clock uncertainty ε as a systems constant and builds commit logic around it instead of pretending clocks agree exactly.</p>
+    <p>&#x2022; <strong>Commit wait</strong> is what turns that interval into external consistency. After picking commit timestamp <code class="inline">s</code>, Spanner waits until real time is definitely past <code class="inline">s</code>.</p>
+    <p>&#x2022; The placement unit is a <strong>directory</strong>, basically a movable key-range shard. Split, move, and rebalance happen at that granularity, not at the level of the whole database.</p>
+    <p>&#x2022; Each directory lives inside a <strong>Paxos group</strong>. Cross-directory transactions use <strong>2PC on top of consensus-replicated participants</strong>, so prepare and commit state survives machine failure.</p>
+    <p>&#x2022; The bill for global SQL is explicit here: <strong>time uncertainty, quorum writes, and cross-range coordination</strong>.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] PostgreSQL Documentation — Indexes, MVCC, WAL</div>
+    <p><strong>The PostgreSQL Global Development Group.</strong><br>
+    <a href="https://www.postgresql.org/docs/current/indexes.html" style="color:var(--orange);" target="_blank">https://www.postgresql.org/docs/current/indexes.html</a></p>
+    <p>&#x2022; PostgreSQL’s default <strong>B-tree</strong> is page-based, so lookup cost is page traversal plus whatever heap fetches remain. That is why cache residency matters more than raw row count on hot key lookups.</p>
+    <p>&#x2022; <strong>MVCC visibility</strong> comes from tuple metadata like <code class="inline">xmin</code> and <code class="inline">xmax</code>. Readers pick the version visible to their snapshot; they do not wait for writers to overwrite rows in place.</p>
+    <p>&#x2022; The crash rule is <strong>WAL before data page</strong>. The heap page can hit disk later. The log record describing the change cannot.</p>
+    <p>&#x2022; <strong>VACUUM</strong> is not housekeeping. It is how PostgreSQL stops dead tuples from piling up in scans, indexes, and visibility checks.</p>
+    <p>&#x2022; <strong>HOT updates</strong> matter because they skip secondary-index churn when indexed columns do not change and the new tuple version still fits on the same page.</p>
+  </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] Kleppmann — "Designing Data-Intensive Applications" (2017)</div>
+    <p><strong>Martin Kleppmann.</strong> O'Reilly Media, 2017. Chapters 2, 3, 5, 6, 7 are most relevant here.<br>
+    <a href="https://dataintensive.net/" style="color:var(--purple);" target="_blank">https://dataintensive.net/</a></p>
+    <p>&#x2022; The schema chapters keep coming back to one hard tradeoff: <strong>join at read time or duplicate at write time</strong>. That is still the cleanest way to think about normalization versus denormalization.</p>
+    <p>&#x2022; The storage-engine comparison between <strong>B-trees and LSM-trees</strong> is useful because it is framed in amplification terms: read, write, and space. That maps directly to production pain.</p>
+    <p>&#x2022; The replication chapters give names to behaviors teams often discover the hard way: <strong>read-your-writes</strong>, <strong>monotonic reads</strong>, <strong>consistent prefix</strong>. If your replica setup cannot provide them, the app has to cope.</p>
+    <p>&#x2022; The partitioning material is practical. Once data is sharded, the hard part is no longer just storage size. It is <strong>routing, rebalancing, and cross-shard work</strong>.</p>
+    <p>&#x2022; The transaction chapters are worth rereading for one reason: they define isolation by <strong>which anomalies are still allowed</strong>. That is a much sharper tool than labels like "safe" or "strong."</p>
+  </div>
+
+  <div id="ref5" class="callout yellow">
+    <div class="callout-label">[5] Hellerstein, Stonebraker, Hamilton — "Architecture of a Database System" (2007)</div>
+    <p><strong>Joseph M. Hellerstein, Michael Stonebraker, James Hamilton.</strong> Foundations and Trends in Databases, Vol. 1, No. 2, 2007.<br>
+    <a href="https://dsf.berkeley.edu/papers/fntdb07-architecture.pdf" style="color:var(--yellow);" target="_blank">https://dsf.berkeley.edu/papers/fntdb07-architecture.pdf</a></p>
+    <p>&#x2022; This paper breaks a DBMS into the pieces that matter under load: <strong>query processor, transaction manager, storage manager, process model</strong>. If latency is bad, one of those layers is usually where the explanation lives.</p>
+    <p>&#x2022; The <strong>optimizer pipeline</strong> is spelled out cleanly: parse, rewrite, estimate cardinality, pick physical operators, build a plan. Wrong estimates are dangerous because they push the engine into the wrong join order or scan strategy.</p>
+    <p>&#x2022; The storage chapters make one point very clearly: <strong>buffer pool, WAL, checkpoints, and page cleaning are coupled</strong>. You cannot reason about write latency or crash recovery by looking at any one of them in isolation.</p>
+    <p>&#x2022; It also draws the line between <strong>locks and latches</strong>. Latches protect in-memory structures briefly. Locks protect logical data for the life of a transaction. Mixing those up causes confusion fast.</p>
+    <p>&#x2022; It is still one of the clearest papers on what the engine is doing while your query runs.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals &middot; built for deep understanding
+</footer>
+
+</div>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+<script src="../../assets/js/topic.js"></script>
+</body>
+</html>
