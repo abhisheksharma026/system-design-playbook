@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Key-Value Stores</title>
+<meta name="description" content="A system design guide to key-value stores, Redis, etcd, ZooKeeper, DynamoDB, Dynamo-style replication, and when KV trade-offs make sense.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 11</div>
+  <h1><span>Key-Value Stores</span></h1>
+  <p class="hero-sub">A key-value store does one job well: you give it a key and it gives you a value. No joins. No SQL planner. No schema gymnastics. That narrow contract is why KV stores end up on the hot path of so many real systems.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Prerequisites &amp; Key Terms</a></li>
+    <li><a href="#s1">What Is a Key-Value Store?</a></li>
+    <li><a href="#s2">The KV Store Spectrum</a></li>
+    <li><a href="#s3">Redis Deep Dive</a></li>
+    <li><a href="#s4">etcd / ZooKeeper — Strongly Consistent KV</a></li>
+    <li><a href="#s5">DynamoDB — Managed, Distributed KV</a></li>
+    <li><a href="#s6">When to Use What</a></li>
+    <li><a href="#s7">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s8">Mini-Project: KV Store from Scratch</a></li>
+    <li><a href="#s9">Production Example 1: Amazon Dynamo</a></li>
+    <li><a href="#s10">Production Example 2: Discord's Use of Redis</a></li>
+    <li><a href="#s11">Edge Cases &amp; Gotchas</a></li>
+    <li><a href="#s12">What If? — Interactive Exploration</a></li>
+    <li><a href="#s13">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s13b">Actual System Design Interview</a></li>
+    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Prerequisites &amp; Key Terms</h2>
+
+  <h3>Key-Value Store</h3>
+  <p>A database with a very small API: <code class="inline">GET(key) → value</code>, <code class="inline">PUT(key, value)</code>, <code class="inline">DELETE(key)</code>. No tables, no joins, no SQL. The key is usually a string. The value can be raw bytes, JSON, or whatever your app wants to store. That narrow model is what makes KV stores fast enough for caches, sessions, rate limiting, feature flags, and some primary data paths.</p>
+
+  <h3>Redis</h3>
+  <p>An open-source, in-memory key-value store with more than plain strings. Redis gives you hashes, lists, sets, sorted sets, streams, and bitmaps on top of the basic KV model. It runs an event loop, keeps the common path in RAM, and usually responds in well under a millisecond. You reach for it for caching, sessions, counters, rate limiting, leaderboards, and a lot of "I just need this to be fast" problems.</p>
+
+  <h3>etcd</h3>
+  <p>A strongly consistent distributed key-value store built on <strong>Raft</strong>. A write is not committed until a majority of nodes agree on it, which is why etcd is trusted with cluster metadata, leader election, service discovery, and locks. The cost is easy to guess: quorum writes are slower and lower-throughput than a best-effort cache.</p>
+
+  <h3>ZooKeeper</h3>
+  <p>A strongly consistent hierarchical key-value store built around a tree of <strong>znodes</strong>. ZooKeeper is mostly a coordination system: leader election, locks, config, and service discovery. Older Kafka deployments leaned on it heavily for broker metadata and partition leadership. Newer systems often prefer etcd or other Raft-based tools because the API is simpler.</p>
+
+  <h3>DynamoDB</h3>
+  <p>Amazon's fully managed distributed key-value and document database. It takes a lot of the Dynamo-style operational pain off your hands: partitioning, replication, failover, and capacity management. Reads can be eventually consistent or strongly consistent depending on the workload. You pay for that convenience, but plenty of teams decide it is worth it.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>What Is a Key-Value Store?</h2>
+
+  <p>A key-value store is a database stripped down to one idea: <strong>map a key to a value</strong>. If you understand a Python dict or a JavaScript object, you already understand the data model.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>The entire KV store API</span></div>
+    <pre><span class="fn">PUT</span>(<span class="str">"user:42:session"</span>, <span class="str">'{"token":"abc","expires":1711900000}'</span>)
+<span class="fn">GET</span>(<span class="str">"user:42:session"</span>)  →  <span class="str">'{"token":"abc","expires":1711900000}'</span>
+<span class="fn">DELETE</span>(<span class="str">"user:42:session"</span>)
+
+<span class="cm">That's it. No schema. No types. No joins. No SQL.</span>
+<span class="cm">The key is a string. The value is opaque bytes — the DB doesn't care what's inside.</span></pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>A relational database is a library. A key-value store is a coat check. The coat check is much faster, but it can answer only one question: "what is behind ticket 42?" That trade-off is the whole topic.</p>
+  </div>
+
+  <p>That narrow API gives the implementation room to optimize hard. No join planner. No complex query parser. No relational constraints to check on every lookup. Just find the key and return the bytes.</p>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>The KV Store Spectrum</h2>
+
+  <p>Not all KV stores are trying to solve the same problem. The big differences are <strong>consistency</strong>, <strong>persistence</strong>, and <strong>how they scale</strong>.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>KV Store</th><th>Consistency</th><th>Storage</th><th>Scale Model</th><th>Typical Latency</th><th>Primary Use Case</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Redis</strong></td><td>Single-node: strong. Cluster: eventual (async replication)</td><td>In-memory (optional disk persistence)</td><td>Single-node or cluster sharding</td><td><code>&lt;1ms</code></td><td>Cache, sessions, rate limiting, leaderboards</td></tr>
+        <tr><td><strong>Memcached</strong></td><td>Eventual (no replication)</td><td>In-memory only (no persistence)</td><td>Client-side sharding</td><td><code>&lt;1ms</code></td><td>Pure caching (simpler than Redis)</td></tr>
+        <tr><td><strong>etcd</strong></td><td>Strong (Raft consensus)</td><td>Disk (WAL + BoltDB/bbolt)</td><td>3-5 node Raft cluster</td><td><code>1-10ms</code></td><td>K8s control plane, leader election, config</td></tr>
+        <tr><td><strong>ZooKeeper</strong></td><td>Strong (ZAB consensus)</td><td>Disk (transaction log + snapshots)</td><td>3-5 node ZAB ensemble</td><td><code>1-10ms</code></td><td>Coordination, locks, Kafka metadata</td></tr>
+        <tr><td><strong>DynamoDB</strong></td><td>Configurable (eventual or strong reads)</td><td>Disk (SSD), replicated across 3 AZs</td><td>Automatic partitioning</td><td><code>1-5ms</code></td><td>Serverless apps, user profiles, gaming state</td></tr>
+        <tr><td><strong>Cassandra</strong></td><td>Tunable (quorum controls)</td><td>Disk (LSM-tree, SSTables)</td><td>Peer-to-peer ring, consistent hashing</td><td><code>1-10ms</code></td><td>Time-series, IoT, write-heavy workloads</td></tr>
+        <tr><td><strong>RocksDB</strong></td><td>Strong (embedded, single-node)</td><td>Disk (LSM-tree)</td><td>Embedded library (not a server)</td><td><code>&lt;1ms</code> (local)</td><td>Storage engine inside other DBs (MySQL, CockroachDB)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">The Two Families</div>
+    <p><strong>In-memory KV (Redis, Memcached):</strong> extremely fast, RAM-bound, great for caches and short-lived state. <strong>Persistent distributed KV (DynamoDB, Cassandra, etcd):</strong> slower, durable, replicated, and better suited for primary data or coordination. The sorting question is simple: does the data need to survive a crash?</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3 ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Redis Deep Dive</h2>
+
+  <p>Redis is the KV store most engineers run into first, so it is worth understanding beyond the marketing version.</p>
+
+  <h3>Data Structures</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Type</th><th>Operations</th><th>Use Case</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><strong>String</strong></td><td>GET, SET, INCR, DECR, APPEND</td><td>Caching, counters, flags</td><td><code>SET user:42:name "Alice"</code></td></tr>
+        <tr><td><strong>Hash</strong></td><td>HGET, HSET, HGETALL, HINCRBY</td><td>Object storage (user profile fields)</td><td><code>HSET user:42 name "Alice" age 30</code></td></tr>
+        <tr><td><strong>List</strong></td><td>LPUSH, RPUSH, LPOP, LRANGE</td><td>Message queues, activity feeds, recent items</td><td><code>LPUSH notifications:42 "new msg"</code></td></tr>
+        <tr><td><strong>Set</strong></td><td>SADD, SREM, SMEMBERS, SINTER</td><td>Tags, unique visitors, set operations</td><td><code>SADD online_users "user:42"</code></td></tr>
+        <tr><td><strong>Sorted Set</strong></td><td>ZADD, ZRANGE, ZRANK, ZRANGEBYSCORE</td><td>Leaderboards, time-based feeds, priority queues</td><td><code>ZADD leaderboard 9500 "player:7"</code></td></tr>
+        <tr><td><strong>Stream</strong></td><td>XADD, XREAD, XREADGROUP</td><td>Event sourcing, lightweight pub/sub with persistence</td><td><code>XADD events * type "click" url "/home"</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Persistence Options</h3>
+  <p><strong>RDB:</strong> periodic snapshots of the whole dataset. Restarts are fast, but you lose whatever happened after the last snapshot.</p>
+  <p><strong>AOF:</strong> an append-only log of writes. Better durability, slower write path, and a replay cost on restart. The <code class="inline">appendfsync</code> setting is the real contract.</p>
+  <p><strong>RDB + AOF:</strong> the usual production answer when you want both quicker restarts and a smaller loss window.</p>
+
+  <div class="callout orange">
+    <div class="callout-label">Redis is Single-Threaded (Mostly)</div>
+    <p>Redis executes commands in a single-threaded event loop. That keeps the common path simple and avoids lock contention. It also means one bad command, like <code class="inline">KEYS *</code> on a huge dataset, can stall everyone else. That trade is worth understanding because it explains both Redis's speed and its failure modes.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4 ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>etcd / ZooKeeper — Strongly Consistent KV</h2>
+
+  <p>When you need <strong>every read to see the latest committed write</strong>, even across machines, you are no longer in cache territory. You are in consensus territory.</p>
+
+  <h3>etcd (Raft-based)</h3>
+  <p>etcd stores data in a <strong>B-tree backed by BoltDB</strong>. Writes go through Raft, so the leader proposes an entry and a majority has to persist it before the write counts as committed.</p>
+  <p><strong>Kubernetes depends on etcd</strong> for cluster state. If etcd is unhealthy, the control plane starts falling apart quickly because that metadata store is the source of truth.</p>
+
+  <h3>ZooKeeper (ZAB-based)</h3>
+  <p>ZooKeeper organizes data as a tree of <strong>znodes</strong>, closer to a filesystem than a flat KV map. Its ephemeral and sequential nodes are the parts people care about most because they make service discovery, locks, and leader election practical.</p>
+
+  <div class="callout purple">
+    <div class="callout-label">etcd vs ZooKeeper — When to Pick Which</div>
+    <p><strong>etcd:</strong> simpler API, easier fit for modern control planes, especially around Kubernetes. <strong>ZooKeeper:</strong> older, battle-tested, and still useful when the tree model or ecosystem fit matters. <strong>Both:</strong> coordination systems first, not general-purpose high-throughput data stores.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5 ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>DynamoDB — Managed, Distributed KV</h2>
+
+  <p>DynamoDB is Amazon's managed KV and document store. <a href="#ref1" class="ref">[1]</a> It handles partitioning, replication, failover, and most of the day-2 operational work that teams otherwise end up owning themselves.</p>
+
+  <h3>Data Model</h3>
+  <p><strong>Partition key:</strong> the field that decides where the item lives. If you pick a bad one, you create hot partitions. <strong>Sort key:</strong> optional, but useful when you need ordered access within one partition, such as all orders for one user sorted by time.</p>
+
+  <h3>Consistency Options</h3>
+  <p><strong>Eventually consistent reads:</strong> cheaper and usually good enough. <strong>Strongly consistent reads:</strong> fresher, more expensive, and worth using only when the stale-read window actually matters.</p>
+
+  <div class="callout green">
+    <div class="callout-label">When to Use DynamoDB</div>
+    <p><strong>Great for:</strong> serverless applications, user profiles, sessions, game state, and other workloads with a clean partition key and mostly key-based access. <strong>Not great for:</strong> ad-hoc analytics, awkward access patterns, or workloads that create hot partitions faster than DynamoDB can absorb them.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 6 ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>When to Use What</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Need</th><th>Choose</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Cache for web app (sub-ms latency)</td><td><strong>Redis</strong></td><td>In-memory, rich data structures, TTL support, widely supported client libraries</td></tr>
+        <tr><td>Simple cache, no persistence needed</td><td><strong>Memcached</strong></td><td>Simpler than Redis, multi-threaded, pure LRU cache</td></tr>
+        <tr><td>Session storage with TTL</td><td><strong>Redis</strong> (with AOF persistence)</td><td>Auto-expiry via TTL, fast reads, survives restarts with AOF</td></tr>
+        <tr><td>Rate limiting</td><td><strong>Redis</strong> (INCR + EXPIRE)</td><td>Atomic increment + expiry in one command, sub-ms</td></tr>
+        <tr><td>Leaderboard / ranking</td><td><strong>Redis Sorted Sets</strong></td><td>ZADD/ZRANK are O(log N), designed for this exact use case</td></tr>
+        <tr><td>Kubernetes cluster state</td><td><strong>etcd</strong></td><td>Strong consistency via Raft, native K8s integration</td></tr>
+        <tr><td>Distributed locks / leader election</td><td><strong>etcd</strong> or <strong>ZooKeeper</strong></td><td>Consensus-based, linearizable operations</td></tr>
+        <tr><td>Serverless user profiles / game state</td><td><strong>DynamoDB</strong></td><td>Fully managed, auto-scaling, pay-per-request, single-digit-ms</td></tr>
+        <tr><td>Global multi-region KV with strong consistency</td><td><strong>DynamoDB Global Tables</strong> or <strong>CockroachDB</strong></td><td>Multi-region replication with conflict resolution</td></tr>
+        <tr><td>Embedded KV engine inside another DB</td><td><strong>RocksDB</strong></td><td>LSM-tree, embeddable C++ library, used by CockroachDB, MySQL (MyRocks), Kafka Streams</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SECTION 7 ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: Redis — Feel the Speed</h3>
+  <div class="code-block">
+    <div class="code-header"><span>macOS: brew install redis &amp;&amp; brew services start redis | Linux: apt install redis-server | Docker: docker run -d -p 6379:6379 redis:alpine</span></div>
+    <pre><span class="cm"># Enter Redis CLI</span>
+$ <span class="fn">redis-cli</span>
+
+<span class="cm"># Basic KV operations</span>
+127.0.0.1:6379&gt; <span class="fn">SET</span> <span class="str">greeting</span> <span class="str">"hello from redis"</span>
+OK
+127.0.0.1:6379&gt; <span class="fn">GET</span> <span class="str">greeting</span>
+<span class="str">"hello from redis"</span>
+
+<span class="cm"># TTL: key auto-expires in 5 seconds</span>
+127.0.0.1:6379&gt; <span class="fn">SETEX</span> <span class="str">temp_key</span> <span class="num">5</span> <span class="str">"I'll disappear"</span>
+OK
+127.0.0.1:6379&gt; <span class="fn">TTL</span> <span class="str">temp_key</span>
+(integer) <span class="num">4</span>
+<span class="cm"># wait 5 seconds...</span>
+127.0.0.1:6379&gt; <span class="fn">GET</span> <span class="str">temp_key</span>
+(nil)   <span class="cm">← gone! This is how session TTL works.</span>
+
+<span class="cm"># Atomic counter (rate limiting primitive)</span>
+127.0.0.1:6379&gt; <span class="fn">SET</span> <span class="str">api:rate:user42</span> <span class="num">0</span>
+127.0.0.1:6379&gt; <span class="fn">INCR</span> <span class="str">api:rate:user42</span>
+(integer) <span class="num">1</span>
+127.0.0.1:6379&gt; <span class="fn">INCR</span> <span class="str">api:rate:user42</span>
+(integer) <span class="num">2</span>
+<span class="cm"># INCR is atomic — safe for concurrent rate limiting. No race conditions.</span>
+
+<span class="cm"># Sorted Set: leaderboard</span>
+127.0.0.1:6379&gt; <span class="fn">ZADD</span> <span class="str">leaderboard</span> <span class="num">9500</span> <span class="str">"player_a"</span> <span class="num">8700</span> <span class="str">"player_b"</span> <span class="num">9200</span> <span class="str">"player_c"</span>
+(integer) 3
+127.0.0.1:6379&gt; <span class="fn">ZREVRANGE</span> <span class="str">leaderboard</span> <span class="num">0</span> <span class="num">2</span> <span class="kw">WITHSCORES</span>
+1) <span class="str">"player_a"</span>   2) <span class="str">"9500"</span>
+3) <span class="str">"player_c"</span>   4) <span class="str">"9200"</span>
+5) <span class="str">"player_b"</span>   6) <span class="str">"8700"</span>
+
+<span class="cm"># Exit: Ctrl+D or type 'exit'</span></pre>
+  </div>
+
+  <h3>Demo 2: Redis Benchmark — Measure Throughput</h3>
+  <div class="code-block">
+    <div class="code-header"><span>redis-benchmark is bundled with Redis (macOS/Linux)</span></div>
+    <pre><span class="cm"># Run 100K GET/SET operations with 50 concurrent connections</span>
+$ <span class="fn">redis-benchmark</span> -t set,get -n 100000 -c 50 -q
+
+SET: <span class="num">112,359.55</span> requests per second
+GET: <span class="num">119,047.62</span> requests per second
+
+<span class="cm"># ~110K ops/sec on a single core. This is why Redis is used for caching.</span>
+<span class="cm"># Your PostgreSQL can do ~5K queries/sec on the same hardware.</span>
+<span class="cm"># Redis is ~20× faster for key-based lookups.</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 8 ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Mini-Project: KV Store from Scratch</h2>
+
+  <h4>Simple: Feel What a KV Store Does</h4>
+  <div class="code-block">
+    <div class="code-header"><span>kv_server.py — HTTP KV store in 30 lines (macOS/Linux/WSL, Python 3.7+)</span></div>
+    <pre><span class="kw">from</span> http.server <span class="kw">import</span> HTTPServer, BaseHTTPRequestHandler
+<span class="kw">import</span> json, time
+
+store = {}  <span class="cm"># The entire "database" — a Python dict in RAM</span>
+
+<span class="kw">class</span> <span class="fn">KV</span>(BaseHTTPRequestHandler):
+    <span class="kw">def</span> <span class="fn">do_GET</span>(self):
+        key = self.path.lstrip(<span class="str">"/"</span>)
+        <span class="kw">if</span> key <span class="kw">in</span> store:
+            val, exp = store[key]
+            <span class="kw">if</span> exp <span class="kw">and</span> time.time() > exp:
+                <span class="kw">del</span> store[key]
+                self._respond(<span class="num">404</span>, {<span class="str">"error"</span>: <span class="str">"expired"</span>})
+            <span class="kw">else</span>:
+                self._respond(<span class="num">200</span>, {<span class="str">"key"</span>: key, <span class="str">"value"</span>: val})
+        <span class="kw">else</span>:
+            self._respond(<span class="num">404</span>, {<span class="str">"error"</span>: <span class="str">"not found"</span>})
+
+    <span class="kw">def</span> <span class="fn">do_PUT</span>(self):
+        key = self.path.lstrip(<span class="str">"/"</span>)
+        body = json.loads(self.rfile.read(int(self.headers[<span class="str">"Content-Length"</span>])))
+        ttl = body.get(<span class="str">"ttl"</span>)
+        exp = time.time() + ttl <span class="kw">if</span> ttl <span class="kw">else</span> <span class="num">None</span>
+        store[key] = (body[<span class="str">"value"</span>], exp)
+        self._respond(<span class="num">201</span>, {<span class="str">"key"</span>: key, <span class="str">"stored"</span>: <span class="num">True</span>, <span class="str">"ttl"</span>: ttl})
+
+    <span class="kw">def</span> <span class="fn">do_DELETE</span>(self):
+        key = self.path.lstrip(<span class="str">"/"</span>)
+        deleted = store.pop(key, <span class="num">None</span>) <span class="kw">is not</span> <span class="num">None</span>
+        self._respond(<span class="num">200</span> <span class="kw">if</span> deleted <span class="kw">else</span> <span class="num">404</span>, {<span class="str">"deleted"</span>: deleted})
+
+    <span class="kw">def</span> <span class="fn">_respond</span>(self, code, data):
+        self.send_response(code); self.send_header(<span class="str">"Content-Type"</span>,<span class="str">"application/json"</span>)
+        self.end_headers(); self.wfile.write(json.dumps(data).encode())
+    <span class="kw">def</span> <span class="fn">log_message</span>(self, *a): <span class="kw">pass</span>
+
+print(<span class="str">"[KV Store] http://localhost:8080/{key}"</span>)
+HTTPServer((<span class="str">""</span>, <span class="num">8080</span>), KV).serve_forever()</pre>
+  </div>
+  <div class="code-block">
+    <div class="code-header"><span>Test it with curl</span></div>
+    <pre><span class="cm"># PUT a key with a 10-second TTL</span>
+$ <span class="fn">curl</span> -X PUT localhost:8080/greeting -d '{"value":"hello","ttl":10}'
+{<span class="str">"key"</span>:<span class="str">"greeting"</span>,<span class="str">"stored"</span>:true,<span class="str">"ttl"</span>:<span class="num">10</span>}
+
+<span class="cm"># GET it</span>
+$ <span class="fn">curl</span> localhost:8080/greeting
+{<span class="str">"key"</span>:<span class="str">"greeting"</span>,<span class="str">"value"</span>:<span class="str">"hello"</span>}
+
+<span class="cm"># Wait 10 seconds, try again</span>
+$ <span class="fn">curl</span> localhost:8080/greeting
+{<span class="str">"error"</span>:<span class="str">"expired"</span>}   <span class="cm">← TTL-based expiry, just like Redis SETEX!</span>
+
+<span class="cm"># DELETE a key</span>
+$ <span class="fn">curl</span> -X DELETE localhost:8080/greeting
+{<span class="str">"deleted"</span>:true}</pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 9 ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production Example 1: Amazon Dynamo</h2>
+
+  <p>The original Amazon Dynamo paper still matters because so many later KV systems borrowed from it. <a href="#ref1" class="ref">[1]</a> DynamoDB, Cassandra, Riak, and Voldemort all carry some of that DNA.</p>
+
+  <h3>Key Design Decisions</h3>
+  <p><strong>Always writable:</strong> Dynamo leans toward availability. Even during partitions, it keeps accepting writes and deals with conflicts later through <strong>vector clocks</strong>.</p>
+  <p><strong>Sloppy quorum + hinted handoff:</strong> if a preferred replica is down, the write goes to another healthy node and gets replayed later. That keeps the system moving, but it also means repair work never really goes away.</p>
+  <p><strong>Merkle trees for anti-entropy:</strong> replicas compare tree hashes instead of scanning every key, which makes background repair practical at scale.</p>
+</section>
+
+<!-- ============ SECTION 10 ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production Example 2: Discord's Use of Redis</h2>
+
+  <p>Discord uses Redis where low latency matters more than fancy query power.</p>
+
+  <h3>How Discord Uses Redis</h3>
+  <p><strong>Presence:</strong> online status lives behind keys with TTLs. When heartbeats stop, the keys expire and the user looks offline without extra cleanup logic.</p>
+  <p><strong>Rate limiting:</strong> API calls use Redis counters and expirations, which is a natural fit for fast shared state.</p>
+  <p><strong>Message caching:</strong> the permanent history can live somewhere heavier, but the hot path only needs the recent messages now.</p>
+</section>
+
+<!-- ============ SECTION 11 ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Edge Cases &amp; Gotchas</h2>
+
+  <h3>1. Redis Memory Exhaustion</h3>
+  <p>Redis stores everything in RAM. If your dataset exceeds available memory, Redis either rejects new writes (<code class="inline">maxmemory-policy noeviction</code>) or starts evicting keys based on LRU/LFU (<code class="inline">allkeys-lru</code>). If you don't set a maxmemory limit, Redis will use all available RAM and the OS will kill it (OOM). Always set <code class="inline">maxmemory</code> in production.</p>
+
+  <h3>2. The <code class="inline">KEYS *</code> Command in Production</h3>
+  <p><code class="inline">KEYS *</code> scans every key in the database — O(N) and single-threaded. On a Redis instance with 10M keys, this blocks all other clients for seconds. Never use <code class="inline">KEYS</code> in production. Use <code class="inline">SCAN</code> instead — it iterates incrementally without blocking.</p>
+
+  <h3>3. Hot Key on a Redis Cluster</h3>
+  <p>In Redis Cluster, keys are distributed across slots (16384 slots). If one key gets extreme traffic (a viral post, a global config key), the single node owning that slot becomes the bottleneck. Fix: replicate the hot key to multiple nodes using read replicas, or use client-side caching for the hottest keys.</p>
+
+  <h3>4. etcd Data Size Limits</h3>
+  <p>etcd is designed for small metadata, not large datasets. The default maximum database size is 2GB. Each value is limited to 1.5MB. If you try to use etcd as a general-purpose KV store, you'll hit these limits quickly. etcd is for coordination metadata (K8s pod specs, config, leader locks) — use Redis or DynamoDB for application data.</p>
+
+  <h3>5. DynamoDB Hot Partition</h3>
+  <p>DynamoDB distributes data by hashing the partition key. If your partition key has low cardinality (e.g., <code class="inline">status: "active"</code> for 90% of items), most data lands on one partition → throttling. Fix: choose a high-cardinality partition key (user_id, device_id), or add a random suffix for write-sharding.</p>
+
+  <div class="callout red">
+    <div class="callout-label">Production War Story</div>
+  <p>A startup put all user sessions in Redis and forgot to set <code class="inline">maxmemory</code>. As traffic grew, Redis consumed the host's RAM until Linux killed it. AOF was disabled, so every session vanished and everyone got logged out. The fix was boring but necessary: set a real memory limit, choose an eviction policy, and turn on persistence.</p>
+  </div>
+</section>
+
+<!-- ============ WHAT IF ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">Redis vs Memcached</div>
+      <p><strong>Redis:</strong> Rich data structures, persistence, pub/sub, Lua scripting, cluster mode. More features, slightly more memory overhead per key.<br>
+      <strong>Memcached:</strong> Multi-threaded (better per-instance throughput for simple GET/SET), simpler, less memory per key. No persistence, no data structures beyond strings.<br>
+      <strong>Rule:</strong> Redis unless you need only simple caching and want maximum GET/SET throughput.</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">In-memory KV vs persistent KV</div>
+      <p><strong>In-memory (Redis):</strong> Sub-ms latency, limited by RAM, data loss risk on crash (unless AOF).<br>
+      <strong>Persistent (DynamoDB, Cassandra):</strong> 1-10ms latency, unlimited storage, durable by default.<br>
+      <strong>Decision:</strong> "Does this data need to survive a server crash?" Yes → persistent. No → in-memory. Many systems use both: Redis as cache in front of DynamoDB as source of truth.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">Strong consistency (etcd) vs eventual consistency (Redis Cluster)</div>
+      <p><strong>Strong:</strong> Every read sees the latest write. Required for leader election, locks, K8s state. Costs: higher latency (Raft round-trips), lower throughput.<br>
+      <strong>Eventual:</strong> Reads may be stale briefly. Acceptable for caching, sessions, counters. Benefits: higher throughput, lower latency, better availability during partitions.</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">KV store vs relational DB for user profiles</div>
+      <p><strong>KV (DynamoDB/Redis):</strong> Fast single-key lookups. No joins. Schema-free. Horizontal scaling is trivial.<br>
+      <strong>Relational (PostgreSQL):</strong> JOINs, complex queries, ACID transactions, strong consistency, but harder to shard.<br>
+      <strong>Decision:</strong> If you only ever access profiles by user_id → KV is optimal. If you need "find all users in Berlin who signed up last week" → relational.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INTERVIEW Q&A ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Interview Questions &amp; Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: When would you use a KV store instead of a relational database?</div>
+    <div class="qa-a">
+      <p>Use a KV store when access is mostly by key, speed matters a lot, and the data model does not need joins or rich query semantics. Stick with a relational database when the data is connected, the queries are richer, or the invariants span multiple entities. In practice, most systems use both: PostgreSQL for source of truth and Redis for the hot path.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: How would you implement rate limiting with Redis?</div>
+    <div class="qa-a">
+      <p><strong>Fixed window:</strong> use a key like <code>ratelimit:{user_id}:{current_minute}</code>, then <code>INCR</code> and <code>EXPIRE</code>. <strong>Sliding window log:</strong> use a Sorted Set, trim old timestamps, then count what remains. It is more accurate but costs more memory. <strong>Token bucket:</strong> keep a token counter and refill it at a steady rate, usually with a Lua script to keep the operation atomic.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: What's the difference between etcd and Redis? When would you use each?</div>
+    <div class="qa-a">
+      <p><strong>Redis:</strong> built for speed, great for caches, sessions, counters, and other hot-path data. <strong>etcd:</strong> built for correctness, better for leader election, cluster metadata, locks, and discovery. Redis is where you put fast-changing data you can tolerate losing briefly. etcd is where you put small pieces of metadata that have to be right.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: Redis is single-threaded. How can it be so fast?</div>
+    <div class="qa-a">
+      <p>(1) <strong>All data in RAM</strong> — no disk I/O for reads. RAM access is ~100ns vs SSD at ~100μs (1000× faster). (2) <strong>Simple data structures</strong> — hash table lookup is O(1). No query parsing, no execution planning. (3) <strong>Non-blocking I/O</strong> — epoll/kqueue event loop handles thousands of connections without thread context switching. (4) <strong>No locks</strong> — single-threaded means no mutex contention, no cache-line bouncing. (5) <strong>Efficient protocol</strong> — RESP (Redis Serialization Protocol) is simple and fast to parse. The single-threaded model means one slow command (e.g., <code>KEYS *</code>) blocks everything — which is why <code>KEYS</code> is banned in production. But for typical GET/SET workloads, one CPU core can serve ~100K ops/sec.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: How does DynamoDB handle hot partitions, and what can you do about it?</div>
+    <div class="qa-a">
+      <p>DynamoDB distributes items across partitions by hashing the partition key. If one partition key is accessed far more than others (e.g., a trending product page where partition_key = product_id), that partition's throughput capacity is exhausted while other partitions sit idle. DynamoDB will throttle requests to the hot partition (ProvisionedThroughputExceededException). <strong>Adaptive capacity</strong> (enabled by default since 2018) redistributes some unused capacity from cold partitions, but it doesn't eliminate the problem for extreme hot spots.</p>
+      <p><strong>Fixes:</strong> (1) <strong>Write sharding</strong>: append a random suffix to the partition key (e.g., <code>product_123#shard_7</code>) and scatter-gather on reads. (2) <strong>Cache hot keys in Redis/DAX</strong> — absorb the read traffic before it hits DynamoDB. (3) <strong>Redesign the partition key</strong> — use a higher-cardinality key. Reference: DDIA Ch. 6, "Skewed Workloads and Relieving Hot Spots."</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ACTUAL SYSTEM DESIGN INTERVIEW ============ -->
+<section class="section" id="s13b">
+  <div class="section-num">13b</div>
+  <h2>Actual System Design Interview — "Design a Rate Limiter"</h2>
+  <p>This interview question is really about shared counters, atomic operations, and what happens when the fast path breaks.</p>
+
+  <div class="callout blue">
+    <div class="callout-label">The Prompt</div>
+    <p>"Design a rate limiter that enforces 100 requests per minute per user across a distributed system with multiple API servers. It should handle 50K RPS total and not become a bottleneck."</p>
+  </div>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    C["Clients"]
+    A1["API Server 1"]
+    A2["API Server 2"]
+    AN["API Server N"]
+    R["Rate Limiter"]
+    X["Redis"]
+    N1["Atomic INCR keeps updates safe"]
+    N2["EXPIRE clears each window"]
+    N3["One shared counter across every API server"]
+    N4["Sub-ms reads and writes"]
+
+    C --> A1 --> R
+    C --> A2 --> R
+    C --> AN --> R
+    R --> X
+    X -.-> N1
+    X -.-> N2
+    R -.-> N3
+    X -.-> N4
+
+    classDef user fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef api fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C user;
+    class A1,A2,AN api;
+    class R core;
+    class X data;
+    class N1,N2,N3,N4 note;
+    </pre>
+    <div class="diagram-caption">Distributed rate limiter: API servers share one Redis-backed counter per user per time window, so enforcement remains global instead of fragmenting across instances.</div>
+  </div>
+
+  <h3>Interviewer Follow-ups</h3>
+
+  <div class="qa">
+    <div class="qa-q">"Why Redis and not a local in-memory counter on each API server?"</div>
+    <div class="qa-a">
+      <p>With N API servers and a local counter on each, the user's traffic gets split across machines. That means the "100 requests per minute" limit quietly turns into something much larger. The count <strong>has to be shared</strong> if you want the answer to mean anything. Redis is the usual choice because <code>INCR</code> is atomic, <code>EXPIRE</code> is built in, and the latency stays low.</p>
+      <p>You could use a consensus system instead, but that is usually too expensive for a hot path like this. Rate limiting rarely needs perfect global truth. It needs a fast shared approximation that behaves well enough.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"What if Redis goes down? Do you block all requests or let them through?"</div>
+    <div class="qa-a">
+      <p><strong>Fail open</strong> keeps the API up and temporarily gives up accurate rate limiting. <strong>Fail closed</strong> protects the backend but can turn a Redis outage into an application outage. Most public APIs choose fail open unless unchecked traffic is itself dangerous.</p>
+      <p><strong>Mitigation:</strong> run Redis with replicas and automatic failover, then decide what the app should do during the short failover gap.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"Fixed window has a burst problem at window boundaries. How do you handle it?"</div>
+    <div class="qa-a">
+      <p>With a fixed window, someone can burst at the end of one minute and the start of the next. If that matters, switch to a <strong>sliding window log</strong> in a Sorted Set or a <strong>sliding window counter</strong> that weights the previous bucket. The former is more accurate. The latter is cheaper.</p>
+    </div>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">What They Are Looking For</div>
+    <p>The interviewer is checking whether you understand shared state, KV store choice, failure behavior, algorithm accuracy, and the operational details that turn a toy rate limiter into a production one.</p>
+  </div>
+</section>
+
+<!-- ============ CHEAT SHEET ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> KV stores do one thing well: map a key to a value.<br>
+    <strong>2.</strong> Redis is the default hot-path store for caches, sessions, counters, and short-lived shared state.<br>
+    <strong>3.</strong> etcd and ZooKeeper are coordination systems, not general-purpose app databases.<br>
+    <strong>4.</strong> In DynamoDB, partition-key choice usually matters more than any other schema decision.<br>
+    <strong>5.</strong> Redis is single-threaded on the command path, which is why it is both fast and easy to stall with a bad command.<br>
+    <strong>6.</strong> RDB and AOF are different durability stories. Know what loss window each one implies.<br>
+    <strong>7.</strong> If you do not set Redis memory limits and eviction behavior, the OS will eventually make that decision for you.<br>
+    <strong>8.</strong> Rate limiting is a classic KV problem because it needs fast shared counters with expiration.<br>
+    <strong>9.</strong> Dynamo is still worth reading because it shows what KV systems look like when availability wins the argument.<br>
+    <strong>10.</strong> Most systems use BOTH: PostgreSQL (source of truth, ACID) + Redis (speed layer, caching). KV stores complement relational DBs, not replace them.</p>
+  </div>
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — KV Store Decision Tree</h2>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart TB
+    Q{"Must data survive a crash?"}
+    R["Redis<br/>cache · sessions · counters"]
+    C{"Strong consistency needed?"}
+    E["etcd / ZooKeeper<br/>coordination · config · locks"]
+    M{"Managed or self-hosted?"}
+    D["DynamoDB<br/>serverless · auto-scaling"]
+    K["Cassandra<br/>write-heavy · time-series"]
+
+    Q -- "No" --> R
+    Q -- "Yes" --> C
+    C -- "Yes" --> E
+    C -- "No" --> M
+    M -- "Managed" --> D
+    M -- "Self-hosted" --> K
+
+    classDef cache fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef question fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef consensus fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef durable fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+
+    class Q,C,M question;
+    class R cache;
+    class E consensus;
+    class D,K durable;
+    </pre>
+    <div class="diagram-caption">Decision tree: durability comes first, then consistency, then operational model. That narrows the KV choice quickly in most design discussions.</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>A KV store gives up query flexibility so it can stay fast and simple.</strong> No joins. No rich ad-hoc queries. In return, you get a data model that scales well and stays cheap on the hot path. Use it where the access pattern is truly key-based. Do not force it into jobs better handled by a relational store.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References &amp; Further Reading</h2>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] DeCandia et al. — "Dynamo: Amazon's Highly Available Key-value Store" (SOSP 2007)</div>
+    <p><strong>Giuseppe DeCandia, Deniz Hastorun, et al.</strong> Amazon. 21st ACM SOSP, October 2007.<br>
+    <a href="https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf" style="color:var(--accent);" target="_blank">https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf</a></p>
+    <p>&#x2022; The paper's API is deliberately tiny: <code class="inline">get(key)</code> can return multiple versions plus a <code class="inline">context</code>, and <code class="inline">put(key, context, value)</code> writes a new version. That <code class="inline">context</code> is the vector clock; it is the metadata Dynamo uses to decide whether one write supersedes another or whether the versions are concurrent.</p>
+    <p>&#x2022; <strong>Vector clocks</strong> are the core write-conflict mechanism. If clock A dominates clock B, B is obsolete. If neither dominates, Dynamo returns both versions to the caller. The shopping-cart example merges by set union, which shows the actual contract: the storage layer preserves causality, but conflict resolution can be pushed to application code.</p>
+    <p>&#x2022; <strong>Sloppy quorum</strong> and <strong>hinted handoff</strong> are the availability path. Writes target the first N reachable nodes in the preference list, not strictly the ideal replicas. A temporary substitute node stores the write along with a hint about the intended owner, then replays it later. That is how Dynamo keeps accepting writes during node or rack failure without waiting for topology to heal first.</p>
+    <p>&#x2022; <strong>Read repair</strong> and <strong>Merkle-tree anti-entropy</strong> are separate repair loops. Read repair fixes divergence only for keys that are being read. Merkle trees compare replica subranges by hash so background repair can locate a mismatching branch and ship only that slice instead of re-copying the entire partition.</p>
+    <p>&#x2022; The engineering target is the tail: the paper explicitly optimizes for the <strong>99.9th percentile</strong>, not the average. That matters because every mechanism in the design, from leaderless writes to replica selection, is there to keep a single slow node from dominating customer-visible latency.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Redis Documentation — Data Types, Persistence, Cluster</div>
+    <p><strong>Redis Ltd.</strong><br>
+    <a href="https://redis.io/docs/latest/" style="color:var(--blue);" target="_blank">https://redis.io/docs/latest/</a></p>
+    <p>&#x2022; The docs make Redis's execution model explicit: network I/O may be threaded, but <strong>command execution is still serialized</strong> through the main event loop. That is why <code class="inline">INCR</code>, <code class="inline">HSET</code>, and small Lua scripts behave atomically without application-side locking, and also why one long-running command can stall everyone behind it.</p>
+    <p>&#x2022; The persistence pages separate <strong>RDB snapshots</strong> from <strong>AOF</strong> replay. RDB is a point-in-time dump produced from a <code class="inline">fork()</code>ed child with copy-on-write memory semantics. AOF records each write command in order, with durability controlled by <code class="inline">appendfsync always|everysec|no</code>. Those are different failure envelopes, not just different file formats.</p>
+    <p>&#x2022; The cluster docs spell out the actual shard map: <strong>16384 hash slots</strong>, assigned by <code class="inline">CRC16(key) mod 16384</code>. Multi-key atomicity only exists when the keys land on the same node, which is why hash tags like <code class="inline">{user:42}:profile</code> matter. Replication is async, so a primary can ACK a write that is still absent from its replica.</p>
+    <p>&#x2022; The data-structure docs are worth reading as implementation notes. A <strong>Sorted Set</strong> combines a hash table for member lookup with a skip list for ordered traversal, which is why <code class="inline">ZADD</code>, <code class="inline">ZRANK</code>, and score-range queries stay efficient on the same object.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Kleppmann — "Designing Data-Intensive Applications" (2017)</div>
+    <p><strong>Martin Kleppmann.</strong> O'Reilly Media, 2017. Chapters 5, 6, 8 most relevant.<br>
+    <a href="https://dataintensive.net/" style="color:var(--orange);" target="_blank">https://dataintensive.net/</a></p>
+    <p>&#x2022; Chapter 5 formalizes the <strong>leaderless replication</strong> model behind Dynamo-style systems. The useful detail is not just <code class="inline">R + W &gt; N</code>, but the failure cases around it: overlapping quorums can still return stale data if replicas miss writes, clocks disagree, or concurrent versions need reconciliation.</p>
+    <p>&#x2022; Chapter 6 is the cleanest explanation of <strong>partitioning trade-offs</strong>. Hash partitioning gives load spread but destroys key locality. Range partitioning preserves ordered scans and prefix locality but turns monotonically increasing keys into hot tablets. That one chapter explains most partition-key mistakes people make in DynamoDB, Cassandra, and Bigtable-like systems.</p>
+    <p>&#x2022; Chapter 8 is where the book gets precise about <strong>locks and leases</strong>. A lock in etcd or ZooKeeper is only safe if downstream systems reject stale holders, which is where <strong>fencing tokens</strong> come in. Without that extra monotonic token, a paused client can resume after its lease expired and still damage shared state.</p>
+    <p>&#x2022; The consistency chapters also cleanly separate <strong>linearizability</strong>, <strong>serializability</strong>, and <strong>eventual consistency</strong>. For KV stores that distinction matters because many systems give you per-key ordering, but not a single serial history across keys, partitions, or replicas.</p>
+  </div>
+
+  <div id="ref4" class="callout yellow">
+    <div class="callout-label">[4] Ongaro &amp; Ousterhout — "In Search of an Understandable Consensus Algorithm (Raft)" (2014)</div>
+    <p><strong>Diego Ongaro, John Ousterhout.</strong> USENIX ATC, 2014.<br>
+    <a href="https://raft.github.io/raft.pdf" style="color:var(--yellow);" target="_blank">https://raft.github.io/raft.pdf</a></p>
+    <p>&#x2022; Raft defines the <strong>commit rule</strong> that etcd relies on: a leader appends a log entry, replicates it to followers, and only marks it committed once a majority has stored it. An ACK before that point is not durable; an ACK after that point survives follower loss.</p>
+    <p>&#x2022; The safety section is the important part for KV systems. <strong>Election restriction</strong> prevents a node with an older log from becoming leader, and <strong>log matching</strong> guarantees that if two entries share an index and term, their entire prefix is identical. That is why a read-after-write system can trust the replicated log as the source of truth.</p>
+    <p>&#x2022; <strong>Terms</strong>, <strong>heartbeats</strong>, and <strong>AppendEntries</strong> are not background protocol trivia; they are the exact mechanism that converts a cluster of disks into one ordered write stream. This is the paper to read if you want to understand why etcd is good at tiny metadata writes and bad at cache-like request rates.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals &middot; built for deep understanding
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+</body>
+</html>

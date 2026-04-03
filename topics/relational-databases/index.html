@@ -802,81 +802,48 @@ flowchart LR
   <h2>Mental Model — Query Execution Under Load</h2>
 
   <div class="diagram-wrap">
-    <svg viewBox="0 0 860 680" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <defs>
-        <marker id="qm-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-          <path d="M0,0 L8,3 L0,6" fill="#8891a8"/>
-        </marker>
-      </defs>
-      <rect x="60" y="24" width="270" height="58" rx="10" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
-      <text x="195" y="51" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#60a5fa" font-weight="600">
-        <tspan x="195" dy="0">SELECT * FROM orders</tspan>
-        <tspan x="195" dy="14">WHERE user_id = 42</tspan>
-      </text>
+    <pre class="mermaid">
+flowchart LR
+    Q["SELECT * FROM orders WHERE user_id = 42"]
+    P["Query Planner"]
+    I["Index Scan"]
+    S["Seq Scan"]
+    T1["~0.1 ms"]
+    T2["~200 ms"]
+    N1["Without an index, concurrent reads keep re-scanning large parts of the table"]
+    N2["With an index, hot pages stay resident in the buffer pool"]
+    N3["Buffer pool size decides whether a page read hits DRAM or disk"]
+    N4["MVCC avoids reader-writer blocking, but dead tuples still add scan work until VACUUM"]
+    W["row change -> WAL append -> fsync -> commit ACK"]
+    N5["Commit latency is usually gated by durable WAL flush, not in-memory page updates"]
+    N6["Group commit amortizes one fsync across many transactions"]
 
-      <path d="M195 82 L195 112" stroke="#8891a8" stroke-width="1.5" marker-end="url(#qm-arrow)"/>
+    Q --> P
+    P --> I --> T1
+    P --> S --> T2
+    I -.-> N2
+    S -.-> N1
+    P -.-> N3
+    P -.-> N4
+    P -.-> W
+    W -.-> N5
+    W -.-> N6
 
-      <rect x="110" y="122" width="170" height="78" rx="12" fill="#1f2531" stroke="#a78bfa" stroke-width="1.5"/>
-      <text x="195" y="150" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Query Planner</text>
-      <text x="195" y="171" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
-        <tspan x="195" dy="0">cost estimates · stats</tspan>
-        <tspan x="195" dy="13">index choices</tspan>
-      </text>
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef fast fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef slow fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef write fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
 
-      <path d="M160 200 L120 232" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#qm-arrow)"/>
-      <path d="M230 200 L270 232" stroke="#f87171" stroke-width="1.5" marker-end="url(#qm-arrow)"/>
-
-      <rect x="36" y="244" width="170" height="142" rx="12" fill="#1f2531" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="121" y="274" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Index Scan</text>
-      <text x="121" y="297" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6ee7b7">B-tree on user_id</text>
-      <text x="121" y="322" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
-        <tspan x="121" dy="0">touches ~3-4 pages</tspan>
-        <tspan x="121" dy="13">often served from</tspan>
-        <tspan x="121" dy="13">buffer pool</tspan>
-      </text>
-      <rect x="62" y="398" width="118" height="30" rx="8" fill="rgba(110,231,183,0.12)" stroke="#6ee7b7" stroke-width="1"/>
-      <text x="121" y="417" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6ee7b7">~0.1 ms</text>
-
-      <rect x="224" y="244" width="170" height="142" rx="12" fill="#1f2531" stroke="#f87171" stroke-width="1.5"/>
-      <text x="309" y="274" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="16" fill="#e2e6f0" font-weight="600">Seq Scan</text>
-      <text x="309" y="297" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#f87171">no usable index</text>
-      <text x="309" y="322" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#8891a8">
-        <tspan x="309" dy="0">reads every heap page</tspan>
-        <tspan x="309" dy="13">competes for disk</tspan>
-        <tspan x="309" dy="13">and cache</tspan>
-      </text>
-      <rect x="250" y="398" width="118" height="30" rx="8" fill="rgba(248,113,113,0.12)" stroke="#f87171" stroke-width="1"/>
-      <text x="309" y="417" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#f87171">~200 ms</text>
-
-      <rect x="438" y="24" width="362" height="338" rx="12" fill="#14171e" stroke="#2a3040" stroke-width="1.5"/>
-      <text x="462" y="54" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">LOAD EFFECTS</text>
-      <text x="462" y="86" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">1. Without an index, every concurrent query</text>
-      <text x="462" y="106" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">re-reads a large fraction of the table and</text>
-      <text x="462" y="126" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">burns I/O bandwidth on work that does not narrow fast.</text>
-      <text x="462" y="158" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">2. With an index, the critical path is tiny enough</text>
-      <text x="462" y="178" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">that index pages and hot heap pages stay resident</text>
-      <text x="462" y="198" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">in the buffer pool for repeated requests.</text>
-      <text x="462" y="230" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24">3. Buffer pool size changes whether</text>
-      <text x="462" y="250" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24">“read a page” means DRAM or disk.</text>
-      <text x="462" y="282" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">4. MVCC keeps readers off writer locks, but</text>
-      <text x="462" y="302" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">dead tuples still create extra scan work until</text>
-      <text x="462" y="322" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">VACUUM cleans them up.</text>
-
-      <rect x="438" y="388" width="362" height="268" rx="12" fill="#14171e" stroke="#2a3040" stroke-width="1.5"/>
-      <text x="462" y="418" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fbbf24" font-weight="600">WRITE PATH BOTTLENECK</text>
-      <rect x="462" y="436" width="314" height="48" rx="8" fill="#1f2531" stroke="#fbbf24" stroke-width="1"/>
-      <text x="619" y="457" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fbbf24">
-        <tspan x="619" dy="0">row change → WAL append</tspan>
-        <tspan x="619" dy="14">→ fsync → commit ACK</tspan>
-      </text>
-      <text x="462" y="512" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">The commit latency floor is usually set by</text>
-      <text x="462" y="532" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">durable WAL flush, not by how quickly PostgreSQL</text>
-      <text x="462" y="552" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">can modify in-memory pages.</text>
-      <text x="462" y="584" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">Group commit improves throughput by</text>
-      <text x="462" y="604" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">amortizing one fsync across many</text>
-      <text x="462" y="624" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">transactions while data files lag safely behind.</text>
-    </svg>
-    <div class="diagram-caption">Query execution: index scan (fast path) vs sequential scan (slow path), with concurrency and write-path annotations</div>
+    class Q user;
+    class P core;
+    class I,T1 fast;
+    class S,T2 slow;
+    class W write;
+    class N1,N2,N3,N4,N5,N6 note;
+    </pre>
+    <div class="diagram-caption">Query execution under load: the planner chooses between a tiny indexed read path and a wide sequential scan, while writes still pay the WAL and `fsync()` durability cost.</div>
   </div>
 
   <div class="callout green">

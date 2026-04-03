@@ -102,6 +102,30 @@ GRAPH_LAYOUT = {
         "deps": ["storage", "client-server-model"],
         "orbit_rotation": -36,
     },
+    "key-value-stores": {
+        "x": 1260,
+        "y": 820,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["storage", "hashing"],
+        "orbit_rotation": 34,
+    },
+    "specialized-storage": {
+        "x": 1310,
+        "y": 220,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["storage", "relational-databases", "key-value-stores"],
+        "orbit_rotation": 12,
+    },
+    "replication-sharding": {
+        "x": 1170,
+        "y": 230,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["storage", "relational-databases", "availability", "hashing"],
+        "orbit_rotation": -8,
+    },
 }
 
 

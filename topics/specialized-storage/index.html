@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Specialized Storage Paradigms</title>
+<meta name="description" content="A system design guide to blob storage, time series databases, graph databases, and spatial storage systems, with the trade-offs that make each one useful.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 12</div>
+  <h1><span>Specialized Storage</span> Paradigms</h1>
+  <p class="hero-sub">Not every problem fits in a relational table or a key-value pair. Some data is inherently temporal, spatial, graph-shaped, or just enormous binary blobs. Picking the right specialized storage paradigm can turn an impossible query into a trivial one.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms Overview</a></li>
+    <li><a href="#s1">Blob Storage — S3 &amp; GCS</a></li>
+    <li><a href="#s2">Time Series Databases</a></li>
+    <li><a href="#s3">Graph Databases</a></li>
+    <li><a href="#s4">Spatial Databases &amp; Quadtrees</a></li>
+    <li><a href="#s5">The Decision Matrix — When to Use What</a></li>
+    <li><a href="#s6">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s7">Mini-Project: Build a Quadtree</a></li>
+    <li><a href="#s8">Production Example 1: Gorilla (Facebook TSDB)</a></li>
+    <li><a href="#s9">Production Example 2: Uber H3 (Spatial)</a></li>
+    <li><a href="#s10">Edge Cases &amp; Gotchas</a></li>
+    <li><a href="#s11">What If? — Interactive Exploration</a></li>
+    <li><a href="#s12">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s12b">Actual System Design Interview</a></li>
+    <li><a href="#s13">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Key Terms Overview</h2>
+
+  <h3>Blob Storage</h3>
+  <p>A storage service optimized for holding large, unstructured binary objects — images, videos, database backups, ML model artifacts, log archives. Unlike a KV store (which optimizes for small, fast reads), blob storage optimizes for <strong>large object throughput and durability</strong> at low cost per GB. The API is minimal: <code class="inline">PUT(key, bytes)</code>, <code class="inline">GET(key) → bytes</code>, <code class="inline">DELETE(key)</code>. Internally, objects are split into chunks, replicated across multiple disks/datacenters, and erasure-coded for durability. AWS S3 guarantees 99.999999999% (eleven 9s) durability. GCS and Azure Blob Storage offer similar guarantees. In system design interviews, blob storage is the default answer for "where do I put images/videos/files?" — never store large binaries in a relational database.</p>
+
+  <h3>Time Series Database (TSDB)</h3>
+  <p>A database optimized for data that arrives as a stream of <strong>(timestamp, value)</strong> pairs — CPU utilization at 10-second intervals, stock prices per second, IoT sensor readings, application metrics. TSDBs exploit the temporal structure: timestamps are nearly sequential (so delta-of-delta compression shrinks them dramatically), values change slowly between consecutive points (XOR compression reduces them to a few bits), and queries are almost always time-range scans ("give me the last 24 hours of CPU for server X"). Products: InfluxDB, Prometheus, TimescaleDB (PostgreSQL extension), ClickHouse, VictoriaMetrics. Facebook's Gorilla achieved <strong>12x compression</strong> using these techniques. <a href="#ref1" class="ref">[1]</a></p>
+
+  <h3>Graph Database</h3>
+  <p>A database where the primary data model is <strong>nodes</strong> (entities) and <strong>edges</strong> (relationships between entities), each with properties. Optimized for traversing deep relationship chains — "find all friends of friends who also like jazz and live within 50km" — which would require expensive recursive JOINs in SQL but is a natural traversal in a graph. The query language is typically <strong>Cypher</strong> (Neo4j) or <strong>Gremlin</strong> (Apache TinkerPop). Use cases: social networks, recommendation engines, fraud detection (follow the money through transaction chains), knowledge graphs, identity resolution. Products: Neo4j, Amazon Neptune, JanusGraph, Dgraph.</p>
+
+  <h3>Spatial Database</h3>
+  <p>A database (or extension to an existing DB) that can store, index, and query <strong>geographic data</strong> — points (latitude/longitude), lines, polygons, regions. The key capability: <strong>spatial queries</strong> like "find all restaurants within 2km of my location" or "does this delivery zone polygon contain this address point?" Spatial indexing structures like <strong>quadtrees</strong>, <strong>R-trees</strong>, and <strong>geohashes</strong> make these queries efficient — without them, you'd need to compute distances to every point in the dataset. Products: PostGIS (PostgreSQL extension, the industry standard), MongoDB (2dsphere indexes), Redis (GEO commands), Elasticsearch (geo_point). Uber's H3 hexagonal grid system is a modern approach to spatial indexing.</p>
+
+  <h3>Quadtree</h3>
+  <p>A tree data structure for indexing 2D spatial data. Each node represents a rectangular region. When a region contains more than N points (the capacity), it splits into four equal quadrants (children). This recursively partitions space: dense areas (cities) get deeply subdivided, sparse areas (oceans) stay as single large nodes. Lookup is <strong>O(log₄ N)</strong> — traverse from root, pick the quadrant containing the query point, repeat until a leaf. Range queries ("find all points within this rectangle") prune entire subtrees that don't intersect the query rectangle.</p>
+</section>
+
+<!-- ============ SECTION 1: BLOB ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>Blob Storage — S3 &amp; GCS</h2>
+
+  <p>Blob storage solves a specific problem: <strong>storing and retrieving large, immutable objects cheaply and durably</strong>. It's not a database — you can't query the contents. You can only put, get, and delete by key (the object path).</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Property</th><th>AWS S3</th><th>Google Cloud Storage</th><th>Azure Blob Storage</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Durability</strong></td><td>99.999999999% (11 nines)</td><td>99.999999999%</td><td>99.999999999%+</td></tr>
+        <tr><td><strong>Availability</strong></td><td>99.99% (Standard)</td><td>99.99%</td><td>99.9%+</td></tr>
+        <tr><td><strong>Max object size</strong></td><td>5 TB</td><td>5 TB</td><td>~4.75 TB (block blob)</td></tr>
+        <tr><td><strong>Storage tiers</strong></td><td>Standard, IA, Glacier, Deep Archive</td><td>Standard, Nearline, Coldline, Archive</td><td>Hot, Cool, Cold, Archive</td></tr>
+        <tr><td><strong>Cost (Standard, per GB/month)</strong></td><td>~$0.023</td><td>~$0.020</td><td>~$0.018</td></tr>
+        <tr><td><strong>Typical use</strong></td><td>Static assets, backups, data lake, ML training data</td><td>Same + BigQuery integration</td><td>Same + Azure ecosystem</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">When to Use Blob Storage</div>
+    <p><strong>Always use blob storage for:</strong> user-uploaded images/videos, static website assets (CSS/JS/fonts via CDN), database backups, log archives, ML training datasets, large file downloads. <strong>Never put large binaries in PostgreSQL</strong> — a 10MB image stored as a BYTEA column bloats the table, slows VACUUM, wastes buffer pool RAM, and makes backups enormous. Store the image in S3, store the S3 URL in PostgreSQL. This pattern (relational DB for metadata, blob store for content) is universal.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 2: TSDB ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Time Series Databases</h2>
+
+  <p>Time series data has three properties that specialized TSDBs exploit: <strong>(1)</strong> writes are append-only (you never update a past data point), <strong>(2)</strong> timestamps are nearly evenly spaced (delta compression works beautifully), and <strong>(3)</strong> queries are almost always time-range scans ("last hour," "last 7 days") rather than random lookups.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>TSDB</th><th>Storage Engine</th><th>Query Language</th><th>Best For</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Prometheus</strong></td><td>Local disk, custom TSDB with inverted index + chunks</td><td>PromQL</td><td>Infrastructure monitoring, Kubernetes metrics, alerting (pull model)</td></tr>
+        <tr><td><strong>InfluxDB</strong></td><td>Custom TSM (Time-Structured Merge Tree)</td><td>InfluxQL / Flux</td><td>IoT sensor data, application metrics, analytics (push model)</td></tr>
+        <tr><td><strong>TimescaleDB</strong></td><td>PostgreSQL extension (hypertables = auto-partitioned tables)</td><td>Full SQL</td><td>When you want TSDB performance with PostgreSQL's full SQL and JOIN capabilities</td></tr>
+        <tr><td><strong>ClickHouse</strong></td><td>Columnar, MergeTree</td><td>SQL-like</td><td>Analytics, log analysis, extremely fast aggregation on billions of rows</td></tr>
+        <tr><td><strong>VictoriaMetrics</strong></td><td>Custom, Prometheus-compatible</td><td>MetricsQL (PromQL superset)</td><td>Long-term Prometheus storage, high-cardinality metrics</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>How TSDB Compression Works</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Delta-of-delta for timestamps + XOR for values (Gorilla algorithm)</span></div>
+    <pre><span class="h">Raw data (16 bytes per point):</span>
+  <span class="num">t=1711900000</span>  v=<span class="num">72.5</span>    <span class="cm">← 8 bytes timestamp + 8 bytes float64</span>
+  <span class="num">t=1711900010</span>  v=<span class="num">72.3</span>
+  <span class="num">t=1711900020</span>  v=<span class="num">72.3</span>
+  <span class="num">t=1711900030</span>  v=<span class="num">72.8</span>
+
+<span class="h">Step 1: Delta-of-delta timestamps</span>
+  delta:      <span class="num">10</span>,     <span class="num">10</span>,     <span class="num">10</span>
+  delta-of-delta: <span class="num">0</span>,  <span class="num">0</span>,  <span class="num">0</span>     <span class="cm">← all zeros! Encode as 1 bit each.</span>
+  <span class="cm">If interval is perfectly regular → each timestamp costs 1 bit (not 64!).</span>
+
+<span class="h">Step 2: XOR for values</span>
+  72.5 XOR 72.3 = <span class="num">small diff</span>   <span class="cm">← only a few bits differ</span>
+  72.3 XOR 72.3 = <span class="num">0</span>           <span class="cm">← identical! Encode as 1 bit (zero flag).</span>
+  72.3 XOR 72.8 = <span class="num">small diff</span>
+
+<span class="h">Result: 16 bytes/point → ~1.37 bytes/point average (12× compression)</span>
+<span class="cm">This is Facebook's Gorilla algorithm. Prometheus and VictoriaMetrics use variants.</span></pre>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">When to Use a TSDB vs PostgreSQL</div>
+    <p><strong>Use a TSDB when:</strong> You're ingesting millions of data points per second (monitoring, IoT), queries are time-range aggregations (avg CPU last hour, 95th percentile latency last week), and you need built-in downsampling and retention policies. <strong>Use PostgreSQL (or TimescaleDB) when:</strong> You need JOINs between time series and relational data (join metrics with user metadata), your volume is moderate (&lt;100K points/sec), or your team already knows SQL. TimescaleDB is a good middle ground — full SQL with auto-partitioning for time series.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3: GRAPH ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Graph Databases</h2>
+
+  <p>Graph databases model data as <strong>nodes</strong> (entities) connected by <strong>edges</strong> (relationships). Each node and edge can have arbitrary properties. The killer feature: <strong>traversals</strong> — following chains of relationships — are O(1) per hop (follow a pointer), whereas SQL JOINs for the same traversal are O(N) per level (scan/index lookup on the joined table).</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Graph query: "Find friends of friends who like jazz" — Cypher (Neo4j)</span></div>
+    <pre><span class="cm">-- In SQL, this requires 3 recursive JOINs:</span>
+<span class="kw">SELECT</span> fof.name
+<span class="kw">FROM</span> users u
+<span class="kw">JOIN</span> friendships f1 <span class="kw">ON</span> u.id = f1.user_id
+<span class="kw">JOIN</span> friendships f2 <span class="kw">ON</span> f1.friend_id = f2.user_id
+<span class="kw">JOIN</span> users fof <span class="kw">ON</span> f2.friend_id = fof.id
+<span class="kw">JOIN</span> user_interests ui <span class="kw">ON</span> fof.id = ui.user_id
+<span class="kw">WHERE</span> u.name = <span class="str">'Alice'</span> <span class="kw">AND</span> ui.interest = <span class="str">'jazz'</span>;
+<span class="cm">-- Gets exponentially slower with depth. 6 degrees? Practically impossible.</span>
+
+<span class="cm">-- In Cypher (Neo4j), the same query is a natural traversal:</span>
+<span class="fn">MATCH</span> (alice:User {name: <span class="str">'Alice'</span>})-[:FRIENDS_WITH*2]-(fof:User)
+      -[:LIKES]->(genre:Interest {name: <span class="str">'jazz'</span>})
+<span class="kw">RETURN</span> fof.name;
+<span class="cm">-- *2 means "exactly 2 hops." Change to *1..6 for "up to 6 degrees."</span>
+<span class="cm">-- Each hop follows a pointer — O(1) per hop, regardless of graph size.</span></pre>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Use Case</th><th>Why Graph Wins</th><th>Product</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Social networks</strong></td><td>Friend-of-friend, mutual connections, influence propagation</td><td>Neo4j, Amazon Neptune</td></tr>
+        <tr><td><strong>Fraud detection</strong></td><td>Follow money through transaction chains, detect circular transfers</td><td>Neo4j, TigerGraph</td></tr>
+        <tr><td><strong>Recommendation engines</strong></td><td>"Users who bought X also bought Y" — collaborative filtering via graph</td><td>Neo4j, Amazon Neptune</td></tr>
+        <tr><td><strong>Knowledge graphs</strong></td><td>Entities + relationships (Google Knowledge Graph, Wikidata)</td><td>Neo4j, Dgraph, Stardog</td></tr>
+        <tr><td><strong>Identity resolution</strong></td><td>Link the same person across accounts, devices, emails</td><td>TigerGraph, Neo4j</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">When NOT to Use a Graph Database</div>
+    <p><strong>Don't use a graph DB if:</strong> (1) Your queries are primarily key-value lookups or simple filters (use PostgreSQL or DynamoDB). (2) You need ACID transactions across large batches of data (graph DBs have varying transaction support). (3) Your relationships are simple and shallow (1-2 levels of JOINs in SQL are fine). (4) You need full-text search or aggregation-heavy analytics (use Elasticsearch or ClickHouse). Graph DBs shine specifically when you need deep, variable-length path traversals — if you're not doing that, they add complexity without benefit.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4: SPATIAL ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Spatial Databases &amp; Quadtrees</h2>
+
+  <p>Spatial databases store and query geographic data — points, lines, and polygons on the Earth's surface. The fundamental query is: <strong>"find all entities near this location"</strong> — which is O(N) without a spatial index and O(log N) with one.</p>
+
+  <h3>Spatial Indexing Approaches</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Index</th><th>How It Works</th><th>Strengths</th><th>Used By</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Quadtree</strong></td><td>Recursively divide 2D space into 4 quadrants. Dense areas subdivide deeply.</td><td>Simple, adaptive to density. O(log₄ N) lookup.</td><td>In-memory spatial search, game engines, some GIS tools</td></tr>
+        <tr><td><strong>R-tree</strong></td><td>Group nearby objects into bounding rectangles, organized in a balanced tree.</td><td>Handles rectangles/polygons (not just points). Disk-friendly (B-tree-like).</td><td>PostGIS (default), SQLite SpatiaLite, MongoDB</td></tr>
+        <tr><td><strong>Geohash</strong></td><td>Encode lat/lng into a string. Nearby points share a common prefix.</td><td>Prefix-based range queries on standard B-tree indexes. No special index type needed.</td><td>Redis GEO, Elasticsearch, DynamoDB (with geohash as sort key)</td></tr>
+        <tr><td><strong>H3 (Hexagonal)</strong></td><td>Divide Earth into hexagonal cells at multiple resolutions. Each cell has a unique ID.</td><td>Uniform cell areas (unlike geohash rectangles). Good for aggregation and analytics.</td><td>Uber (ride ETA, pricing zones), Foursquare</td></tr>
+        <tr><td><strong>S2 Geometry</strong></td><td>Map Earth's surface to the faces of a cube, then recursively subdivide. Each cell is a 64-bit ID.</td><td>Arbitrary precision, covering queries, used at Google scale.</td><td>Google Maps, Google S2 library, CockroachDB</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Quadtree — How It Works</h3>
+  <div class="memory-map"><span class="h">QUADTREE SUBDIVISION (capacity = 4 points per node)</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Root</span>: entire map area (e.g., 0,0 to 1000,1000)
+<span class="d">│</span>   Contains 7 restaurants → exceeds capacity (4) → <span class="v">SPLIT into 4 quadrants</span>
+<span class="d">│</span>
+<span class="d">├──</span> NW quadrant (0-500, 500-1000): 1 restaurant → leaf (under capacity)
+<span class="d">├──</span> NE quadrant (500-1000, 500-1000): 2 restaurants → leaf
+<span class="d">├──</span> SW quadrant (0-500, 0-500): 0 restaurants → leaf (empty)
+<span class="d">└──</span> SE quadrant (500-1000, 0-500): 4 restaurants → <span class="v">at capacity, stays as leaf</span>
+    <span class="cm">If a 5th restaurant is added to SE → SE splits into 4 sub-quadrants.</span>
+
+<span class="h">QUERY: "Find all restaurants within 2km of (700, 200)"</span>
+<span class="d">│</span>
+<span class="d">├──</span> Start at root. Which quadrants overlap a circle of radius 2km around (700,200)?
+<span class="d">├──</span> NW? No overlap → <span class="str">prune entire subtree</span> (0 points checked)
+<span class="d">├──</span> NE? Partial overlap → <span class="v">descend and check 2 points</span>
+<span class="d">├──</span> SW? No overlap → <span class="str">prune</span>
+<span class="d">└──</span> SE? Full overlap → <span class="v">check all 4 points</span>
+    <span class="cm">Total: checked 6 out of 7 points. With 10M points, pruning saves 99%+ of work.</span></div>
+</section>
+
+<!-- ============ SECTION 5: DECISION ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>The Decision Matrix — When to Use What</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Data Shape</th><th>Access Pattern</th><th>Choose</th><th>Don't Choose</th></tr></thead>
+      <tbody>
+        <tr><td>Large binaries (images, videos, backups)</td><td>PUT/GET by path, no querying content</td><td><strong>S3 / GCS / Azure Blob</strong></td><td>PostgreSQL BYTEA, MongoDB GridFS</td></tr>
+        <tr><td>Timestamped metrics at high volume</td><td>Append-only writes, time-range aggregations</td><td><strong>Prometheus / InfluxDB / TimescaleDB</strong></td><td>PostgreSQL (partitioning helps but purpose-built TSDBs compress 10-12x better)</td></tr>
+        <tr><td>Deeply connected entities</td><td>Multi-hop traversals, path finding</td><td><strong>Neo4j / Neptune</strong></td><td>PostgreSQL recursive CTEs (too slow for 4+ hops at scale)</td></tr>
+        <tr><td>Geographic points/polygons</td><td>Proximity search, containment, distance</td><td><strong>PostGIS / Redis GEO / H3</strong></td><td>Plain PostgreSQL without spatial index (O(N) distance calc)</td></tr>
+        <tr><td>Structured records with relationships</td><td>JOINs, ACID transactions, complex queries</td><td><strong>PostgreSQL / MySQL</strong></td><td>Any of the above (they lack JOINs, ACID, or SQL)</td></tr>
+        <tr><td>Simple key → value</td><td>GET/PUT by key, sub-ms</td><td><strong>Redis / DynamoDB</strong></td><td>Any of the above (overkill for key-value)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">The Polyglot Persistence Pattern</div>
+    <p>Most real systems use <strong>multiple storage paradigms together</strong>: PostgreSQL for user accounts and orders (relational), Redis for sessions and rate limiting (KV), S3 for user-uploaded images (blob), Prometheus for infrastructure metrics (TSDB), and maybe Neo4j for a recommendation graph. This is called <strong>polyglot persistence</strong> — choosing the right storage engine for each data shape, rather than forcing everything into one database. Reference: DDIA Ch. 2 discusses this as a natural consequence of the "one-size-fits-all database" being a myth.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 6: DEMOS ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: Spatial Queries with SQLite</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Haversine distance query — works anywhere Python is installed (macOS/Linux/WSL)</span></div>
+    <pre>$ <span class="fn">python3</span> -c "
+<span class="kw">import</span> sqlite3, math
+
+db = sqlite3.connect(':memory:')
+db.execute('CREATE TABLE places (name TEXT, lat REAL, lng REAL)')
+
+<span class="cm"># Insert some Berlin landmarks</span>
+places = [
+    ('Brandenburger Tor', 52.5163, 13.3777),
+    ('Fernsehturm', 52.5208, 13.4094),
+    ('Reichstag', 52.5186, 13.3761),
+    ('East Side Gallery', 52.5052, 13.4396),
+    ('Schloss Charlottenburg', 52.5209, 13.2959),
+]
+db.executemany('INSERT INTO places VALUES (?,?,?)', places)
+
+<span class="cm"># Haversine distance function (registered as SQLite UDF)</span>
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371  <span class="cm"># Earth radius in km</span>
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+db.create_function('haversine', 4, haversine)
+
+<span class="cm"># Query: places within 3km of Alexanderplatz (52.5219, 13.4132)</span>
+my_lat, my_lng = 52.5219, 13.4132
+results = db.execute('''
+    SELECT name, ROUND(haversine(lat, lng, ?, ?), 2) AS dist_km
+    FROM places
+    WHERE haversine(lat, lng, ?, ?) < 3
+    ORDER BY dist_km
+''', [my_lat, my_lng, my_lat, my_lng]).fetchall()
+
+print('Places within 3km of Alexanderplatz:')
+for name, dist in results:
+    print(f'  {dist:.2f} km — {name}')
+"
+
+Places within 3km of Alexanderplatz:
+  <span class="num">0.30</span> km — Fernsehturm
+  <span class="num">2.47</span> km — Brandenburger Tor
+  <span class="num">2.56</span> km — Reichstag
+  <span class="num">2.24</span> km — East Side Gallery</pre>
+  </div>
+
+  <h3>Demo 2: Redis GEO Commands for Spatial</h3>
+  <div class="code-block">
+    <div class="code-header"><span>Redis built-in spatial commands (requires Redis — brew install redis / apt install redis)</span></div>
+    <pre>$ <span class="fn">redis-cli</span>
+
+<span class="cm"># Add locations with GEOADD (longitude first, then latitude!)</span>
+127.0.0.1:6379&gt; <span class="fn">GEOADD</span> <span class="str">places</span> 13.3777 52.5163 <span class="str">"Brandenburger_Tor"</span>
+127.0.0.1:6379&gt; <span class="fn">GEOADD</span> <span class="str">places</span> 13.4094 52.5208 <span class="str">"Fernsehturm"</span>
+127.0.0.1:6379&gt; <span class="fn">GEOADD</span> <span class="str">places</span> 13.4396 52.5052 <span class="str">"East_Side_Gallery"</span>
+
+<span class="cm"># Find all places within 3km of Alexanderplatz</span>
+127.0.0.1:6379&gt; <span class="fn">GEOSEARCH</span> <span class="str">places</span> FROMLONLAT 13.4132 52.5219 BYRADIUS 3 km ASC WITHCOORD WITHDIST
+1) <span class="str">"Fernsehturm"</span>         dist: <span class="num">"0.3044"</span>
+2) <span class="str">"East_Side_Gallery"</span>   dist: <span class="num">"2.4010"</span>
+3) <span class="str">"Brandenburger_Tor"</span>   dist: <span class="num">"2.5642"</span>
+
+<span class="cm"># Distance between two places</span>
+127.0.0.1:6379&gt; <span class="fn">GEODIST</span> <span class="str">places</span> <span class="str">"Brandenburger_Tor"</span> <span class="str">"Fernsehturm"</span> km
+<span class="num">"2.3015"</span>
+
+<span class="cm"># Under the hood: Redis encodes lat/lng as a 52-bit geohash in a Sorted Set.</span>
+<span class="cm"># GEOSEARCH is a ZRANGEBYSCORE on the geohash range. O(log N + M) where M = results.</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 7: MINI-PROJECT ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Mini-Project: Build a Quadtree</h2>
+
+  <div class="code-block">
+    <div class="code-header"><span>quadtree.py — spatial index from scratch (macOS/Linux/WSL, Python 3.7+)</span></div>
+    <pre><span class="kw">import</span> random, time
+
+<span class="kw">class</span> <span class="fn">Point</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, x, y, data=<span class="num">None</span>):
+        self.x, self.y, self.data = x, y, data
+
+<span class="kw">class</span> <span class="fn">Rect</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, cx, cy, hw, hh):
+        self.cx, self.cy, self.hw, self.hh = cx, cy, hw, hh  <span class="cm"># center + half-width/height</span>
+    <span class="kw">def</span> <span class="fn">contains</span>(self, p):
+        <span class="kw">return</span> abs(p.x - self.cx) <= self.hw <span class="kw">and</span> abs(p.y - self.cy) <= self.hh
+    <span class="kw">def</span> <span class="fn">intersects</span>(self, r):
+        <span class="kw">return not</span> (r.cx - r.hw > self.cx + self.hw <span class="kw">or</span> r.cx + r.hw < self.cx - self.hw
+                 <span class="kw">or</span> r.cy - r.hh > self.cy + self.hh <span class="kw">or</span> r.cy + r.hh < self.cy - self.hh)
+
+<span class="kw">class</span> <span class="fn">QuadTree</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, boundary, capacity=<span class="num">4</span>):
+        self.boundary = boundary
+        self.capacity = capacity
+        self.points = []
+        self.divided = <span class="num">False</span>
+        self.nw = self.ne = self.sw = self.se = <span class="num">None</span>
+
+    <span class="kw">def</span> <span class="fn">subdivide</span>(self):
+        cx, cy, hw, hh = self.boundary.cx, self.boundary.cy, self.boundary.hw / <span class="num">2</span>, self.boundary.hh / <span class="num">2</span>
+        self.nw = QuadTree(Rect(cx - hw, cy + hh, hw, hh), self.capacity)
+        self.ne = QuadTree(Rect(cx + hw, cy + hh, hw, hh), self.capacity)
+        self.sw = QuadTree(Rect(cx - hw, cy - hh, hw, hh), self.capacity)
+        self.se = QuadTree(Rect(cx + hw, cy - hh, hw, hh), self.capacity)
+        self.divided = <span class="num">True</span>
+
+    <span class="kw">def</span> <span class="fn">insert</span>(self, point):
+        <span class="kw">if not</span> self.boundary.contains(point): <span class="kw">return</span> <span class="num">False</span>
+        <span class="kw">if</span> len(self.points) < self.capacity <span class="kw">and not</span> self.divided:
+            self.points.append(point); <span class="kw">return</span> <span class="num">True</span>
+        <span class="kw">if not</span> self.divided: self.subdivide()
+        <span class="kw">return</span> self.nw.insert(point) <span class="kw">or</span> self.ne.insert(point) <span class="kw">or</span> self.sw.insert(point) <span class="kw">or</span> self.se.insert(point)
+
+    <span class="kw">def</span> <span class="fn">query</span>(self, range_rect, found=<span class="num">None</span>):
+        <span class="kw">if</span> found <span class="kw">is</span> <span class="num">None</span>: found = []
+        <span class="kw">if not</span> self.boundary.intersects(range_rect): <span class="kw">return</span> found  <span class="cm"># PRUNE</span>
+        <span class="kw">for</span> p <span class="kw">in</span> self.points:
+            <span class="kw">if</span> range_rect.contains(p): found.append(p)
+        <span class="kw">if</span> self.divided:
+            self.nw.query(range_rect, found); self.ne.query(range_rect, found)
+            self.sw.query(range_rect, found); self.se.query(range_rect, found)
+        <span class="kw">return</span> found
+
+<span class="cm"># ── Benchmark: quadtree vs brute-force ──</span>
+N = <span class="num">100_000</span>
+points = [Point(random.uniform(<span class="num">0</span>, <span class="num">1000</span>), random.uniform(<span class="num">0</span>, <span class="num">1000</span>), f<span class="str">"p{i}"</span>) <span class="kw">for</span> i <span class="kw">in</span> range(N)]
+qt = QuadTree(Rect(<span class="num">500</span>, <span class="num">500</span>, <span class="num">500</span>, <span class="num">500</span>), capacity=<span class="num">8</span>)
+<span class="kw">for</span> p <span class="kw">in</span> points: qt.insert(p)
+
+search = Rect(<span class="num">450</span>, <span class="num">450</span>, <span class="num">50</span>, <span class="num">50</span>)  <span class="cm"># 100×100 area in center</span>
+
+t0 = time.perf_counter()
+qt_found = qt.query(search)
+qt_ms = (time.perf_counter() - t0) * <span class="num">1000</span>
+
+t0 = time.perf_counter()
+bf_found = [p <span class="kw">for</span> p <span class="kw">in</span> points <span class="kw">if</span> search.contains(p)]
+bf_ms = (time.perf_counter() - t0) * <span class="num">1000</span>
+
+print(f<span class="str">"Quadtree:    {len(qt_found)} points found in {qt_ms:.1f}ms"</span>)
+print(f<span class="str">"Brute-force: {len(bf_found)} points found in {bf_ms:.1f}ms"</span>)
+print(f<span class="str">"Speedup:     {bf_ms/qt_ms:.0f}×"</span>)</pre>
+  </div>
+  <div class="code-block">
+    <div class="code-header"><span>Expected output (approximate)</span></div>
+    <pre>Quadtree:    <span class="num">1012</span> points found in <span class="num">0.8</span>ms
+Brute-force: <span class="num">1012</span> points found in <span class="num">8.5</span>ms
+Speedup:     <span class="num">10</span>×
+
+<span class="cm"># With 10M points, the speedup would be 100×+</span>
+<span class="cm"># Quadtree prunes ~90% of points without checking them.</span></pre>
+  </div>
+</section>
+
+<!-- ============ PRODUCTION EXAMPLES ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Production Example 1: Gorilla (Facebook TSDB)</h2>
+
+  <p>Gorilla is Facebook's in-memory TSDB, published at VLDB 2015. <a href="#ref1" class="ref">[1]</a> It was built because HBase-backed monitoring was too slow for real-time anomaly detection across Facebook's infrastructure.</p>
+
+  <h3>Key Design Decisions</h3>
+  <p><strong>In-memory first:</strong> All recent data (last 26 hours) lives in RAM. Queries never hit disk for recent data — reducing read latency by 73× and improving query throughput by 14× compared to the HBase-backed system.</p>
+  <p><strong>12× compression:</strong> Using delta-of-delta timestamps + XOR'd floating point values, Gorilla compresses each data point from 16 bytes to an average of 1.37 bytes. This is what makes in-memory storage practical at Facebook's scale.</p>
+  <p><strong>Availability over accuracy:</strong> Gorilla prioritizes always being available for writes (monitoring can't have gaps). If a region fails, the other region keeps ingesting. Small amounts of data loss during failure are acceptable — missing a few data points doesn't affect aggregate analysis.</p>
+</section>
+
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production Example 2: Uber H3 (Spatial Indexing)</h2>
+
+  <p>Uber's H3 is a hexagonal hierarchical spatial indexing system. It divides the Earth's surface into hexagonal cells at 16 resolution levels (from continent-size to ~0.9m² cells).</p>
+
+  <h3>Why Hexagons?</h3>
+  <p><strong>Uniform neighbors:</strong> Every hexagon has exactly 6 neighbors, all at equal distances from the center. Squares have 8 neighbors at two different distances (4 edge, 4 corner). This uniformity makes distance calculations and aggregations more accurate.</p>
+  <p><strong>Consistent area:</strong> At a given resolution, all hexagons have approximately the same area (small distortion due to projecting a sphere to hexagons). Geohash rectangles have wildly different areas near the poles vs equator.</p>
+  <p><strong>Use cases at Uber:</strong> Pricing (surge pricing per H3 cell), ETA estimation (average speed per H3 cell at each time of day), demand forecasting (predict ride requests per cell), marketplace matching (find nearby drivers within adjacent H3 cells).</p>
+</section>
+
+<!-- ============ EDGE CASES ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Edge Cases &amp; Gotchas</h2>
+
+  <h3>1. S3 Eventual Consistency (Mostly Resolved)</h3>
+  <p>Historically, S3 provided eventual consistency for overwrite PUTs and DELETEs — you could write a new version and immediately read the old one. Since December 2020, S3 delivers <strong>strong read-after-write consistency</strong> for all operations at no extra cost. But other blob stores (or older S3 documentation) may still have eventual consistency — always verify.</p>
+
+  <h3>2. TSDB High Cardinality Explosion</h3>
+  <p>If you create a time series for every unique user_id (millions of distinct series), the TSDB's inverted index explodes in memory. Prometheus is particularly vulnerable — its in-memory index grows proportionally to the number of unique label combinations. Fix: avoid high-cardinality labels (user_id, request_id) in metrics. Use logs (Elasticsearch, Loki) for per-user data instead.</p>
+
+  <h3>3. Graph DB Performance Cliffs</h3>
+  <p>Graph traversals are O(1) per hop, but if each node has 10,000 edges and you traverse 4 hops, you're touching 10,000⁴ = 10¹⁶ paths. Without filters and limits, graph queries can explode combinatorially. Always bound traversal depth and filter early.</p>
+
+  <h3>4. Quadtree Degeneration</h3>
+  <p>If all points cluster in one small area (e.g., all restaurants in Manhattan), the quadtree subdivides that area into thousands of tiny cells while the rest of the world is one big empty node. The tree becomes very deep in one corner and trivially shallow everywhere else. Fix: use capacity limits per node and accept some imprecision, or use an R-tree which groups nearby objects regardless of quadrant boundaries.</p>
+
+  <h3>5. Storing Images in PostgreSQL</h3>
+  <p>BYTEA columns in PostgreSQL technically work for images, but each row becomes megabytes. This means: table scans read the entire image for every row checked, WAL files grow enormously (every image write is logged), VACUUM must process multi-MB dead rows, and the buffer pool fills with image data instead of useful index pages. Always use blob storage (S3) for files and store the URL in PostgreSQL.</p>
+</section>
+
+<!-- ============ WHAT IF ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">PostgreSQL + PostGIS vs dedicated graph DB</div>
+      <p><strong>PostGIS:</strong> Full SQL, ACID transactions, JOINs with relational data, excellent for spatial + relational queries ("restaurants in this area with avg rating &gt; 4.5"). Struggles with deep graph traversals (friend-of-friend chains &gt; 3 hops).<br>
+      <strong>Neo4j:</strong> Blazing fast traversals (O(1) per hop), Cypher query language, but no SQL, limited ACID, separate system to manage.<br>
+      <strong>Decision:</strong> If your primary access is proximity search + relational filters → PostGIS. If it's deep relationship traversal → Neo4j.</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">Prometheus vs TimescaleDB for metrics</div>
+      <p><strong>Prometheus:</strong> Pull-based, native K8s integration, excellent alerting (Alertmanager), PromQL, but limited to ~2 weeks of local storage, no JOINs.<br>
+      <strong>TimescaleDB:</strong> Full SQL, JOINs with relational data, unlimited retention, but push-based (needs adapter), no native K8s service discovery.<br>
+      <strong>Common pattern:</strong> Prometheus for real-time alerting (short retention) → remote-write to VictoriaMetrics or TimescaleDB for long-term analysis.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">Geohash vs H3 vs S2 for spatial indexing</div>
+      <p><strong>Geohash:</strong> Simple string prefix, works on any B-tree index. Rectangles vary in size by latitude. Easy to implement.<br>
+      <strong>H3:</strong> Uniform hexagons, consistent neighbors, better for aggregation. Requires the H3 library.<br>
+      <strong>S2:</strong> Google's choice. Arbitrary precision, excellent covering queries. Complex but handles all edge cases (poles, anti-meridian).</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">S3 storage tiers for cost optimization</div>
+      <p><strong>Standard:</strong> Frequent access, ~$0.023/GB/month. Use for active data.<br>
+      <strong>Infrequent Access:</strong> ~$0.0125/GB/month, but retrieval costs more. Use for backups accessed monthly.<br>
+      <strong>Glacier Deep Archive:</strong> ~$0.00099/GB/month (100× cheaper!), but retrieval takes 12+ hours. Use for compliance archives.<br>
+      <strong>Lifecycle policies</strong> automate transitions: Standard → IA after 30 days → Glacier after 90 days.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INTERVIEW Q&A ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>Interview Questions &amp; Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: When would you use a time series database vs PostgreSQL for metrics?</div>
+    <div class="qa-a">
+      <p><strong>TSDB when:</strong> You're ingesting &gt;100K points/sec, queries are purely time-range aggregations (avg, p99 over windows), and you need built-in downsampling/retention policies. TSDBs compress 10-12× better than PostgreSQL for timestamped data because they exploit temporal locality (delta-of-delta timestamps, XOR'd values). <strong>PostgreSQL when:</strong> Volume is moderate, you need JOINs (correlate metrics with user events), or your team doesn't want to operate another database. TimescaleDB (PostgreSQL extension) is the bridge — TSDB compression + partitioning with full SQL. For K8s monitoring specifically, Prometheus is the standard because of its pull model, service discovery, and Alertmanager integration.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: How would you design the storage layer for a photo-sharing app?</div>
+    <div class="qa-a">
+      <p><strong>Photos → S3</strong> (blob storage, 11-nines durability, CDN-friendly). <strong>Metadata → PostgreSQL</strong> (user_id, caption, tags, location, upload_time, s3_url). <strong>Thumbnails → S3 + CDN</strong> (generate on upload via serverless function, cache at edge). <strong>Feed → Redis</strong> (pre-computed feed as a sorted set of photo IDs). <strong>Search by location → PostGIS</strong> (store lat/lng in the photos table, spatial index for "photos near me"). <strong>Search by tags → Elasticsearch</strong> (inverted index on tags for full-text search). This is polyglot persistence: 5 storage systems, each optimal for its data shape. Never store the actual image bytes in PostgreSQL — the S3 URL in the photos table is the bridge.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: Explain how a quadtree helps with "find nearby" queries.</div>
+    <div class="qa-a">
+      <p>Without a spatial index, "find all restaurants within 2km" requires computing the Haversine distance to every restaurant in the database — O(N). A quadtree recursively partitions 2D space into quadrants. For a proximity query, you only descend into quadrants that overlap with the search radius and <strong>prune entire subtrees</strong> that don't overlap. With 10M restaurants, a quadtree typically checks only a few hundred points instead of 10M — a 10,000× speedup. The lookup complexity is O(log₄ N + M) where M is the number of results. In practice, PostGIS uses R-trees (better for disk-based storage), Redis uses sorted sets with geohashes, and Uber uses H3 hexagonal cells.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: When is a graph database the right choice, and when is SQL good enough?</div>
+    <div class="qa-a">
+      <p>Graph DB when: your core queries involve <strong>variable-depth traversals</strong> (friend-of-friend at depth 2-6, shortest path, pattern matching on relationship chains). Each hop in a graph DB is O(1) — follow a pointer. In SQL, each hop is a JOIN — O(N log N) with indexes. At depth 4+, SQL becomes prohibitively expensive. SQL is good enough when: relationships are shallow (1-2 JOINs), the data model is primarily tabular with occasional FK lookups, or you need ACID transactions across related records (graph DB transaction support varies). The turning point: if you're writing recursive CTEs or self-JOINs 3+ levels deep, it's time to evaluate a graph DB.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ACTUAL SYSTEM DESIGN INTERVIEW ============ -->
+<section class="section" id="s12b">
+  <div class="section-num">12b</div>
+  <h2>Actual System Design Interview — "Design a Proximity Service"</h2>
+  <p>This interview question tests your understanding of spatial storage. The interviewer is probing whether you can reason about spatial indexing, data partitioning for geographic data, and the read/write asymmetry in location-based services.</p>
+
+  <div class="callout blue">
+    <div class="callout-label">The Prompt</div>
+    <p>"Design a service like Yelp or Google Maps where users can search for nearby businesses. Given a user's location (lat/lng) and a radius, return all businesses within that radius. There are 200M businesses globally. The service should handle 100K search queries per second."</p>
+  </div>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    U["Mobile App"]
+    A["Search API"]
+    I["Spatial Index"]
+    B["Business DB"]
+    C["Redis Cache"]
+    N1["1. Geohash prefix drives lookup"]
+    N2["2. Spatial index is read-heavy"]
+    N3["3. Cache shared nearby results"]
+
+    U --> A
+    A -->|"1. spatial lookup"| I
+    A -->|"2. fetch details"| B
+    I -. "cache fill" .-> C
+    I -.-> N1
+    B -.-> N2
+    C -.-> N3
+
+    classDef user fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef store fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class U user;
+    class A core;
+    class I,C data;
+    class B store;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: turn the user location into a geohash prefix, hit the spatial index for candidate business IDs, fetch details separately, and cache nearby-result sets.</div>
+  </div>
+
+  <h3>Interviewer Follow-ups</h3>
+
+  <div class="qa">
+    <div class="qa-q">"How do you efficiently find businesses within a radius? You have 200M businesses."</div>
+    <div class="qa-a">
+      <p><strong>Step 1: Geohash the user's location.</strong> Convert (lat, lng) to a geohash string (e.g., <code>"u33dc"</code> at 5 characters ≈ 4.9km × 4.9km cell). <strong>Step 2: Find neighboring geohash cells.</strong> The search radius may span multiple cells — compute the 8 neighboring geohash prefixes. <strong>Step 3: Range query.</strong> In the spatial index (which maps geohash prefixes to business IDs), do a prefix scan for all 9 geohash prefixes. This returns candidate businesses. <strong>Step 4: Post-filter.</strong> Compute exact Haversine distance for each candidate and filter out those beyond the radius. The key insight (DDIA Ch. 3): geohash turns a 2D spatial query into a 1D range query on a B-tree — no special spatial index type needed. This is how DynamoDB handles spatial queries (geohash as the sort key).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"Businesses rarely change location. How does this affect your design?"</div>
+    <div class="qa-a">
+      <p>The read-to-write ratio is extremely high — maybe 100K reads/sec vs 100 writes/sec (new businesses, closures, updates). This means: (1) <strong>The spatial index can be heavily cached</strong> — geohash → business_ids mappings change rarely, so cache them in Redis with a long TTL (hours). (2) <strong>The index can be pre-computed and replicated</strong> — build a static geohash index periodically (every hour) and replicate it to all API servers as an in-memory lookup table. No need for a live spatial database on the read path. (3) <strong>Write path is separate</strong> — when a business updates its location, update the PostgreSQL source of truth and asynchronously rebuild/invalidate the affected geohash cells in the index. This is the classic CQRS (Command Query Responsibility Segregation) pattern — reads and writes go through different paths optimized for different access patterns. Reference: Alex Xu, System Design Interview Vol. 2, Chapter 1 ("Proximity Service").</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"What about geohash boundary problems? Two restaurants 10 meters apart could be in different geohash cells."</div>
+    <div class="qa-a">
+      <p>This is the classic geohash edge case. A query at the edge of a geohash cell might miss businesses just across the boundary. The fix: <strong>always query the target cell AND its 8 neighboring cells</strong> (9 cells total). This guarantees coverage regardless of where the user is within a cell. The post-filter step (compute exact Haversine distance) removes false positives from neighboring cells. The cost: you query ~3× more data than strictly needed (9 cells vs ~3 that actually overlap the radius), but geohash lookups are fast enough that this is fine. H3 hexagons handle this more elegantly — each hexagon has exactly 6 uniform neighbors, and the ring-based expansion (<code>h3.k_ring(cell, 1)</code>) gives consistent coverage.</p>
+    </div>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">What the Interviewer Is Testing</div>
+    <p>(1) <strong>Spatial indexing knowledge</strong> — can you explain geohash, quadtree, or R-tree and why O(N) distance calculation doesn't scale? (2) <strong>Read/write asymmetry</strong> — businesses rarely move, so the index can be heavily cached or pre-computed. (3) <strong>Boundary handling</strong> — the geohash edge case shows attention to detail. (4) <strong>Polyglot storage</strong> — spatial index + relational DB for details + cache for hot queries. (5) <strong>Scale reasoning</strong> — 200M businesses with geohash prefix indexing is tractable; 100K QPS with caching is achievable.</p>
+  </div>
+</section>
+
+<!-- ============ CHEAT SHEET ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Blob storage (S3/GCS): for large binaries. 11-nines durability, ~$0.023/GB/month. Never store images in PostgreSQL.<br>
+    <strong>2.</strong> TSDBs exploit temporal structure: delta-of-delta timestamps + XOR values = 10-12× compression. Gorilla: 16 bytes → 1.37 bytes/point.<br>
+    <strong>3.</strong> Prometheus for K8s monitoring (pull model, PromQL, Alertmanager). InfluxDB/TimescaleDB for general time series.<br>
+    <strong>4.</strong> Graph DBs: O(1) per traversal hop vs SQL's O(N log N) per JOIN. Use for deep relationship chains (4+ hops). Don't use for simple lookups.<br>
+    <strong>5.</strong> Quadtree: recursive 2D space partitioning. O(log₄ N) lookup. Dense areas subdivide deeply, sparse areas stay large. Great for "find nearby."<br>
+    <strong>6.</strong> Geohash: encode lat/lng into a string. Nearby points share a prefix. Works on any B-tree index. Boundary problem: always query 9 cells.<br>
+    <strong>7.</strong> PostGIS (R-tree) for spatial + relational queries. Redis GEO for simple proximity. H3/S2 for aggregation and analytics.<br>
+    <strong>8.</strong> Polyglot persistence: use multiple storage paradigms together. PostgreSQL + Redis + S3 + Prometheus is a common stack.<br>
+    <strong>9.</strong> TSDB pitfall: high-cardinality labels (user_id in metrics) explode the inverted index. Use logs for per-entity data.<br>
+    <strong>10.</strong> In interviews: "Design a proximity service" tests geohash knowledge, read/write asymmetry, and caching of spatial results.</p>
+  </div>
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Choosing the Right Storage Paradigm</h2>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart TB
+    Q["What shape is your data?"]
+    B["Large binaries"]
+    T["(timestamp, value)"]
+    G["Nodes + edges"]
+    S["Points on a map"]
+    R["Structured rows + relationships"]
+    B2["S3 / GCS"]
+    T2["Prometheus / InfluxDB"]
+    G2["Neo4j / Neptune"]
+    S2["PostGIS / H3"]
+    R2["PostgreSQL"]
+    N["Most systems combine several of these"]
+
+    Q --> B --> B2
+    Q --> T --> T2
+    Q --> G --> G2
+    Q --> S --> S2
+    Q -. "none of the above" .-> R --> R2
+    R2 -.-> N
+
+    classDef question fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef blob fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef ts fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef graph fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef spatial fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef relational fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class Q question;
+    class B,B2 blob;
+    class T,T2 ts;
+    class G,G2 graph;
+    class S,S2 spatial;
+    class R,R2 relational;
+    class N note;
+    </pre>
+    <div class="diagram-caption">Data shape drives the storage choice: blobs, time-series streams, graph traversals, and spatial queries each have a natural storage engine, while structured rows still default to PostgreSQL.</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>The right storage paradigm is determined by the shape of your data and your dominant access pattern.</strong> Time-ordered streams → TSDB. Connected entities → graph. Geographic points → spatial index. Large blobs → object storage. Structured rows with relationships → relational. The mistake is forcing the wrong shape into the wrong storage: images in PostgreSQL, graph traversals in SQL, time series without compression. Each paradigm exists because someone hit the limits of a general-purpose database for a specific data shape.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References &amp; Further Reading</h2>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Pelkonen et al. — "Gorilla: A Fast, Scalable, In-Memory Time Series Database" (VLDB 2015)</div>
+    <p><strong>Tuomas Pelkonen, Scott Franklin, Justin Teller, et al.</strong> Facebook. PVLDB Vol. 8, No. 12, August 2015.<br>
+    <a href="https://www.vldb.org/pvldb/vol8/p1816-teller.pdf" style="color:var(--accent);" target="_blank">https://www.vldb.org/pvldb/vol8/p1816-teller.pdf</a></p>
+    <p>&#x2022; <strong>Delta-of-delta timestamp compression</strong>: if data arrives at a regular interval (e.g., every 10s), the delta between timestamps is constant (10) and the delta-of-delta is 0 — encoded as a single bit. ~96% of timestamps in Facebook's workload compressed to 1 bit each.</p>
+    <p>&#x2022; <strong>XOR value compression</strong>: consecutive values are XOR'd. ~51% of all values were identical to the previous point (XOR = 0, stored as 1 bit). ~30% had small differences (encoded in ~26.6 bits on average). Overall: 16 bytes/point → 1.37 bytes/point average (11.7× compression).</p>
+    <p>&#x2022; <strong>In-memory storage with disk backup</strong>: Gorilla acts as a write-through cache for the most recent 26 hours. Data is also written to HBase for long-term storage, but queries for recent data (the 85% case) never touch disk — reducing query latency by 73× and throughput by 14× vs HBase.</p>
+    <p>&#x2022; <strong>Availability-first design</strong>: data is written to two Gorilla instances in different regions. If one region fails, the other continues ingesting. Small data loss during failover is acceptable because monitoring data is best-effort — a few missing points don't affect trend analysis.</p>
+    <p>&#x2022; Data is organized as a <strong>TimeSeries Map (TSmap)</strong>: a hash map from time series key (string) to a compressed stream of (timestamp, value) pairs. The TSmap supports both O(1) lookup by key and efficient full scans for dashboards that aggregate across all series.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Kleppmann — "Designing Data-Intensive Applications" (2017), Ch. 2 &amp; 3</div>
+    <p><strong>Martin Kleppmann.</strong> O'Reilly Media, 2017.<br>
+    <a href="https://dataintensive.net/" style="color:var(--blue);" target="_blank">https://dataintensive.net/</a></p>
+    <p>&#x2022; Chapter 2 presents the <strong>document, relational, and graph models</strong> as three ways to represent relationships. The graph model is introduced specifically for data with many-to-many relationships and variable-depth traversals, where the relational model's recursive JOINs become unwieldy.</p>
+    <p>&#x2022; Chapter 3 contrasts <strong>B-tree (update-in-place, read-optimized) vs LSM-tree (append-only, write-optimized)</strong> storage engines. This distinction is critical for understanding why TSDBs use LSM-trees: time series are append-only by nature, and LSM-trees' sequential writes match perfectly. B-trees are better for random reads (relational workloads).</p>
+    <p>&#x2022; Discusses <strong>column-oriented storage</strong> (relevant to ClickHouse and analytics workloads): instead of storing each row contiguously, store each column contiguously. Aggregation queries (SUM, AVG over one column across millions of rows) read only the needed column from disk, achieving much higher throughput than row-oriented storage.</p>
+    <p>&#x2022; Section 3.3 covers <strong>multi-dimensional indexes</strong>: R-trees, space-filling curves (Z-order/Hilbert), and the concept of mapping multi-dimensional data to a single dimension for B-tree indexing — the theoretical foundation for geohash and S2 cells.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Uber Engineering / H3 — Hexagonal Hierarchical Spatial Index</div>
+    <p><strong>Uber Engineering and the H3 project.</strong><br>
+    <a href="https://h3geo.org/docs/" style="color:var(--orange);" target="_blank">https://h3geo.org/docs/</a></p>
+    <p>&#x2022; H3 models the earth as a hierarchy of <strong>hexagonal cells</strong> plus a small number of pentagons. Each increase in resolution subdivides a parent cell into finer children, which is why one cell ID can participate in both point lookup and multi-resolution rollups.</p>
+    <p>&#x2022; The system's value is in the <strong>index representation</strong>: a location is encoded as a compact cell ID, then neighborhood queries become set operations such as <code class="inline">gridDisk</code> rather than raw great-circle scans across every point.</p>
+    <p>&#x2022; The hierarchy makes <strong>aggregation</strong> practical. You can count rides, deliveries, or events at resolution 9 for street-level heatmaps, then collapse the same data to coarser cells for city or regional views without rebuilding the index from scratch.</p>
+    <p>&#x2022; The docs are also explicit about the awkward edges: <strong>pentagon cells</strong>, distortion near icosahedron boundaries, and the fact that "nearby in geometry" is only approximately "nearby in index space." Those details matter when spatial systems cross cell boundaries or try to rank candidates by exact distance.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals &middot; built for deep understanding
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+</body>
+</html>

@@ -1317,39 +1317,36 @@ flowchart LR
   <h2>Mental Model — Packet Journey Under Congestion</h2>
 
   <div class="diagram-wrap">
-    <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <defs><marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker></defs>
-      <!-- HTTP data -->
-      <rect x="20" y="30" width="140" height="40" rx="6" fill="#222734" stroke="#a78bfa" stroke-width="1.5"/>
-      <text x="90" y="55" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#a78bfa" font-weight="600">HTTP Data</text>
-      <path d="M90 70 L90 95" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <!-- TCP -->
-      <rect x="10" y="100" width="160" height="40" rx="6" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
-      <text x="90" y="125" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#60a5fa" font-weight="600">TCP: seq + ack + flags</text>
-      <path d="M90 140 L90 165" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <!-- IP -->
-      <rect x="0" y="170" width="180" height="40" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="90" y="195" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">IP: src/dst addr + TTL</text>
-      <path d="M90 210 L90 235" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <!-- Wire -->
-      <rect x="0" y="240" width="180" height="30" rx="6" fill="none" stroke="#5c6580" stroke-width="1" stroke-dasharray="4 3"/>
-      <text x="90" y="260" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">WIRE</text>
-      <!-- Encapsulation label -->
-      <text x="200" y="165" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">each layer wraps</text>
-      <text x="200" y="180" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">the one above ↑</text>
-      <!-- Congestion zone -->
-      <rect x="330" y="30" width="400" height="250" rx="12" fill="#1a1015" stroke="#f87171" stroke-width="1" stroke-dasharray="6 4"/>
-      <text x="530" y="55" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#f87171" font-weight="600">CONGESTION ZONE — WHAT BREAKS</text>
-      <text x="350" y="85" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ <tspan fill="#fb923c" font-weight="600">Packet loss</tspan>: router buffer full → packet dropped</text>
-      <text x="350" y="108" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">  TCP detects via missing ACK → retransmits (adds latency)</text>
-      <text x="350" y="131" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">  UDP: packet gone forever. App never knows.</text>
-      <text x="350" y="161" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ <tspan fill="#fb923c" font-weight="600">TCP head-of-line</tspan>: one lost packet stalls ALL</text>
-      <text x="350" y="184" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">  streams on that connection (HTTP/2 over TCP)</text>
-      <text x="350" y="207" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">  QUIC fix: independent streams, loss isolated</text>
-      <text x="350" y="237" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ <tspan fill="#fb923c" font-weight="600">Congestion window shrinks</tspan>: TCP slows down</text>
-      <text x="350" y="260" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">  throughput drops non-linearly as loss increases</text>
-    </svg>
-    <div class="diagram-caption">Protocol encapsulation with congestion failure modes annotated</div>
+    <pre class="mermaid">
+flowchart TB
+    H["HTTP Data"]
+    T["TCP<br/>seq · ack · flags"]
+    I["IP<br/>src/dst · TTL"]
+    W["Wire"]
+    N1["Packet loss: TCP retransmits, UDP just loses it"]
+    N2["TCP head-of-line blocking can stall every stream on one connection"]
+    N3["QUIC isolates loss to the affected stream"]
+    N4["Congestion shrinks the TCP window and throughput falls non-linearly"]
+
+    H --> T --> I --> W
+    T -.-> N1
+    T -.-> N2
+    N2 -.-> N3
+    I -.-> N4
+
+    classDef app fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef transport fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef net fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef wire fill:#222734,stroke:#5c6580,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class H app;
+    class T transport;
+    class I net;
+    class W wire;
+    class N1,N2,N3,N4 note;
+    </pre>
+    <div class="diagram-caption">Packet journey under congestion: each lower layer wraps the one above it, and congestion shows up as loss, retransmission, head-of-line blocking, and shrinking throughput.</div>
   </div>
 
   <div class="callout green">

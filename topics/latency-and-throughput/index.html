@@ -739,68 +739,34 @@ flowchart LR
   <h2>Mental Model — Queueing Under Saturation</h2>
 
   <div class="diagram-wrap">
-    <svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <defs>
-        <marker id="ma-gray" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-          <path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/>
-        </marker>
-        <marker id="ma-green" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-          <path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/>
-        </marker>
-        <marker id="ma-orange" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-          <path d="M0,0 L7,2.5 L0,5" fill="#fb923c"/>
-        </marker>
-      </defs>
-      <!-- Arrival -->
-      <text x="30" y="25" font-family="IBM Plex Mono,monospace" font-size="11" fill="#60a5fa" font-weight="600">ARRIVAL RATE: 900 req/s</text>
-      <!-- Requests flowing in -->
-      <rect x="20" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.8"/><rect x="42" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.7"/><rect x="64" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.6"/><rect x="86" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.5"/><rect x="108" y="40" width="15" height="15" rx="3" fill="#60a5fa" opacity="0.4"/>
-      <path d="M130 48 L176 48" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma-gray)"/>
-      <!-- Queue -->
-      <rect x="185" y="30" width="200" height="40" rx="6" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
-      <text x="285" y="55" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24" font-weight="600">Queue (wait here)</text>
-      <path d="M390 50 L426 50" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma-gray)"/>
-      <!-- Server -->
-      <rect x="435" y="30" width="140" height="40" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="505" y="55" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">Process (1ms each)</text>
-      <path d="M580 50 L635 50" stroke="#6ee7b7" stroke-width="1.2" marker-end="url(#ma-green)"/>
-      <text x="664" y="54" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">done</text>
-      <text x="505" y="20" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">CAPACITY: 1000 req/s</text>
-      <!-- Utilization graph -->
-      <text x="30" y="110" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">LATENCY vs UTILIZATION (M/M/1 model)</text>
-      <!-- Axes -->
-      <line x1="60" y1="130" x2="60" y2="340" stroke="#2a3040" stroke-width="1"/>
-      <line x1="60" y1="340" x2="720" y2="340" stroke="#2a3040" stroke-width="1"/>
-      <text x="30" y="240" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580" transform="rotate(-90,30,240)">Latency (ms)</text>
-      <text x="390" y="365" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">Utilization %</text>
-      <!-- Utilization labels -->
-      <text x="126" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">10%</text>
-      <text x="192" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">20%</text>
-      <text x="324" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">40%</text>
-      <text x="456" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">60%</text>
-      <text x="522" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">70%</text>
-      <text x="588" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">80%</text>
-      <text x="654" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">90%</text>
-      <text x="700" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">95%</text>
-      <!-- Latency labels -->
-      <text x="55" y="335" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">1ms</text>
-      <text x="55" y="315" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">2ms</text>
-      <text x="55" y="275" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">5ms</text>
-      <text x="55" y="195" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#fb923c">10ms</text>
-      <text x="55" y="140" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">20ms</text>
-      <!-- Hockey stick curve: latency = service_time / (1 - utilization) -->
-      <polyline points="126,333 192,332 258,330 324,327 390,322 456,312 522,297 555,285 588,265 621,235 654,195 675,165 690,145 700,135" stroke="#fb923c" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-      <!-- Danger zone -->
-      <rect x="630" y="130" width="90" height="210" rx="0" fill="#f87171" opacity="0.06"/>
-      <rect x="642" y="138" width="66" height="16" rx="4" fill="#191c24" opacity="0.92"/>
-      <text x="675" y="149" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171" font-weight="600">DANGER ZONE</text>
-      <!-- Annotation -->
-      <rect x="400" y="214" width="156" height="46" rx="6" fill="#191c24" opacity="0.94"/>
-      <path d="M556 238 C586 236, 615 229, 646 206" stroke="#fb923c" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ma-orange)"/>
-      <text x="412" y="233" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#fb923c">hockey-stick region</text>
-      <text x="412" y="248" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#fb923c">queueing delay takes over</text>
-    </svg>
-    <div class="diagram-caption">Latency vs utilization: the "hockey stick" — flat until ~70%, then exponential</div>
+    <pre class="mermaid">
+flowchart LR
+    A["Arrival Rate<br/>900 req/s"]
+    Q["Queue<br/>wait here"]
+    P["Process<br/>1ms each"]
+    D["Done"]
+    N1["Capacity is 1000 req/s, but the queue matters before full saturation"]
+    N2["Around 70% utilization, queueing delay starts to dominate"]
+    N3["The hockey-stick region turns small spikes into big latency jumps"]
+    N4["Retries add more load and can push the system into an outage loop"]
+
+    A --> Q --> P --> D
+    Q -.-> N1
+    P -.-> N2
+    P -.-> N3
+    Q -.-> N4
+
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef queue fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef proc fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class A user;
+    class Q queue;
+    class P,D proc;
+    class N1,N2,N3,N4 note;
+    </pre>
+    <div class="diagram-caption">Queueing under saturation: requests arrive, wait, and get processed, but once utilization climbs far enough the queue dominates end-to-end latency.</div>
   </div>
 
   <h3>Diagram Interpretation</h3>

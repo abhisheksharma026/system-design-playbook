@@ -715,60 +715,40 @@ flowchart LR
   <h2>Mental Model — The Consistent Hash Ring</h2>
 
   <div class="diagram-wrap">
-    <svg viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <circle cx="300" cy="200" r="160" stroke="#3d4663" stroke-width="2" fill="none"/>
+    <pre class="mermaid">
+flowchart LR
+    S["Servers hashed onto the ring<br/>A · B · C · D"]
+    K["Keys hashed onto the ring<br/>k1 · k2 · k3 · k4"]
+    W["Walk clockwise to the nearest server"]
+    A["k1 -> A"]
+    B["k2 -> B"]
+    C["k3 -> C"]
+    D["k4 -> D"]
+    N1["Add server E: only the neighboring slice remaps"]
+    N2["Without virtual nodes, arcs can be uneven"]
+    N3["Hot keys still overload one owner"]
 
-      <circle cx="440" cy="120" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
-      <text x="458" y="118" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">A</text>
-      <circle cx="410" cy="320" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
-      <text x="428" y="325" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">B</text>
-      <circle cx="180" cy="310" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
-      <text x="155" y="320" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">C</text>
-      <circle cx="160" cy="140" r="8" fill="#fbbf24" stroke="#222734" stroke-width="2"/>
-      <text x="133" y="140" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">D</text>
+    S --> W
+    K --> W
+    W --> A
+    W --> B
+    W --> C
+    W --> D
+    W -.-> N1
+    S -.-> N2
+    K -.-> N3
 
-      <circle cx="350" cy="50" r="5" fill="#f87171"/>
-      <text x="362" y="48" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k1</text>
-      <circle cx="460" cy="210" r="5" fill="#f87171"/>
-      <text x="472" y="214" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k2</text>
-      <circle cx="250" cy="355" r="5" fill="#f87171"/>
-      <text x="258" y="368" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k3</text>
-      <circle cx="140" cy="220" r="5" fill="#f87171"/>
-      <text x="115" y="224" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">k4</text>
+    classDef ring fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef key fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef route fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
 
-      <path d="M352 55 Q 400 60 435 115" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
-      <path d="M458 215 Q 430 280 415 315" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
-      <path d="M248 352 Q 200 340 185 315" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
-      <path d="M142 216 Q 145 175 155 145" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#mg)"/>
-
-      <text x="390" y="75" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k1 &#x2192; A</text>
-      <text x="445" y="275" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k2 &#x2192; B</text>
-      <text x="155" y="348" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k3 &#x2192; C</text>
-      <text x="102" y="186" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">k4 &#x2192; D</text>
-
-      <rect x="520" y="30" width="220" height="200" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
-      <text x="540" y="55" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7" font-weight="600">HOW IT WORKS</text>
-      <text x="540" y="80" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">1. Hash servers to ring</text>
-      <text x="540" y="100" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">2. Hash keys to ring</text>
-      <text x="540" y="120" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">3. Walk clockwise to</text>
-      <text x="540" y="138" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">   nearest server</text>
-      <text x="540" y="166" font-family="IBM Plex Mono,monospace" font-size="10" fill="#fb923c" font-weight="600">ADD SERVER E:</text>
-      <text x="540" y="186" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">Only keys between E's</text>
-      <text x="540" y="204" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">neighbors remap (~K/N)</text>
-
-      <rect x="520" y="260" width="220" height="130" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
-      <text x="540" y="285" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171" font-weight="600">FAILURE MODE</text>
-      <text x="540" y="310" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">&#x25B8; Without vnodes: arcs</text>
-      <text x="540" y="328" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">  can be wildly uneven</text>
-      <text x="540" y="352" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">&#x25B8; Hot key: one key gets</text>
-      <text x="540" y="370" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">  millions of requests</text>
-      <text x="540" y="388" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">  No hash function can fix this</text>
-
-      <defs>
-        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
-      </defs>
-    </svg>
-    <div class="diagram-caption">Consistent hash ring: 4 servers (yellow), 4 keys (red), each key walks clockwise to its server</div>
+    class S ring;
+    class K key;
+    class W,A,B,C,D route;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Consistent hashing mental model: hash servers and keys into one ring, then walk clockwise to the next owner so membership changes only remap a small slice of keys.</div>
   </div>
 
   <div class="callout green">
