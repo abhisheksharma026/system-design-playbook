@@ -829,54 +829,44 @@ flowchart LR
   <h2>Mental Model — Write Path Under Pressure</h2>
 
   <div class="diagram-wrap">
-    <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <defs>
-        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
-        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
-      </defs>
-      <!-- Write request -->
-      <rect x="20" y="30" width="120" height="40" rx="8" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
-      <text x="80" y="55" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#60a5fa" font-weight="600">INSERT row</text>
-      <path d="M140 50 L192 50" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma)"/>
-      <!-- WAL -->
-      <rect x="200" y="20" width="150" height="60" rx="8" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="275" y="45" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">WAL (append)</text>
-      <text x="275" y="65" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">sequential → fast</text>
-      <path d="M275 84 L275 108" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <!-- fsync -->
-      <rect x="225" y="115" width="100" height="30" rx="6" fill="#2a1520" stroke="#f87171" stroke-width="1.5"/>
-      <text x="275" y="135" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#f87171" font-weight="600">fsync()</text>
-      <text x="128" y="96" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">fsync bottleneck</text>
-      <text x="128" y="107" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">~100µs SSD, ~5ms HDD</text>
-      <path d="M275 148 L275 173" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <!-- Buffer pool -->
-      <rect x="200" y="180" width="150" height="50" rx="8" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
-      <text x="275" y="202" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24" font-weight="600">Buffer Pool (RAM)</text>
-      <text x="275" y="220" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">dirty page updated</text>
-      <!-- ACK back -->
-      <path d="M196 205 C150 208 124 158 88 78" stroke="#6ee7b7" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#mg)"/>
-      <text x="38" y="96" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">COMMIT OK</text>
-      <!-- Background checkpoint -->
-      <path d="M275 234 L275 268" stroke="#5c6580" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ma)"/>
-      <rect x="200" y="275" width="150" height="50" rx="8" fill="#222734" stroke="#5c6580" stroke-width="1"/>
-      <text x="275" y="297" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#5c6580">Data Files (disk)</text>
-      <text x="275" y="315" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">async checkpoint</text>
-      <!-- Pressure box -->
-      <rect x="430" y="20" width="310" height="310" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
-      <text x="585" y="48" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">UNDER HEAVY WRITE LOAD</text>
-      <text x="445" y="78" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ WAL writes queue behind fsync()</text>
-      <text x="445" y="100" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ Each commit waits for disk flush</text>
-      <text x="445" y="122" font-family="DM Sans,sans-serif" font-size="11" fill="#fb923c">▸ Group commit: batch multiple txns</text>
-      <text x="445" y="144" font-family="DM Sans,sans-serif" font-size="11" fill="#fb923c">  into one fsync → huge throughput win</text>
-      <text x="445" y="174" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ Buffer pool fills with dirty pages</text>
-      <text x="445" y="196" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ Checkpoint must flush to disk (random I/O)</text>
-      <text x="445" y="218" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">▸ If checkpoint can't keep up →</text>
-      <text x="445" y="240" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">  WAL grows unbounded, recovery slows</text>
-      <text x="445" y="270" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">▸ SSD vs HDD makes 50× difference here</text>
-      <text x="445" y="292" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">▸ More RAM = larger buffer pool =</text>
-      <text x="445" y="314" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">  fewer checkpoint flushes needed</text>
-    </svg>
-    <div class="diagram-caption">Database write path: WAL → fsync → buffer pool → async checkpoint, with pressure points</div>
+    <pre class="mermaid">
+flowchart LR
+    W["INSERT row"]
+    L["WAL append"]
+    F["fsync()"]
+    B["Buffer Pool (RAM)"]
+    D["Data Files (disk)"]
+    A["COMMIT OK"]
+    N1["WAL writes queue behind fsync"]
+    N2["Group commit batches many txns"]
+    N3["Checkpoint flushes dirty pages"]
+    N4["If checkpoint lags, WAL grows and recovery slows"]
+    N5["SSD vs HDD and RAM size dominate this path"]
+
+    W --> L --> F --> B
+    B -. "async checkpoint" .-> D
+    B -. "ack" .-> A
+    F -.-> N1
+    F -.-> N2
+    B -.-> N3
+    D -.-> N4
+    B -.-> N5
+
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef wal fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef hot fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef buffer fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef disk fill:#222734,stroke:#5c6580,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class W,A user;
+    class L wal;
+    class F hot;
+    class B buffer;
+    class D disk;
+    class N1,N2,N3,N4,N5 note;
+    </pre>
+    <div class="diagram-caption">Database write path: append to the WAL, pay the `fsync()` durability cost, update the buffer pool, then checkpoint data files later in the background.</div>
   </div>
 
   <div class="callout green">

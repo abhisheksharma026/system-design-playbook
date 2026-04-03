@@ -659,44 +659,41 @@ flowchart LR
   <h2>Mental Model — Proxy Traffic Flow Under Load</h2>
 
   <div class="diagram-wrap">
-    <svg viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <defs>
-        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
-        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
-        <marker id="mr" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#f87171"/></marker>
-      </defs>
-      <rect x="20" y="30" width="80" height="36" rx="6" fill="#222734" stroke="#f87171" stroke-width="1.5"/>
-      <text x="60" y="53" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171" font-weight="600">Client A</text>
-      <rect x="20" y="80" width="80" height="36" rx="6" fill="#222734" stroke="#f87171" stroke-width="1.5"/>
-      <text x="60" y="103" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171" font-weight="600">Client B</text>
-      <rect x="20" y="130" width="80" height="36" rx="6" fill="#222734" stroke="#f87171" stroke-width="1.5"/>
-      <text x="60" y="153" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171" font-weight="600">Client C</text>
-      <path d="M100 48 L230 88" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <path d="M100 98 L230 98" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <path d="M100 148 L230 108" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <rect x="240" y="60" width="160" height="80" rx="10" fill="#222734" stroke="#60a5fa" stroke-width="2"/>
-      <text x="320" y="90" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="14" fill="#60a5fa" font-weight="600">Reverse Proxy</text>
-      <text x="320" y="110" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">Nginx / Envoy</text>
-      <text x="320" y="128" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">TLS · LB · Cache · Route</text>
-      <rect x="500" y="20" width="110" height="40" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="555" y="45" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7" font-weight="600">Server 1 ✓</text>
-      <rect x="500" y="75" width="110" height="40" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="555" y="100" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7" font-weight="600">Server 2 ✓</text>
-      <rect x="500" y="130" width="110" height="40" rx="6" fill="#2a1520" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4 3"/>
-      <text x="555" y="152" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171" font-weight="600">Server 3 ✗</text>
-      <path d="M400 82 L500 40" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <path d="M400 98 L500 95" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <path d="M400 112 L500 148" stroke="#f87171" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#mr)"/>
-      <text x="404" y="172" font-family="IBM Plex Mono,monospace" font-size="8" fill="#f87171">removed from pool</text>
-      <rect x="20" y="200" width="720" height="180" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
-      <text x="40" y="228" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">WHAT HAPPENS UNDER LOAD</text>
-      <text x="40" y="256" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ Proxy handles TLS termination for all clients — offloads crypto from backends</text>
-      <text x="40" y="278" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">▸ Server 3 failed health check — proxy removes it and redistributes traffic</text>
-      <text x="40" y="300" font-family="DM Sans,sans-serif" font-size="12" fill="#fb923c">▸ Remaining servers absorb more load — utilization climbs</text>
-      <text x="40" y="322" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">▸ If the proxy layer fails without redundancy, all traffic is affected</text>
-      <text x="40" y="350" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">▸ Fix: redundant proxies in front, health checks behind, and capacity for failures</text>
-    </svg>
-    <div class="diagram-caption">Reverse proxy distributing traffic with one backend failure — pressure on remaining servers</div>
+    <pre class="mermaid">
+flowchart LR
+    C["Clients"]
+    P["Reverse Proxy<br/>Nginx / Envoy"]
+    S1["Server 1"]
+    S2["Server 2"]
+    S3["Server 3 failed"]
+    N1["Proxy terminates TLS and offloads crypto"]
+    N2["Failed backend is removed from the pool"]
+    N3["Remaining backends absorb more traffic"]
+    N4["If the proxy layer is not redundant, everything is affected"]
+
+    C --> P
+    P --> S1
+    P --> S2
+    P -. "removed from pool" .-> S3
+    P -.-> N1
+    S3 -.-> N2
+    S1 -.-> N3
+    S2 -.-> N3
+    P -.-> N4
+
+    classDef user fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef healthy fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef hot fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C user;
+    class P core;
+    class S1,S2 healthy;
+    class S3 hot;
+    class N1,N2,N3,N4 note;
+    </pre>
+    <div class="diagram-caption">Reverse proxy traffic under load: the proxy absorbs client-facing work, removes failed backends from service, and pushes more load onto the remaining healthy servers.</div>
   </div>
 
   <div class="callout green">

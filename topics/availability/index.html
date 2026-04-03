@@ -857,79 +857,50 @@ flowchart LR
   <h2>Mental Model — Availability Under Failure</h2>
 
   <div class="diagram-wrap">
-    <svg viewBox="0 0 760 440" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <defs>
-        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
-        <marker id="mr" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#f87171"/></marker>
-        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
-      </defs>
+    <pre class="mermaid">
+flowchart LR
+    U["User Request"]
+    L["Load Balancer"]
+    A["Server A"]
+    B["Server B"]
+    C["Server C crashed"]
+    P["Primary DB"]
+    R["Replica DB standby"]
+    O["Response"]
+    N1["LB is still a single point of failure"]
+    N2["One dead server means the others need headroom"]
+    N3["DB failover is usually the slowest handoff"]
+    N4["If the primary dies, promote the replica"]
 
-      <!-- User -->
-      <rect x="20" y="30" width="120" height="44" rx="8" fill="#222734" stroke="#60a5fa" stroke-width="1.5"/>
-      <text x="80" y="57" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#60a5fa" font-weight="600">User Request</text>
+    U --> L
+    L --> A
+    L --> B
+    L -. "removed" .-> C
+    A --> P
+    B --> P
+    P -. "replication" .-> R
+    A -.-> O
+    P -.-> N3
+    L -.-> N1
+    A -.-> N2
+    B -.-> N2
+    R -.-> N4
 
-      <!-- LB -->
-      <rect x="200" y="30" width="130" height="44" rx="8" fill="#222734" stroke="#a78bfa" stroke-width="1.5"/>
-      <text x="265" y="57" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#a78bfa" font-weight="600">Load Balancer</text>
-      <path d="M140 52 L200 52" stroke="#8891a8" stroke-width="1.5" marker-end="url(#ma)"/>
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef healthy fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef hot fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef db fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
 
-      <!-- Health check -->
-      <text x="248" y="92" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">health</text>
-      <text x="248" y="104" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">checks ↕</text>
-
-      <!-- Server 1 (healthy) -->
-      <rect x="120" y="120" width="110" height="44" rx="8" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="175" y="147" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">Server A ✓</text>
-
-      <!-- Server 2 (healthy) -->
-      <rect x="250" y="120" width="110" height="44" rx="8" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="305" y="147" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7" font-weight="600">Server B ✓</text>
-
-      <!-- Server 3 (DEAD) -->
-      <rect x="385" y="120" width="110" height="44" rx="8" fill="#2a1520" stroke="#f87171" stroke-width="1.5" stroke-dasharray="5 3"/>
-      <text x="440" y="142" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171" font-weight="600">Server C ✗</text>
-      <text x="440" y="156" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#f87171">CRASHED</text>
-
-      <!-- LB to servers -->
-      <path d="M230 74 L175 120" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <path d="M265 74 L305 120" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <path d="M300 74 L440 120" stroke="#f87171" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#mr)"/>
-      <text x="400" y="90" font-family="IBM Plex Mono,monospace" font-size="9" fill="#f87171">removed</text>
-
-      <!-- Database -->
-      <rect x="180" y="210" width="150" height="44" rx="8" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
-      <text x="255" y="237" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#fbbf24" font-weight="600">Primary DB</text>
-      <path d="M175 164 L235 210" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <path d="M305 164 L275 210" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-
-      <!-- Replica DB -->
-      <rect x="400" y="210" width="150" height="44" rx="8" fill="#222734" stroke="#fbbf24" stroke-width="1" stroke-dasharray="5 3"/>
-      <text x="475" y="232" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#fbbf24">Replica DB</text>
-      <text x="475" y="248" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">standby</text>
-      <path d="M330 232 L395 232" stroke="#fbbf24" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ma)"/>
-      <text x="365" y="224" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">replication</text>
-
-      <!-- Failover arrow -->
-      <path d="M475 254 L475 296" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#mr)"/>
-      <text x="475" y="310" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f87171">if primary dies →</text>
-      <text x="475" y="325" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7">promote to primary</text>
-
-      <!-- Response -->
-      <rect x="20" y="380" width="120" height="44" rx="8" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="80" y="407" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#6ee7b7" font-weight="600">Response ✓</text>
-      <path d="M175 164 L80 380" stroke="#6ee7b7" stroke-width="1" stroke-dasharray="6 3" marker-end="url(#mg)"/>
-
-      <!-- Annotations -->
-      <rect x="560" y="30" width="180" height="180" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
-      <text x="650" y="52" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6ee7b7" font-weight="600">REDUNDANCY MAP</text>
-      <text x="575" y="75" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ LB: single (SPOF risk)</text>
-      <text x="575" y="95" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">▸ Servers: 3 (1 dead, 2 live)</text>
-      <text x="575" y="115" font-family="DM Sans,sans-serif" font-size="11" fill="#fbbf24">▸ DB: primary + hot standby</text>
-      <text x="575" y="140" font-family="DM Sans,sans-serif" font-size="11" fill="#8891a8">▸ System: still serving ✓</text>
-      <text x="575" y="160" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">▸ Risk: LB or primary DB</text>
-      <text x="575" y="175" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171">  failure = total outage</text>
-    </svg>
-    <div class="diagram-caption">Availability under partial failure — one server crashed, system still serving via redundancy</div>
+    class U,O user;
+    class L core;
+    class A,B healthy;
+    class C hot;
+    class P,R db;
+    class N1,N2,N3,N4 note;
+    </pre>
+    <div class="diagram-caption">Availability under partial failure: the crashed app server is removed from service, the remaining servers keep serving, and database failover stays the slowest recovery step.</div>
   </div>
 
   <h3>Diagram Interpretation</h3>

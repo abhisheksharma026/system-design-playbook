@@ -747,69 +747,41 @@ flowchart LR
   <h2>Mental Model — Load Balancer Under Uneven Load</h2>
 
   <div class="diagram-wrap">
-    <svg viewBox="0 0 820 400" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <defs>
-        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
-        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
-        <marker id="mr" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#f87171"/></marker>
-      </defs>
-      <!-- Clients -->
-      <text x="52" y="22" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#5c6580">1000 RPS</text>
-      <rect x="10" y="30" width="84" height="30" rx="5" fill="#222734" stroke="#60a5fa" stroke-width="1"/>
-      <rect x="10" y="65" width="84" height="30" rx="5" fill="#222734" stroke="#60a5fa" stroke-width="1"/>
-      <rect x="10" y="100" width="84" height="30" rx="5" fill="#222734" stroke="#60a5fa" stroke-width="1"/>
-      <text x="52" y="49" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9" fill="#60a5fa">Client A</text>
-      <text x="52" y="84" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9" fill="#60a5fa">Client B</text>
-      <text x="52" y="119" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9" fill="#60a5fa">Client C</text>
+    <pre class="mermaid">
+flowchart LR
+    T["Incoming Traffic<br/>1000 RPS"]
+    L["Load Balancer<br/>least-connections"]
+    S1["Server 1<br/>~400 RPS<br/>60%"]
+    S2["Server 2<br/>~200 RPS<br/>90% slow"]
+    S3["Server 3<br/>~400 RPS<br/>60%"]
+    N1["Slow server holds requests active longer"]
+    N2["Least-connections sends fewer new requests there"]
+    N3["Healthy peers absorb the shifted load"]
+    N4["If health checks fail, the slow server is removed"]
 
-      <!-- Arrows to LB -->
-      <path d="M94 45 L160 80" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <path d="M94 80 L160 85" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <path d="M94 115 L160 90" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
+    T --> L
+    L --> S1
+    L -->|"fewer new requests"| S2
+    L --> S3
+    S2 -.-> N1
+    L -.-> N2
+    S1 -.-> N3
+    S3 -.-> N3
+    S2 -.-> N4
 
-      <!-- Load Balancer -->
-      <rect x="170" y="55" width="140" height="60" rx="8" fill="#222734" stroke="#a78bfa" stroke-width="2"/>
-      <text x="240" y="80" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#a78bfa" font-weight="600">Load Balancer</text>
-      <text x="240" y="100" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">least-connections</text>
+    classDef user fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef healthy fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef hot fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
 
-      <!-- Servers with utilization bars -->
-      <!-- Server 1: 60% util (healthy) -->
-      <rect x="410" y="20" width="150" height="44" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="485" y="40" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">Server 1: 60%</text>
-      <text x="485" y="56" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">~400 RPS</text>
-      <rect x="592" y="28" width="84" height="10" rx="3" fill="#1a1e28" stroke="#2a3040" stroke-width="0.5"/>
-      <rect x="592" y="28" width="50" height="10" rx="3" fill="#6ee7b7" opacity="0.7"/>
-
-      <!-- Server 2: 90% util (danger!) -->
-      <rect x="410" y="80" width="150" height="44" rx="6" fill="#222734" stroke="#fb923c" stroke-width="1.5"/>
-      <text x="485" y="100" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#fb923c">Server 2: 90%</text>
-      <text x="485" y="116" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#fb923c">~200 RPS (slow!)</text>
-      <rect x="592" y="88" width="84" height="10" rx="3" fill="#1a1e28" stroke="#2a3040" stroke-width="0.5"/>
-      <rect x="592" y="88" width="76" height="10" rx="3" fill="#fb923c" opacity="0.7"/>
-
-      <!-- Server 3: 55% util (healthy) -->
-      <rect x="410" y="140" width="150" height="44" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="485" y="160" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7">Server 3: 60%</text>
-      <text x="485" y="176" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">~400 RPS</text>
-      <rect x="592" y="148" width="84" height="10" rx="3" fill="#1a1e28" stroke="#2a3040" stroke-width="0.5"/>
-      <rect x="592" y="148" width="50" height="10" rx="3" fill="#6ee7b7" opacity="0.7"/>
-
-      <!-- LB to servers -->
-      <path d="M310 72 L410 42" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <path d="M310 85 L410 100" stroke="#fb923c" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ma)"/>
-      <path d="M310 98 L410 162" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <text x="352" y="114" font-family="IBM Plex Mono,monospace" font-size="8" fill="#fb923c">fewer req →</text>
-
-      <!-- Pressure box -->
-      <rect x="10" y="210" width="800" height="170" rx="10" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
-      <text x="30" y="238" font-family="IBM Plex Mono,monospace" font-size="11" fill="#fb923c" font-weight="600">WHAT THE LOAD BALANCER IS DOING</text>
-      <text x="30" y="266" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Server 2 is slower (GC pause, heavy query) &#x2192; each request stays active longer</text>
-      <text x="30" y="290" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Least-connections sees the higher active-connection count and sends fewer NEW requests there</text>
-      <text x="30" y="314" font-family="DM Sans,sans-serif" font-size="12" fill="#8891a8">&#x25B8; Result: Servers 1 and 3 absorb ~400 RPS each while Server 2 stays near ~200 RPS</text>
-      <text x="30" y="338" font-family="DM Sans,sans-serif" font-size="12" fill="#6ee7b7">&#x25B8; Key insight: adaptive algorithms route AROUND degradation automatically</text>
-      <text x="30" y="362" font-family="DM Sans,sans-serif" font-size="12" fill="#f87171">&#x25B8; If Server 2 fails health check &#x2192; removed entirely &#x2192; 500 RPS each on 1 &amp; 3</text>
-    </svg>
-    <div class="diagram-caption">Least-connections LB automatically routing around a slow server</div>
+    class T user;
+    class L core;
+    class S1,S3 healthy;
+    class S2 hot;
+    class N1,N2,N3,N4 note;
+    </pre>
+    <div class="diagram-caption">Least-connections balancing under uneven load: the slow backend keeps more active work, so the balancer steers fewer new requests to it and shifts traffic toward healthier peers.</div>
   </div>
 
   <div class="callout green">
