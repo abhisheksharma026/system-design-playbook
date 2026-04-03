@@ -102,6 +102,14 @@ GRAPH_LAYOUT = {
         "deps": ["storage", "client-server-model"],
         "orbit_rotation": -36,
     },
+    "key-value-stores": {
+        "x": 1260,
+        "y": 820,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["storage", "hashing"],
+        "orbit_rotation": 34,
+    },
 }
 
 
