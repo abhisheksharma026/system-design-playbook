@@ -126,6 +126,14 @@ GRAPH_LAYOUT = {
         "deps": ["storage", "relational-databases", "availability", "hashing"],
         "orbit_rotation": -8,
     },
+    "leader-election": {
+        "x": 820,
+        "y": 80,
+        "cluster": "Reliability",
+        "tone": "reliability",
+        "deps": ["availability", "network-protocols", "replication-sharding"],
+        "orbit_rotation": -54,
+    },
 }
 
 

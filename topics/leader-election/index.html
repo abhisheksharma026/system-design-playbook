@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Leader Election</title>
+<meta name="description" content="A system design guide to leader election, Raft, leases, fencing tokens, Chubby, Kafka KRaft, and the failure modes behind split-brain prevention.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 14</div>
+  <h1><span>Leader Election</span></h1>
+  <p class="hero-sub">Somebody has to break ties, own the write path, and hand out work. Leader election is the machinery that picks that node, replaces it when it dies, and stops the old one from doing damage after it should have stepped aside.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms</a></li>
+    <li><a href="#s1">Why Do We Need a Leader?</a></li>
+    <li><a href="#s2">The FLP Impossibility Result</a></li>
+    <li><a href="#s3">Leader Election via Raft</a></li>
+    <li><a href="#s4">Leader Election via etcd Leases</a></li>
+    <li><a href="#s5">Leader Election via ZooKeeper Ephemeral Nodes</a></li>
+    <li><a href="#s6">Fencing Tokens — Preventing Stale Leaders</a></li>
+    <li><a href="#s7">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s8">Mini-Project: Lease-Based Leader Election</a></li>
+    <li><a href="#s9">Production: Google Chubby</a></li>
+    <li><a href="#s10">Production: Kafka KRaft</a></li>
+    <li><a href="#s11">Edge Cases &amp; Gotchas</a></li>
+    <li><a href="#s12">What If? — Interactive Exploration</a></li>
+    <li><a href="#s13">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s13b">Actual System Design Interview</a></li>
+    <li><a href="#s14">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Key Terms</h2>
+
+  <h3>Leader Election</h3>
+  <p>The process by which a set of distributed nodes agree on exactly <strong>one node</strong> to act as the coordinator (leader) at any given time. The leader handles writes, assigns work, holds the master lock, or acts as the single decision-maker. All other nodes are followers — they forward requests to the leader or wait for instructions. When the leader fails, the remaining nodes must detect the failure and elect a new leader, ideally within seconds. Leader election appears in database replication (PostgreSQL primary election), distributed processing (Kafka partition leader), orchestration (Kubernetes controller manager), and any system where exactly-once semantics require a single coordinator. The correctness requirement: <strong>at most one leader at any time</strong> — two leaders (split-brain) can cause data corruption, duplicate processing, or conflicting decisions.</p>
+
+  <h3>Consensus Algorithm</h3>
+  <p>A protocol that allows a group of distributed nodes to agree on a single value — even if some nodes crash or messages are delayed. <strong>Paxos</strong> (Lamport, 1989/1998) is the foundational consensus algorithm but is notoriously difficult to implement correctly. <strong>Raft</strong> (Ongaro &amp; Ousterhout, 2014) decomposes the same problem into three independent sub-problems (leader election, log replication, safety) making it practical to implement. <a href="#ref1" class="ref">[1]</a> Both require a <strong>majority quorum</strong> (⌊N/2⌋ + 1 out of N nodes) to make progress — this guarantees at most one leader can be elected even during network partitions.</p>
+
+  <h3>Lease</h3>
+  <p>A time-bounded lock. A node acquires a lease (e.g., "I am the leader for the next 15 seconds"), performs leader duties, and must <strong>renew the lease before it expires</strong>. If the node crashes or becomes unreachable, the lease expires and another node can acquire it. Leases are the most common practical mechanism for leader election — etcd, ZooKeeper, and Chubby all implement leader election via leases. The critical safety property: a lease holder must <strong>stop acting as leader before the lease expires</strong> (not after), accounting for clock skew between nodes.</p>
+
+  <h3>Fencing Token</h3>
+  <p>A monotonically increasing number attached to each lease grant. When a new leader is elected, it receives a fencing token higher than any previously issued token. Storage systems reject operations bearing an old (lower) token, preventing a stale leader (one that hasn't realized its lease expired) from corrupting data. Without fencing tokens, a leader that is paused (long GC, network delay) can resume and issue writes after a new leader has already taken over — causing split-brain at the storage layer. <a href="#ref3" class="ref">[3]</a></p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>Why Do We Need a Leader?</h2>
+
+  <div class="memory-map"><span class="h">SYSTEMS THAT REQUIRE EXACTLY ONE LEADER AT A TIME</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Database replication</span>
+<span class="d">│</span>   PostgreSQL primary: accepts all writes, streams WAL to replicas.
+<span class="d">│</span>   If two primaries exist → conflicting writes → data corruption.
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Distributed locks</span>
+<span class="d">│</span>   Only one worker processes a payment at a time (idempotency).
+<span class="d">│</span>   Two workers processing the same payment → double charge.
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Partition assignment</span>
+<span class="d">│</span>   Kafka controller: assigns partitions to brokers.
+<span class="d">│</span>   Two controllers → conflicting assignments → message loss.
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Cron / scheduled tasks</span>
+<span class="d">│</span>   Daily report generation: exactly one instance should run it.
+<span class="d">│</span>   Two instances → duplicate reports → confused stakeholders.
+<span class="d">│</span>
+<span class="d">└──</span> <span class="b">Configuration authority</span>
+    Kubernetes controller manager: reconciles desired vs actual state.
+    Two controllers → conflicting scheduling decisions.</div>
+
+  <div class="callout green">
+    <div class="callout-label">Core Intuition</div>
+    <p>A leader simplifies distributed coordination by turning a multi-writer problem into a single-writer problem. Instead of N nodes trying to agree on every decision (expensive consensus per operation), one node makes all decisions and the others follow. The cost: the leader is a single point of failure — so you need a protocol to detect leader failure and elect a replacement quickly. <strong>Leader election is not about choosing the best node — it's about ensuring exactly one node acts as leader at any time.</strong></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>The FLP Impossibility Result</h2>
+
+  <p>Fischer, Lynch, and Paterson (1985) proved that in an asynchronous distributed system where even one node can crash, <strong>no deterministic algorithm can guarantee consensus will be reached in bounded time</strong>. This is the FLP impossibility result — the theoretical foundation for understanding why leader election is hard.</p>
+
+  <div class="callout red">
+    <div class="callout-label">What FLP Means in Practice</div>
+    <p>FLP doesn't mean consensus is impossible — it means it can't be <em>guaranteed</em> in all cases. Practical algorithms like Raft work around FLP by using <strong>randomized timeouts</strong> (breaking the deterministic requirement) and assuming <strong>partial synchrony</strong> (the network is eventually timely, even if it's not always). In practice, Raft leader elections converge in 10-500ms under normal conditions. Under extreme network instability, elections may take longer — but FLP says they will <em>eventually</em> succeed, just not within a guaranteed bound. This is why leader election systems have configurable election timeouts and heartbeat intervals.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3 ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Leader Election via Raft</h2>
+
+  <p>Raft is the most widely deployed leader election algorithm in modern systems. <a href="#ref1" class="ref">[1]</a></p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Raft leader election — step by step</span></div>
+    <pre><span class="h">STEADY STATE</span>
+Leader sends heartbeats (AppendEntries RPCs) to all followers every <span class="num">100ms</span>.
+Followers reset their election timer on each heartbeat.
+
+<span class="h">LEADER FAILURE DETECTED</span>
+Follower's election timer expires (randomized: <span class="num">150-300ms</span>).
+<span class="cm">The randomization prevents all followers from starting elections simultaneously.</span>
+
+<span class="h">ELECTION</span>
+1. Follower increments its <span class="v">term</span> (logical clock) and transitions to <span class="v">candidate</span> state.
+2. Candidate votes for itself and sends <span class="fn">RequestVote</span> RPCs to all other nodes.
+3. Each node votes for at most <span class="v">one candidate per term</span> (first-come-first-served).
+4. Candidate wins if it receives votes from a <span class="v">majority</span> (⌊N/2⌋ + 1).
+
+<span class="h">SAFETY: WHY SPLIT-BRAIN IS IMPOSSIBLE</span>
+- A majority of 5 nodes = 3. Two candidates can't both get 3 votes — there are only 5.
+- Any network partition into [2] and [3]: only the [3] side can elect a leader.
+- The Election Restriction: a candidate's log must be at least as up-to-date
+  as the voter's log — ensuring committed entries are never lost.
+
+<span class="h">RESULT</span>
+New leader starts sending heartbeats. Old leader (if still alive) sees a higher
+term in the heartbeat and <span class="v">steps down to follower</span>.</pre>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Cluster Size</th><th>Majority Needed</th><th>Can Tolerate Failures</th><th>Typical Election Time</th></tr></thead>
+      <tbody>
+        <tr><td>3 nodes</td><td>2</td><td>1 node failure</td><td>~150-300ms</td></tr>
+        <tr><td>5 nodes</td><td>3</td><td>2 node failures</td><td>~150-300ms</td></tr>
+        <tr><td>7 nodes</td><td>4</td><td>3 node failures</td><td>~200-400ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SECTION 4 ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Leader Election via etcd Leases</h2>
+
+  <p>etcd provides a higher-level API for leader election built on its consensus-backed key-value store. The pattern uses <strong>leases</strong> — time-bounded keys that auto-delete when the lease expires.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>etcd lease-based leader election — the mechanism</span></div>
+    <pre><span class="h">ACQUIRE LEADERSHIP</span>
+1. Node creates a <span class="v">lease</span> with TTL (e.g., 15 seconds).
+2. Node tries to create a key (e.g., <span class="str">/election/leader</span>) with its name as the value,
+   attached to the lease, using a <span class="fn">transaction</span>:
+   <span class="kw">IF</span> key <span class="str">/election/leader</span> does not exist
+   <span class="kw">THEN</span> create it with value = <span class="str">"node-3"</span>, lease = <span class="v">lease_id</span>
+   <span class="kw">ELSE</span> fail (another node is already leader)
+3. If the transaction succeeds → this node is the leader.
+4. If it fails → this node is a follower. It <span class="fn">watches</span> the key for deletion.
+
+<span class="h">MAINTAIN LEADERSHIP</span>
+Leader periodically calls <span class="fn">LeaseKeepAlive</span> to refresh the lease TTL.
+<span class="cm">If the leader crashes → it stops refreshing → the lease expires</span>
+<span class="cm">→ the key is auto-deleted → watchers are notified → new election starts.</span>
+
+<span class="h">FAILOVER</span>
+All followers are watching <span class="str">/election/leader</span> for deletion events.
+When the key is deleted (lease expired), all followers race to create the key.
+etcd's linearizable transactions guarantee exactly one succeeds.</pre>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">etcd vs Raw Raft for Leader Election</div>
+    <p><strong>Raw Raft:</strong> Built into the application. Each instance participates in Raft directly. Good when you're building a replicated state machine (like a database). Complex to implement correctly. <strong>etcd:</strong> External coordination service. Your application talks to etcd via gRPC, uses its election API. Good for application-level leader election (cron jobs, partition assignment, singleton services). Much simpler — etcd handles all the consensus complexity. The trade-off: dependency on an external service (if etcd goes down, no elections can happen).</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5 ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Leader Election via ZooKeeper Ephemeral Nodes</h2>
+
+  <p>ZooKeeper implements leader election using <strong>ephemeral sequential nodes</strong> — nodes that auto-delete when the client session ends, with an auto-incrementing sequence number.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>ZooKeeper recipe for leader election</span></div>
+    <pre><span class="h">THE ALGORITHM (ZooKeeper's "recipes" documentation)</span>
+
+1. Each candidate creates an <span class="v">ephemeral sequential</span> node:
+   <span class="str">/election/candidate-0000000001</span>  (node A)
+   <span class="str">/election/candidate-0000000002</span>  (node B)
+   <span class="str">/election/candidate-0000000003</span>  (node C)
+
+2. Each node lists all children of <span class="str">/election/</span> and checks:
+   Am I the node with the <span class="v">lowest sequence number</span>?
+   - Yes → I am the leader.
+   - No  → I watch the node with the <span class="v">next-lower</span> sequence number.
+
+3. Node A (0001) is the leader. B watches A. C watches B.
+
+<span class="h">FAILOVER</span>
+If node A crashes → its ephemeral node is auto-deleted.
+Node B's watch fires → B checks: am I now the lowest? → Yes → B is the new leader.
+Node C is unaffected (still watching B).
+
+<span class="h">WHY "WATCH THE NEXT-LOWER" INSTEAD OF "WATCH THE LEADER"?</span>
+If all N nodes watch the leader, the leader's deletion triggers N watches
+simultaneously — a <span class="v">"herd effect"</span> where all nodes race to become leader.
+Watching only the next-lower node creates a <span class="v">chain</span>: only one node is notified
+per failure, and leadership cascades naturally. O(1) notifications, not O(N).</pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 6 ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Fencing Tokens — Preventing Stale Leaders</h2>
+
+  <p>The most dangerous failure in leader election isn't a dead leader — it's a leader that <strong>doesn't know it's been replaced</strong>. A node can acquire a lease, get paused (long GC, network partition), and resume after its lease has expired and a new leader has been elected. The old leader still thinks it's in charge and issues writes — corrupting the new leader's state. <a href="#ref3" class="ref">[3]</a></p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Fencing token protocol</span></div>
+    <pre><span class="h">WITHOUT FENCING TOKENS (dangerous)</span>
+t=0:  Node A acquires lease, becomes leader (lease expires at t=15)
+t=5:  Node A starts a long GC pause (frozen for 20 seconds)
+t=15: Lease expires. Node B becomes leader.
+t=16: Node B writes <span class="str">"x = 42"</span> to the database.
+t=25: Node A wakes up from GC. Still thinks it's leader (doesn't know lease expired).
+      Node A writes <span class="str">"x = 17"</span> to the database. <span class="v">← CORRUPTS Node B's write!</span>
+
+<span class="h">WITH FENCING TOKENS (safe)</span>
+t=0:  Node A acquires lease with token=<span class="num">33</span>. Writes include token=<span class="num">33</span>.
+t=15: Lease expires. Node B acquires lease with token=<span class="num">34</span>.
+t=16: Node B writes <span class="str">"x = 42"</span> with token=<span class="num">34</span>. Database records max_token=<span class="num">34</span>.
+t=25: Node A wakes up, sends write <span class="str">"x = 17"</span> with token=<span class="num">33</span>.
+      Database sees <span class="num">33</span> &lt; <span class="num">34</span> → <span class="str">REJECTS the write</span>. Data is safe.
+
+<span class="cm">The fencing token must be monotonically increasing and the storage layer</span>
+<span class="cm">must enforce "reject writes with tokens lower than the highest seen."</span></pre>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">This Is the #1 Leader Election Gotcha in Interviews</div>
+    <p>If an interviewer asks "how do you handle a leader that doesn't know it's been replaced?" — the answer is <strong>fencing tokens</strong>. Leases alone are insufficient because they rely on clock agreement between the leader and the lease grantor. A leader with a slow clock, a long GC pause, or a network partition can act on an expired lease. Fencing tokens move the safety guarantee from the leader to the storage layer — the database (or any downstream system) rejects stale operations, regardless of what the leader believes. This is Kleppmann's key argument in DDIA Ch. 8. <a href="#ref3" class="ref">[3]</a></p>
+  </div>
+</section>
+
+<!-- ============ SECTION 7 ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: etcd Leader Election with <code class="inline">etcdctl</code></h3>
+  <div class="code-block">
+    <div class="code-header"><span>etcdctl lease-based leader election (requires etcd running — brew install etcd / Docker)</span></div>
+    <pre><span class="cm"># Terminal 1: Create a lease (TTL=10 seconds) and acquire leadership</span>
+$ <span class="fn">etcdctl</span> lease grant 10
+lease <span class="num">694d8736b1a38e0c</span> granted with TTL(10s)
+
+$ <span class="fn">etcdctl</span> put --lease=694d8736b1a38e0c /election/leader "node-1"
+OK
+<span class="cm"># node-1 is the leader!</span>
+
+<span class="cm"># Terminal 2: Try to become leader (will fail — key already exists)</span>
+$ <span class="fn">etcdctl</span> txn &lt;&lt;EOF
+compares:
+  create("/election/leader") = "0"
+success requests:
+  put /election/leader node-2
+failure requests:
+  get /election/leader
+EOF
+<span class="cm"># Response: FAILURE — /election/leader = "node-1" (already taken)</span>
+
+<span class="cm"># Terminal 2: Watch for leader change</span>
+$ <span class="fn">etcdctl</span> watch /election/leader
+<span class="cm"># ... blocks until the key changes ...</span>
+
+<span class="cm"># Terminal 1: Stop the leader (Ctrl+C or let the lease expire after 10s)</span>
+<span class="cm"># Terminal 2 sees: DELETE /election/leader → node-2 can now create the key</span></pre>
+  </div>
+
+  <h3>Demo 2: Simulated Leader Election with File Locks</h3>
+  <div class="code-block">
+    <div class="code-header"><span>leader_sim.py — simulate lease-based election with file locks (macOS/Linux/WSL)</span></div>
+    <pre>$ <span class="fn">python3</span> -c "
+<span class="kw">import</span> os, sys, time, fcntl, signal
+
+LOCK_FILE = '/tmp/leader_election.lock'
+node_name = sys.argv[1] <span class="kw">if</span> len(sys.argv) > 1 <span class="kw">else</span> f'node-{os.getpid()}'
+
+<span class="kw">def</span> <span class="fn">try_become_leader</span>():
+    f = open(LOCK_FILE, 'w')
+    <span class="kw">try</span>:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        f.write(f'{node_name}\n'); f.flush()
+        print(f'[{node_name}] I am the leader.')
+        <span class="kw">while</span> <span class="num">True</span>:
+            print(f'[{node_name}] Refreshing lease; still the leader.')
+            time.sleep(2)
+    <span class="kw">except</span> BlockingIOError:
+        print(f'[{node_name}] I am a follower.')
+        <span class="cm"># Poll until leader releases lock</span>
+        <span class="kw">while</span> <span class="num">True</span>:
+            time.sleep(1)
+            <span class="kw">try</span>:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                f.seek(0); f.truncate(); f.write(f'{node_name}\n'); f.flush()
+                print(f'[{node_name}] LEADERSHIP CHANGE — I am now the leader!')
+                <span class="kw">while</span> <span class="num">True</span>:
+                    print(f'[{node_name}] Refreshing lease; still the leader.')
+                    time.sleep(2)
+            <span class="kw">except</span> BlockingIOError:
+                <span class="kw">pass</span>
+
+try_become_leader()
+" server1
+
+<span class="cm"># Run in separate terminals with different names (server1, server2, server3).</span>
+<span class="cm"># Kill the leader (Ctrl+C) — watch another node acquire leadership within ~1s.</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 8 ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Mini-Project: Lease-Based Leader Election</h2>
+  <h4>Simple: Feel What Leader Election Does</h4>
+  <div class="code-block">
+    <div class="code-header"><span>lease_election.py — in-memory lease-based election with fencing tokens (macOS/Linux/WSL)</span></div>
+    <pre><span class="kw">import</span> time, threading, random
+
+<span class="kw">class</span> <span class="fn">LeaseStore</span>:
+    <span class="str">"""Simulates an etcd-like lease store with fencing tokens."""</span>
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        self.leader = <span class="num">None</span>
+        self.lease_expiry = <span class="num">0</span>
+        self.fencing_token = <span class="num">0</span>
+        self.lock = threading.Lock()
+
+    <span class="kw">def</span> <span class="fn">try_acquire</span>(self, node_id, ttl=<span class="num">5</span>):
+        <span class="kw">with</span> self.lock:
+            now = time.time()
+            <span class="kw">if</span> self.leader <span class="kw">is</span> <span class="num">None</span> <span class="kw">or</span> now > self.lease_expiry:
+                self.leader = node_id
+                self.lease_expiry = now + ttl
+                self.fencing_token += <span class="num">1</span>
+                <span class="kw">return</span> self.fencing_token  <span class="cm"># Returns token on success</span>
+            <span class="kw">return</span> <span class="num">None</span>  <span class="cm"># Already taken</span>
+
+    <span class="kw">def</span> <span class="fn">renew</span>(self, node_id, ttl=<span class="num">5</span>):
+        <span class="kw">with</span> self.lock:
+            <span class="kw">if</span> self.leader == node_id:
+                self.lease_expiry = time.time() + ttl
+                <span class="kw">return</span> <span class="num">True</span>
+            <span class="kw">return</span> <span class="num">False</span>
+
+store = LeaseStore()
+
+<span class="kw">def</span> <span class="fn">node</span>(node_id):
+    <span class="kw">while</span> <span class="num">True</span>:
+        token = store.try_acquire(node_id)
+        <span class="kw">if</span> token:
+            print(f<span class="str">"[{node_id}] ★ Elected leader (token={token})"</span>)
+            <span class="kw">while</span> store.renew(node_id):
+                time.sleep(<span class="num">1</span>)
+                <span class="cm"># Simulate random crash (10% chance)</span>
+                <span class="kw">if</span> random.random() < <span class="num">0.1</span>:
+                    print(f<span class="str">"[{node_id}] ✗ Crashed! Lease will expire."</span>)
+                    time.sleep(<span class="num">6</span>)  <span class="cm"># Exceeds TTL → lease expires</span>
+                    <span class="kw">break</span>
+        <span class="kw">else</span>:
+            time.sleep(<span class="num">0.5</span>)  <span class="cm"># Retry</span>
+
+<span class="cm"># Start 3 nodes competing for leadership</span>
+<span class="kw">for</span> name <span class="kw">in</span> [<span class="str">"node-A"</span>, <span class="str">"node-B"</span>, <span class="str">"node-C"</span>]:
+    threading.Thread(target=node, args=(name,), daemon=<span class="num">True</span>).start()
+
+time.sleep(<span class="num">20</span>)  <span class="cm"># Let it run for 20 seconds</span></pre>
+  </div>
+  <div class="code-block">
+    <div class="code-header"><span>Expected output (non-deterministic — leadership transfers on crash)</span></div>
+    <pre>[node-A] ★ Elected leader (token=<span class="num">1</span>)
+[node-A] ✗ Crashed! Lease will expire.
+[node-B] ★ Elected leader (token=<span class="num">2</span>)
+[node-B] ✗ Crashed! Lease will expire.
+[node-C] ★ Elected leader (token=<span class="num">3</span>)
+<span class="cm">... leadership transfers automatically, fencing tokens always increase ...</span></pre>
+  </div>
+</section>
+
+<!-- ============ PRODUCTION EXAMPLES ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production: Google Chubby</h2>
+
+  <p>Chubby is Google's distributed lock service, published at OSDI 2006. <a href="#ref2" class="ref">[2]</a> It's the system that GFS, BigTable, and MapReduce all depend on for leader election and coordination.</p>
+
+  <h3>How Chubby Implements Leader Election</h3>
+  <p><strong>Paxos-based replication:</strong> A Chubby cell consists of 5 replicas. One is elected master via Paxos. The master handles all reads and writes; replicas replicate the log. The master holds a <strong>master lease</strong> — it can serve reads without Paxos round-trips as long as the lease is valid (typically a few seconds). This optimization reduces read latency dramatically.</p>
+  <p><strong>Client sessions + KeepAlives:</strong> Clients maintain sessions with Chubby via periodic KeepAlive RPCs. The KeepAlive extends the session lease and also carries <strong>cache invalidation notifications</strong> piggy-backed by the master. If the master fails, a new master is elected via Paxos, and clients reconnect — the failover is designed to be invisible to most clients (existing locks and open handles are preserved across master changes).</p>
+  <p><strong>Advisory locks + sequencers:</strong> Chubby locks are advisory (processes choose to respect them). To prevent stale locks, Chubby issues <strong>sequencers</strong> — opaque byte strings containing the lock name, mode, and generation number. Servers pass sequencers with their requests; the receiving service validates the sequencer with Chubby to confirm the lock is still held. This is Google's implementation of fencing tokens.</p>
+</section>
+
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production: Kafka KRaft</h2>
+
+  <p>Apache Kafka historically depended on ZooKeeper for broker metadata and partition leader election. <strong>KRaft</strong> (Kafka Raft, introduced in Kafka 3.3, production-ready in 3.6) replaces ZooKeeper with an embedded Raft-based consensus protocol.</p>
+
+  <h3>How KRaft Works</h3>
+  <p><strong>Controller quorum:</strong> A set of 3 or 5 broker nodes form the KRaft controller quorum. One is elected the <strong>active controller</strong> via Raft. The active controller stores all cluster metadata (topic configurations, partition assignments, broker registrations) in a replicated metadata log.</p>
+  <p><strong>Partition leaders:</strong> For each topic partition, the controller assigns one broker as the partition leader. When a broker fails, the controller reassigns its partitions' leadership to surviving brokers. With ZooKeeper, this involved ZK watches and multiple round-trips; with KRaft, the controller already has the metadata in its Raft log — reassignment is a local operation, completing in milliseconds.</p>
+  <p><strong>Why remove ZooKeeper?</strong> ZooKeeper was an external dependency that limited Kafka's scalability (ZK struggles with >100K partitions), added operational complexity (two systems to manage), and introduced latency for controller operations (ZK round-trips). KRaft eliminates all three problems.</p>
+</section>
+
+<!-- ============ EDGE CASES ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Edge Cases &amp; Gotchas</h2>
+
+  <h3>1. GC Pauses Causing False Failover</h3>
+  <p>A JVM-based leader (Kafka, ZooKeeper) enters a long GC pause (e.g., 10 seconds for a full GC). The coordination service (etcd/ZK) decides the leader is dead and elects a new one. When GC finishes, the old leader resumes — now there are two leaders. Fix: tune GC to avoid long pauses (use ZGC or Shenandoah), increase lease TTL to exceed max GC pause, and always use fencing tokens.</p>
+
+  <h3>2. Network Partition — Asymmetric</h3>
+  <p>Node A can reach etcd but not Node B. Node B can reach etcd but not Node A. Both believe they're healthy. If A is the leader, B may think A is dead (can't reach it directly) and try to acquire leadership. But etcd still has A's lease — B fails. The system works correctly because leadership is determined by etcd (not by peer-to-peer connectivity). This is why using an external coordination service is safer than peer-to-peer leader election.</p>
+
+  <h3>3. Clock Skew in Lease-Based Systems</h3>
+  <p>Node A's clock runs 5 seconds fast. It acquires a 10-second lease. Node A thinks the lease expires at wall-clock 12:00:10. But etcd (with correct time) thinks it expires at 12:00:05. At 12:00:06, etcd grants the lease to Node B. At 12:00:07, both A and B think they're the leader. Fix: (1) Use NTP to keep clocks synchronized within milliseconds. (2) Leaders should stop work slightly before lease expiry (safety margin). (3) Always use fencing tokens — clocks are not reliable enough for safety-critical coordination.</p>
+
+  <h3>4. Thundering Herd on Leader Failure</h3>
+  <p>When the leader dies, all followers simultaneously try to become leader. With N nodes hitting etcd simultaneously, the contention can slow down the election. ZooKeeper's ephemeral sequential node pattern (watch only the next-lower node) elegantly avoids this. etcd's campaign API serializes election attempts. Raw Raft uses randomized timeouts to desynchronize candidates.</p>
+
+  <h3>5. Leader Election Without a Coordination Service</h3>
+  <p>Some teams attempt leader election using database row locks, Redis SETNX, or file system locks. These are fragile: database locks don't survive connection drops (lock released when connection closes, but lock holder may not know), Redis SETNX has no built-in fencing tokens, and file locks don't work across machines. Use etcd or ZooKeeper — they exist specifically to solve this problem correctly.</p>
+</section>
+
+<!-- ============ WHAT IF ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">Embedded Raft vs external etcd</div>
+      <p><strong>Embedded Raft:</strong> No external dependency. The application IS the consensus group. Best for databases (CockroachDB, TiKV) where the data plane and control plane are unified.<br>
+      <strong>External etcd/ZK:</strong> Separate coordination service. Simpler for application-level leader election (cron jobs, singleton services). But another system to operate.<br>
+      <strong>Decision:</strong> Building a replicated data store → embed Raft. Need a leader among stateless workers → use etcd.</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">Short lease TTL vs long lease TTL</div>
+      <p><strong>Short (2-5s):</strong> Fast failover (new leader in seconds). But leader must refresh frequently (more RPCs), and transient network blips cause unnecessary elections.<br>
+      <strong>Long (30-60s):</strong> Tolerant of network jitter. But failover takes 30-60 seconds — the system is leaderless (and stalled) for that duration.<br>
+      <strong>Typical production:</strong> 10-15 second leases with 3-5 second refresh intervals.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">3-node vs 5-node consensus cluster</div>
+      <p><strong>3 nodes:</strong> Majority = 2. Tolerates 1 failure. Cheaper, simpler. But a 2-node failure → no quorum → system stalls.<br>
+      <strong>5 nodes:</strong> Majority = 3. Tolerates 2 failures. More resilient. But 5 nodes = more hardware, slightly higher commit latency (need 3 ACKs instead of 2).<br>
+      <strong>Rule:</strong> 3 for development/staging. 5 for production Kubernetes etcd clusters.</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">Leader-based vs leaderless systems</div>
+      <p><strong>Leader-based:</strong> Single writer, simpler consistency. But leader is a bottleneck and single point of failure (mitigated by fast election).<br>
+      <strong>Leaderless (Dynamo-style):</strong> Any node accepts writes. No election needed. But conflict resolution is complex (vector clocks, CRDTs).<br>
+      <strong>Decision:</strong> Need strong consistency → leader. Need maximum availability → leaderless.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INTERVIEW Q&A ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Interview Questions &amp; Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What is leader election and why is it needed?</div>
+    <div class="qa-a">
+      <p>Leader election is the process by which distributed nodes agree on exactly one node to act as coordinator. It's needed because many distributed operations require a <strong>single decision-maker</strong>: database writes (single-leader replication), partition assignment (Kafka controller), distributed locks (mutual exclusion), and singleton tasks (cron jobs that should run on exactly one instance). Without leader election, either every node must coordinate on every decision (expensive consensus per operation) or no coordination happens (data corruption, duplicate work). The key safety property: <strong>at most one leader at any time</strong>. Two leaders (split-brain) is worse than zero leaders (temporary unavailability).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: How does Raft prevent two leaders from existing simultaneously?</div>
+    <div class="qa-a">
+      <p>Raft uses three mechanisms: (1) <strong>Majority vote</strong>: a candidate must receive votes from ⌊N/2⌋+1 nodes. In a 5-node cluster, that's 3 votes. Two candidates can't both get 3 out of 5 votes. (2) <strong>One vote per term</strong>: each node votes for at most one candidate in a given term (first-come-first-served). If a node already voted for candidate A in term 5, it rejects candidate B's request for term 5. (3) <strong>Term number</strong>: if a leader discovers a higher term in any message, it immediately steps down to follower. This ensures that even if a network partition temporarily creates two leaders, the one with the lower term will step down when the partition heals. The combination guarantees: exactly one leader per term, at most one term active at a time.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: What are fencing tokens and why are leases alone insufficient?</div>
+    <div class="qa-a">
+      <p>Leases grant leadership for a bounded time, but a leader can be paused (GC, network delay) and resume after its lease expired, unaware that a new leader was elected. If the old leader writes to the database, it corrupts the new leader's state. <strong>Fencing tokens</strong> solve this: each lease grant carries a monotonically increasing number. The database rejects any write with a token lower than the highest it has seen. When the old leader resumes with token=33, but the new leader has been writing with token=34, the database rejects the old leader's writes. This moves the safety guarantee from the leader (which may have an incorrect view of time) to the storage layer (which enforces a strict ordering). DDIA Ch. 8 argues this is the only safe approach for distributed locks.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: Compare etcd, ZooKeeper, and Redis for leader election.</div>
+    <div class="qa-a">
+      <p><strong>etcd:</strong> Raft-based, strongly consistent, native lease + election API, gRPC interface, K8s native. The modern standard for leader election. <strong>ZooKeeper:</strong> ZAB-based, strongly consistent, ephemeral nodes for sessions, mature (15+ years), but heavier operationally and being phased out (Kafka KRaft, Solr removing ZK). <strong>Redis:</strong> Tempting (SETNX + EXPIRE = "leader election in one line"), but fundamentally unsafe: Redis replication is async — a failover can lose the lock key, allowing two leaders. The Redlock algorithm attempts to fix this with multi-instance coordination, but Kleppmann demonstrated it's still unsafe under realistic failure scenarios (long GC pauses, clock drift). <strong>Use etcd or ZooKeeper for leader election. Do not use Redis unless you accept the risk of split-brain.</strong></p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: A distributed cron scheduler runs on 5 instances. How do you ensure each scheduled job runs on exactly one instance?</div>
+    <div class="qa-a">
+      <p><strong>Approach 1 — Global leader:</strong> Elect one instance as the leader using etcd. Only the leader runs cron jobs. If the leader dies, a new leader is elected and takes over the schedule. Simple but creates a bottleneck (all jobs run on one machine). <strong>Approach 2 — Per-job leader:</strong> Each job has its own leader lock in etcd (key: <code>/cron/jobs/{job_id}/leader</code>). Instances compete for each job independently. Different jobs can run on different instances — natural load distribution. <strong>Approach 3 — Database-backed locks:</strong> Each instance tries <code>INSERT INTO cron_locks (job_id, instance_id, expires_at) WHERE NOT EXISTS ...</code> with a TTL. The database guarantees exactly one insert succeeds. Simpler but requires the database to be available. <strong>For FAANG-scale:</strong> Approach 2 with etcd. It's the pattern used by Kubernetes CronJobs (the controller is the leader that decides which node runs each job).</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ACTUAL SYSTEM DESIGN INTERVIEW ============ -->
+<section class="section" id="s13b">
+  <div class="section-num">13b</div>
+  <h2>Actual System Design Interview — "Design a Distributed Task Scheduler" (Google-style)</h2>
+  <p>This is a Google/Meta L5+ question. The interviewer is testing whether you understand leader election as a coordination primitive, how to handle worker failure, and how to prevent duplicate task execution.</p>
+
+  <div class="callout blue">
+    <div class="callout-label">The Prompt</div>
+    <p>"Design a distributed task scheduler. Users submit tasks (e.g., 'send email batch,' 'generate report'). The system must guarantee each task executes <strong>exactly once</strong>, even during worker failures. Support delayed/scheduled tasks and at least 10K tasks per second."</p>
+  </div>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    C["Clients"]
+    S["Scheduler leader"]
+    E["etcd lease"]
+    W1["Worker 1"]
+    W2["Worker 2"]
+    WN["Worker N"]
+    DB["Task DB"]
+    N1["Leader lease decides who can assign tasks"]
+    N2["Assignments carry fencing tokens"]
+    N3["Task DB rejects stale completions"]
+
+    C --> S
+    S <--> E
+    S --> W1
+    S --> W2
+    S --> WN
+    W1 --> DB
+    W2 --> DB
+    WN --> DB
+    S -.-> N1
+    W2 -.-> N2
+    DB -.-> N3
+
+    classDef user fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef leader fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef coord fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef worker fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef store fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C user;
+    class S leader;
+    class E coord;
+    class W1,W2,WN worker;
+    class DB store;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Task scheduler: one lease-backed scheduler assigns work, workers report into durable task state, and fencing tokens keep stale actors from winning late.</div>
+  </div>
+
+  <h3>Interviewer Follow-ups</h3>
+
+  <div class="qa">
+    <div class="qa-q">"A worker takes a task, starts processing, then crashes. How do you handle this?"</div>
+    <div class="qa-a">
+      <p>The scheduler tracks task state: <code>pending → assigned → completed</code>. When a task is assigned to a worker, the scheduler records the assignment with a <strong>deadline</strong> (e.g., "must complete within 60 seconds"). If the worker doesn't report completion by the deadline, the scheduler reassigns the task to another worker with a <strong>new, higher fencing token</strong>. If the original worker recovers and tries to mark the task complete with the old token, the Task DB rejects the write (stale token). This is the <strong>at-least-once + idempotency = exactly-once</strong> pattern. The task itself should be idempotent (sending the same email twice is the same as sending it once, using a deduplication key). Reference: DDIA Ch. 11 discusses this as the "effectively exactly-once" pattern — true exactly-once requires both the scheduler and the downstream system to participate in the deduplication protocol.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"The scheduler leader crashes. What happens to the in-flight tasks?"</div>
+    <div class="qa-a">
+      <p>The scheduler's etcd lease expires. A standby scheduler instance acquires the leader lease and becomes the new scheduler. The new scheduler reads the task state from the Task DB: tasks marked "assigned" with expired deadlines are reassigned. Tasks marked "pending" are assigned normally. Tasks marked "completed" are skipped. The key: <strong>all task state lives in the Task DB, not in the scheduler's memory</strong>. The scheduler is stateless — it's purely a coordinator. Any scheduler instance can take over by reading the DB. This is why the scheduler holds an etcd leader lease but stores task state in a durable database (PostgreSQL), not in etcd (which has a 2GB limit and isn't designed for high-volume state).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"How do you handle scheduled/delayed tasks — 'send this email at 3pm tomorrow'?"</div>
+    <div class="qa-a">
+      <p>Store tasks with an <code>execute_at</code> timestamp in the Task DB. The scheduler periodically polls: <code>SELECT * FROM tasks WHERE execute_at &lt;= NOW() AND status = 'pending' ORDER BY execute_at LIMIT 100</code>. Alternatively, use a <strong>delay queue</strong> pattern: tasks are inserted into a Redis Sorted Set with score = execute_at timestamp. The scheduler does <code>ZRANGEBYSCORE tasks -inf {now} LIMIT 100</code> to find tasks ready for execution. The Redis approach is faster for high-volume scheduling (sorted set lookup is O(log N)), while the PostgreSQL approach is simpler and doesn't require another system. For 10K tasks/second, Redis or a dedicated queue (Amazon SQS with delay) is more appropriate than polling PostgreSQL.</p>
+    </div>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">What the Interviewer Is Testing</div>
+    <p>(1) <strong>Leader election usage</strong> — exactly one scheduler active at a time, using etcd leases. (2) <strong>Fencing tokens for safety</strong> — preventing stale workers and stale schedulers from corrupting task state. (3) <strong>Failure recovery</strong> — stateless scheduler + durable task DB means any scheduler can take over. (4) <strong>Exactly-once semantics</strong> — at-least-once delivery + idempotent tasks + fencing tokens. (5) <strong>Separation of coordination (etcd) from state (PostgreSQL)</strong> — using each system for what it's designed for.</p>
+  </div>
+</section>
+
+<!-- ============ CHEAT SHEET ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> Leader election ensures exactly one node acts as coordinator. Two leaders (split-brain) is worse than no leader (temporary unavailability).<br>
+    <strong>2.</strong> Raft: majority vote + one vote per term + term numbers → at most one leader per term. Used by etcd, CockroachDB, TiKV, Kafka KRaft.<br>
+    <strong>3.</strong> etcd leases: create a key with a TTL. If the holder crashes, the key auto-deletes. Watchers are notified. Simple, safe, production-ready.<br>
+    <strong>4.</strong> ZooKeeper ephemeral sequential nodes: watch the next-lower node to avoid herd effect. Chain of watchers → O(1) notifications per failure.<br>
+    <strong>5.</strong> Fencing tokens prevent stale leaders from corrupting data. The storage layer rejects operations with tokens lower than the highest seen.<br>
+    <strong>6.</strong> Leases alone are insufficient — a paused leader (GC, network) can act on an expired lease. Always combine leases with fencing tokens.<br>
+    <strong>7.</strong> FLP impossibility: deterministic consensus is impossible in async systems with even one crash. Raft works around it with randomized timeouts.<br>
+    <strong>8.</strong> Google Chubby: Paxos-based lock service. GFS, BigTable, MapReduce all depend on it. Sequencers (fencing tokens) prevent stale locks.<br>
+    <strong>9.</strong> Kafka KRaft replaces ZooKeeper with embedded Raft. Controller quorum holds all metadata. Faster partition reassignment, simpler operations.<br>
+    <strong>10.</strong> Do NOT use Redis for leader election (async replication → split-brain risk). Use etcd or ZooKeeper — they exist to solve this problem.</p>
+  </div>
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — Leader Election Safety Chain</h2>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    C["Consensus protocol"]
+    L["Lease or session"]
+    F["Fencing token"]
+    N1["At most one leader wins the election"]
+    N2["Dead leaders eventually lose authority"]
+    N3["Paused leaders cannot write after replacement"]
+
+    C --> L --> F
+    C -.-> N1
+    L -.-> N2
+    F -.-> N3
+
+    classDef consensus fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef lease fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef fencing fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C consensus;
+    class L lease;
+    class F fencing;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">The safety chain is layered: elect one leader, expire that leader when it stops renewing, then block stale writes even if the old leader wakes back up.</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>Leader election requires three layers of safety, not one.</strong> Consensus (Raft) ensures at most one leader is elected. Leases ensure a dead leader eventually loses power. Fencing tokens ensure a stale leader can't corrupt data even if it doesn't know it's been replaced. Each layer addresses a different failure mode. Missing any one layer creates a window for split-brain or data corruption. In interviews, demonstrating awareness of all three layers — especially fencing tokens — signals senior-level distributed systems understanding.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References &amp; Further Reading</h2>
+  <p>Use these as mechanism notes, not reading list items: each source is here because it explains a specific failure mode, invariant, or protocol move that shows up in real systems and interviews.</p>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Ongaro &amp; Ousterhout — "In Search of an Understandable Consensus Algorithm" (USENIX ATC 2014)</div>
+    <p><strong>Diego Ongaro, John Ousterhout.</strong> Stanford University. USENIX ATC 2014, pp. 305-319. Best Paper.<br>
+    <a href="https://raft.github.io/raft.pdf" style="color:var(--accent);" target="_blank">https://raft.github.io/raft.pdf</a></p>
+    <p>&#x2022; The election path is really a <strong>timer design</strong> problem: heartbeats reset follower timers, timeout randomness breaks symmetry, and a candidate only needs one clean majority round to take over. That is the concrete reason Raft avoids the endless election collisions that show up in naive peer-to-peer schemes.</p>
+    <p>&#x2022; The <strong>vote rule is also a log-safety rule</strong>. A follower does not vote purely because a timeout fired; it first checks whether the candidate's last <code class="inline">term,index</code> is at least as up to date as its own. That single check is what stops an older node from becoming leader and throwing away already-committed entries.</p>
+    <p>&#x2022; Read this paper for the exact split-brain boundary: <strong>majority quorum + one vote per term + higher-term stepdown</strong>. Those three rules are the core of why a 5-node cluster can tolerate two failures but a 2/3 partition cannot keep making decisions on both sides.</p>
+    <p>&#x2022; The useful implementation extras are the ones operators actually feel: <strong>pre-vote</strong> to stop stale rejoining nodes from disturbing a healthy leader, and <strong>leadership transfer</strong> to move primaries deliberately during maintenance instead of forcing a messy timeout-driven failover.</p>
+    <p>&#x2022; Come back to the formal model when you want to sanity-check an implementation claim. Raft is simple enough to explain in prose, but still subtle enough that the <strong>TLA+</strong> model and dissertation extensions are worth using as the final correctness reference.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Burrows — "The Chubby Lock Service for Loosely-Coupled Distributed Systems" (OSDI 2006)</div>
+    <p><strong>Mike Burrows.</strong> Google Inc. 7th USENIX OSDI, November 2006.<br>
+    <a href="https://research.google.com/archive/chubby-osdi06.pdf" style="color:var(--blue);" target="_blank">https://research.google.com/archive/chubby-osdi06.pdf</a></p>
+    <p>&#x2022; Chubby matters because it shows how a production lock service turns <strong>Paxos into a lease-backed master</strong>. The master is not just "the node that won"; it is the node that can safely serve reads locally because its lease is still backed by quorum-confirmed state.</p>
+    <p>&#x2022; The <strong>KeepAlive path</strong> is worth studying as a protocol, not a feature. Session renewal, cache invalidation, and liveness checking all ride the same RPC stream, which keeps the client model simple and gives the master one place to decide who is still alive enough to trust.</p>
+    <p>&#x2022; The paper's most useful locking detail is the <strong>sequencer</strong>. Chubby does not assume every client instantly notices a revoked lock; instead it hands downstream systems a generation-bearing token they can validate. That is the practical ancestor of the fencing-token pattern used in modern leader-election answers.</p>
+    <p>&#x2022; Read the operational numbers as a design constraint: coordination systems spend most of their lives <strong>hiding failover from clients</strong>, not proving liveness on a whiteboard. Fast master replacement, session continuity, and cache behavior matter more than theoretical elegance once hundreds of internal systems depend on the service.</p>
+    <p>&#x2022; The "used as a name service" lesson is also technical, not cultural. Once teams started reading Chubby paths like service-discovery records, the read path and cache layer became first-class scaling problems. That is a reminder that coordination planes often get dragged into data-plane traffic if the API makes it too easy.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Kleppmann — "Designing Data-Intensive Applications" (2017), Ch. 8-9</div>
+    <p><strong>Martin Kleppmann.</strong> O'Reilly Media, 2017.<br>
+    <a href="https://dataintensive.net/" style="color:var(--orange);" target="_blank">https://dataintensive.net/</a></p>
+    <p>&#x2022; The main lesson to extract here is blunt: <strong>a lease is a liveness hint, not a safety proof</strong>. GC pauses, delayed packets, and clock skew are enough to let an old leader keep talking after a new one has taken over. Safety only comes back when the storage layer compares a monotonically increasing fencing value and rejects stale work.</p>
+    <p>&#x2022; The Redlock discussion is useful because it names the exact failure assumptions that break casual lock designs: <strong>asynchronous replication, local clocks, and unbounded process pauses</strong>. If your lock service depends on those behaving nicely, it is not really a correctness primitive.</p>
+    <p>&#x2022; Chapter 9 is where leader election stops being "just picking a primary" and turns into a bigger equivalence class. <strong>Leader election, total order broadcast, atomic commit, and linearizable compare-and-swap</strong> are tightly related because they all require one globally agreed ordering of decisions.</p>
+    <p>&#x2022; This is also the right place to internalize the <strong>clock model</strong>. Wall-clock time is for expiries and operator dashboards; protocol correctness has to hang off logical counters such as terms, epochs, lease generations, and fencing tokens.</p>
+    <p>&#x2022; Keep FLP in view as the background constraint: a leader-election system can be safe or live under harsh conditions, but not both without extra timing assumptions. That is why production systems talk about <strong>election timeouts, heartbeat intervals, and partial synchrony</strong> instead of promising instant failover under every network failure.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals &middot; built for deep understanding
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+</body>
+</html>
