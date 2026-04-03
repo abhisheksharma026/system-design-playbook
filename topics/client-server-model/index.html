@@ -275,7 +275,7 @@ sequence numbers, window sizes, and MSS (max segment size).</span></pre>
   </div>
   <div class="callout purple">
     <div class="callout-label">Interview Tip</div>
-    <p>In practice, people use the simpler <strong>TCP/IP 4-layer model</strong>: Application → Transport → Internet → Link. The key insight: <strong>each layer wraps the data from above with its own header</strong> (<strong>encapsulation</strong>). On receive, it <strong>unwraps</strong> (decapsulates) layer by layer.</p>
+    <p>In practice, most engineers think in the simpler <strong>TCP/IP 4-layer model</strong>: Application → Transport → Internet → Link. Each layer wraps the bytes from above with its own header, then the receiver peels those layers back off in reverse order.</p>
   </div>
 </section>
 
@@ -283,7 +283,7 @@ sequence numbers, window sizes, and MSS (max segment size).</span></pre>
 <section class="section" id="s5b">
   <div class="section-num">05b</div>
   <h2>Hands-On: Terminal Demos</h2>
-  <p>Theory is one thing — watching bytes flow through your own terminal is another. These commands let you <strong>see</strong> the client-server model in action on your local machine. Open two terminal windows and follow along.</p>
+  <p>Theory helps, but seeing bytes move through your own terminal helps more. These commands let you watch the client-server model on your local machine. Open two terminals and follow along.</p>
   <p>Where command syntax differs, this section calls out both <strong>macOS</strong> and <strong>Linux</strong>. If only one command is shown, assume it works on both.</p>
   <p>Exact output will vary by machine, network, DNS answers, TLS negotiation, and remote server configuration. Focus on the shape of the interaction, not the literal IPs or header values.</p>
 
@@ -315,7 +315,7 @@ Hello from the client!
 
   <div class="callout green">
     <div class="callout-label">What Just Happened</div>
-    <p><strong>Terminal 1</strong> created a TCP socket on <code class="inline">127.0.0.1:8081</code> and called <code class="inline">listen()</code> — it became a <strong>server</strong>. <strong>Terminal 2</strong> called <code class="inline">connect()</code> to that socket — it became a <strong>client</strong>. The OS performed the TCP 3-way handshake (SYN → SYN-ACK → ACK) under the hood. Every byte you type is wrapped in a TCP segment, an IP packet, and sent through the loopback interface. This is the <em>exact same mechanism</em> that powers every website on the internet — just without HTTP on top.</p>
+    <p><strong>Terminal 1</strong> created a TCP socket on <code class="inline">127.0.0.1:8081</code> and called <code class="inline">listen()</code>, so it became the <strong>server</strong>. <strong>Terminal 2</strong> called <code class="inline">connect()</code>, so it became the <strong>client</strong>. The OS handled the TCP handshake under the hood. Every byte you type then moves as a TCP segment inside an IP packet across the loopback interface. Same mechanism as a website. Less ceremony.</p>
   </div>
 
   <h3>Demo 2: DNS Lookup with <code class="inline">dig</code></h3>
@@ -393,7 +393,7 @@ $ <span class="fn">echo</span> <span class="kw">-e</span> <span class="str">"HTT
   </div>
 
   <h3>Demo 5: See Your Machine's IP and Open Ports</h3>
-  <p>This is the one demo here where the command set differs noticeably across operating systems, so both variants are shown explicitly.</p>
+  <p>This is the one demo here where the commands differ enough across operating systems that both variants are worth showing.</p>
   <div class="code-block">
     <div class="code-header"><span>Network Inspection Commands (macOS and Linux)</span></div>
     <pre><span class="cm"># Your private IP on the local network</span>
@@ -660,12 +660,12 @@ LISTEN  0       128     0.0.0.0:<span class="num">3000</span>        node
 <section class="section" id="s11">
   <div class="section-num">11</div>
   <h2>Interview Questions & Answers</h2>
-  <p>Click any question to reveal a detailed answer. These are asked at FAANG-level interviews.</p>
+  <p>Click any question to reveal the answer. These are the kinds of questions that show up in strong backend and systems interviews.</p>
 
   <h3>Actual System Design Interview</h3>
   <div class="callout blue">
     <div class="callout-label">A Prompt You Could Actually Get</div>
-    <p><strong>Design the request path for a mobile checkout API.</strong> The interviewer is not only looking for “browser sends HTTP request.” They want to hear where naming, transport, retries, and server-side state boundaries sit, and where the operation can still go wrong if the network is flaky. The useful frame here is: request semantics at the HTTP layer, delivery behavior at the TCP layer, and correctness pushed to the application boundary instead of assumed from the network. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
+    <p><strong>Design the request path for a mobile checkout API.</strong> The interviewer is not asking for "browser sends HTTP request." They want to hear where naming, transport, retries, and server-side state boundaries live, and where the system can still fail on a flaky network. The clean frame is: HTTP for request semantics, TCP for byte delivery, and application logic for correctness. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref4" class="ref">[4]</a></p>
   </div>
   <div class="callout green">
     <div class="callout-label">How I'd Structure the Answer</div>

@@ -46,10 +46,10 @@
   <h2>Prerequisites & Key Terms</h2>
 
   <h3>Cache</h3>
-  <p>A fast-access storage layer that sits between the requester and the authoritative data source. Its purpose is to serve frequently-requested data without hitting the slower source every time. Caches exist at every level of a system — from CPU L1 caches (nanoseconds) to CDN edge servers (global scale). The fundamental trade-off: caches are fast but may serve <strong>stale</strong> data if the source has changed since the cache was populated.</p>
+  <p>A fast storage layer that sits between the requester and the source of truth. Its job is to serve frequently requested data without hitting the slower source every time. Caches show up everywhere, from CPU L1 to CDN edges. The trade-off is always the same: speed in exchange for possible <strong>staleness</strong>.</p>
 
   <h3>Cache Hit</h3>
-  <p>The requested data is found in the cache. The response is served directly from the cache, bypassing the slower source. This is the happy path — fast, cheap, and the entire reason caches exist.</p>
+  <p>The requested data is already in the cache, so the system serves it directly and skips the slower source. This is the good path. It is why caches exist in the first place.</p>
 
   <h3>Cache Miss</h3>
   <p>The requested data is <em>not</em> in the cache. The system must fall back to the slower source (database, API, disk), retrieve the data, serve it, and typically populate the cache for future requests. Individual misses are usually slower than going directly to the source because you paid the cache-lookup cost <em>plus</em> the source-lookup cost.</p>
@@ -325,7 +325,7 @@ keyspace_misses:<span class="num">1</span>
   <div class="section-num">08</div>
   <h2>Mini-Project: Feel What Caching Means</h2>
 
-  <p>Before building an LRU cache, let's start with the simplest possible example — a server with two routes: one that always hits the "database" (slow), and one that checks a local dictionary first (fast). This is the visceral experience of caching.</p>
+  <p>Before getting into LRU, start with the smallest useful example: one route always hits the "database" and one checks a local dictionary first. You can feel caching immediately when the slow path and fast path sit side by side.</p>
 
   <div class="code-block">
     <div class="code-header"><span>cache_feel.py — run with: python3 cache_feel.py (macOS/Linux/WSL)</span></div>
@@ -513,7 +513,7 @@ With Zipf distribution, caching just 10% of keys captures ~90% of requests!</pre
 
   <div class="callout green">
     <div class="callout-label">Key Insight</div>
-    <p>Cloudflare's architecture shows that <strong>caching is not one layer — it's a hierarchy</strong>. Browser → edge PoP → optional upper tier → origin. Each tier absorbs some fraction of requests, reducing repeated work at the origin. This is the same principle as the storage hierarchy (L1 → L2 → L3 → RAM → disk), applied to network-scale caching.</p>
+    <p>Cloudflare is a good reminder that <strong>caching is usually a stack, not a single box</strong>. Browser, edge PoP, optional upper tier, then origin. Each layer catches some repeat traffic before it falls through to the next one.</p>
   </div>
 </section>
 
@@ -535,11 +535,11 @@ With Zipf distribution, caching just 10% of keys captures ~90% of requests!</pre
   <p>When a cache server restarts, it's empty. All requests become misses, flooding the database. Fix: <strong>pre-warm</strong> the cache on startup by loading the most popular keys from the database, or use <strong>persistent caching</strong> (Redis with RDB/AOF) so the cache survives restarts.</p>
 
   <h3>5. Inconsistency Between Cache and DB</h3>
-  <p>The cache says "price = $99" but the DB says "price = $79" because an invalidation was lost. This is the fundamental tension of caching — speed vs freshness. Fix: use TTLs as a safety net (bounded staleness), event-driven invalidation for critical data, and monitor the gap between cache and DB versions.</p>
+  <p>The cache says "price = $99" but the DB says "price = $79" because an invalidation never made it through. That is the core cache trade-off: speed bought with the risk of staleness. Use TTLs as a backstop, event-driven invalidation where freshness matters, and version checks if the gap itself is operationally important.</p>
 
   <div class="callout red">
     <div class="callout-label">Production War Story</div>
-    <p>Flash sales, viral events, and synchronized TTL expiry routinely turn popular cache keys into outage triggers. The lesson is stable even when the specific company story changes: if many clients can miss the same hot key at once, you need coalescing, stale-while-revalidate, or early refresh to stop the database from becoming the blast radius.</p>
+    <p>Flash sales, viral events, and synchronized TTL expiry all create the same failure mode: too many clients miss the same hot key at the same time. If you do not coalesce, refresh early, or serve stale data briefly, the database eats the blast.</p>
   </div>
 </section>
 

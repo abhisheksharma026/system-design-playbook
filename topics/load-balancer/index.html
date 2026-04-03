@@ -493,7 +493,7 @@ http.server.HTTPServer((<span class="str">""</span>, <span class="num">7070</spa
 
   <div class="callout red">
     <div class="callout-label">Production War Story</div>
-    <p>A large SaaS provider experienced intermittent 502 errors after deploying a new version. The LB's health check was a simple TCP connect (port open = healthy). The new version had a bug that made it return 500 errors for ~10% of requests, but the port was always open, so the health check never caught it. After switching to an HTTP-level health check (<code>GET /health</code> expecting 200 + valid JSON), the buggy instances were automatically removed. The lesson: <strong>TCP health checks are not enough for HTTP services</strong> — always use deep, application-level health checks.</p>
+    <p>A large SaaS provider saw intermittent 502s after a deploy. The load balancer only checked whether the port accepted TCP connections, and the broken app still did that just fine while returning 500s to real traffic. Switching the check to <code>GET /health</code> with an application-level success condition removed the bad instances. For HTTP services, a TCP connect check is often too shallow to mean anything.</p>
   </div>
 </section>
 
@@ -702,14 +702,14 @@ flowchart LR
   <div class="qa">
     <div class="qa-q">Q4: How do health checks work and what happens when a backend fails?</div>
     <div class="qa-a">
-      <p>The LB periodically probes each backend (e.g., HTTP GET /health every 10s). If a backend fails N consecutive checks (typically 2-3), the LB marks it unhealthy and stops sending traffic. When the backend passes M consecutive checks (typically 2), it's marked healthy again. During the detection window (interval × fail threshold), some requests may hit the dead backend and fail. Mitigation: shorter intervals (5s), fewer required failures (2), and client-side retries. Critical: use <strong>application-level</strong> health checks (HTTP 200 + check dependencies), not just TCP connect — a server with an open port but crashing application will fool TCP checks.</p>
+      <p>The LB probes each backend on a fixed interval, for example <code class="inline">GET /health</code> every 10 seconds. After enough consecutive failures, it stops routing traffic there. After enough consecutive successes, it adds the backend back. During that detection window, some requests will still land on a dead server. Shorter intervals help, but the bigger point is to use <strong>application-level</strong> checks. A port that accepts TCP is not the same thing as a healthy HTTP service.</p>
     </div>
   </div>
 
   <div class="qa">
     <div class="qa-q">Q5: How would you prevent the load balancer from being a single point of failure?</div>
     <div class="qa-a">
-      <p>Three strategies: (1) <strong>Managed cloud LB</strong> (AWS ALB/NLB, GCP LB) — multi-AZ and managed by the cloud provider. This is the easiest approach. (2) <strong>Active-passive pair</strong> with keepalived — two Nginx/HAProxy instances share a floating VIP. If the primary dies, the passive claims the VIP in a few seconds. (3) <strong>DNS round-robin</strong> across multiple LBs — client resolves to one of several LB IPs. If one goes down, DNS health checks can remove it, though DNS TTL caching adds delay. Google's Maglev uses ECMP routing for N+1 redundancy across all LB machines. Whichever option you choose, the LB fleet needs a consistent view of backend membership quickly enough that a scale event does not create conflicting routing decisions across different balancers.</p>
+      <p>Three common answers: a managed cloud LB spread across zones, an active-passive pair with keepalived and a floating VIP, or multiple LBs behind DNS. The first is simplest. The second gives you direct control. The third works, but DNS caching makes failover slower and less exact. No matter which path you choose, the LB fleet still needs a fast and consistent view of backend membership.</p>
     </div>
   </div>
 

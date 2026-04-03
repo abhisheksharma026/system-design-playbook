@@ -194,7 +194,7 @@
 
   <div class="callout purple">
     <div class="callout-label">Interview Insight — IOPS Matters More Than Throughput</div>
-    <p>When designing database storage, <strong>IOPS (I/O Operations Per Second)</strong> matters more than raw throughput for OLTP workloads. An HDD does ~150 random IOPS. An NVMe SSD does ~500,000. That's a 3,000× difference. This is why databases moved from HDD to SSD — not for the bandwidth, but for the random access performance. When you hear "the database is slow," the first question is often: "is it on SSD or HDD?"</p>
+    <p>When designing database storage, <strong>IOPS (I/O Operations Per Second)</strong> matters more than raw throughput for OLTP workloads. An HDD does ~150 random IOPS. An NVMe SSD does ~500,000. That is roughly a 3,000× gap. Databases moved from HDD to SSD mostly because random access got dramatically better, not because the sequential bandwidth looked nicer on a slide.</p>
   </div>
 </section>
 
@@ -203,7 +203,7 @@
   <div class="section-num">05</div>
   <h2>Persistence vs Volatility</h2>
 
-  <p>This is the core concept of storage in system design: <strong>volatile storage</strong> (RAM) is fast but loses data on failure. <strong>Persistent storage</strong> (disk) is slower but survives failures. The tension between these two defines how every database and storage system is built.</p>
+  <p>This is the storage trade-off in one sentence: <strong>RAM is fast and forgetful</strong>, while <strong>disk is slower and durable</strong>. Every database and storage engine is built around that tension.</p>
 
   <div class="diagram-wrap">
     <svg viewBox="0 0 780 320" xmlns="http://www.w3.org/2000/svg" fill="none">
@@ -622,7 +622,7 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
 
   <div class="callout green">
     <div class="callout-label">What You'll Learn</div>
-    <p>Memory writes are usually much faster than disk writes that include <code class="inline">fsync()</code>, often by one or more orders of magnitude. But after killing and restarting the process, only the disk data survives. This is the fundamental tradeoff. Every database, cache, and storage system is a different answer to: "how much latency am I willing to pay for durability?"</p>
+    <p>Memory writes are usually much faster than disk writes that wait for <code class="inline">fsync()</code>. Kill the process and restart it, though, and only the disk state is still there. Every storage system ends up answering the same question: how much latency are you willing to pay for durability?</p>
   </div>
 </section>
 
@@ -660,7 +660,7 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
 
   <div class="callout green">
     <div class="callout-label">Key Insight — The Buffer Hit Ratio</div>
-    <p>In a read-heavy PostgreSQL system, engineers usually want a <strong>high buffer cache hit ratio</strong> so most reads come from memory instead of disk. You can inspect it with <code class="inline">SELECT sum(blks_hit) / sum(blks_hit + blks_read) FROM pg_stat_database;</code>, but the right target depends on workload, indexing, and whether the working set fits in memory. A low ratio is a signal to investigate RAM pressure, poor locality, or missing indexes rather than a universal "bad number." <a href="#ref3" class="ref">[3]</a></p>
+    <p>In a read-heavy PostgreSQL system, you usually want a <strong>high buffer cache hit ratio</strong> so most reads stay in memory. You can inspect it with <code class="inline">SELECT sum(blks_hit) / sum(blks_hit + blks_read) FROM pg_stat_database;</code>, but the number only matters in context. A low ratio is a reason to check locality, RAM pressure, or missing indexes, not a universal red alert by itself. <a href="#ref3" class="ref">[3]</a></p>
   </div>
 </section>
 
@@ -685,11 +685,11 @@ $ <span class="kw">for</span> i <span class="kw">in</span> $(seq 1 1000); <span 
   <p>Cloud block storage (AWS EBS, GCP Persistent Disk, Azure Managed Disks) adds network hops on top of storage latency. Local NVMe is usually much lower latency; network-attached block storage is usually in the millisecond range instead of the low hundreds of microseconds. For latency-sensitive databases, instance-local NVMe can be attractive, but the tradeoff is operational: local storage disappears when the instance is terminated.</p>
 
   <h3>6. Cold Start / Empty Cache</h3>
-  <p>After a database restart, the buffer pool is empty — every query hits disk. Performance can be dramatically worse until the cache "warms up." Some databases support <strong>buffer pool pre-warming</strong> (loading hot pages from disk on startup). PostgreSQL has <code class="inline">pg_prewarm</code>; MySQL has buffer pool dump/restore.</p>
+  <p>After a database restart, the buffer pool is empty, so every query falls through to disk until the cache warms back up. Some engines can pre-warm hot pages on startup. PostgreSQL has <code class="inline">pg_prewarm</code>; MySQL has buffer pool dump/restore.</p>
 
   <div class="callout red">
     <div class="callout-label">Production War Story</div>
-    <p>In 2017, GitLab suffered a major database incident that resulted in hours of downtime and roughly six hours of lost database data. The failure exposed gaps in backup coverage and restore readiness, not just in primary storage. The lesson: persistence is not only about <code class="inline">fsync()</code>; it is also about <strong>verified, tested backups</strong> across multiple storage tiers. A backup that has never been restored successfully is not a backup. <a href="#ref6" class="ref">[6]</a></p>
+    <p>In 2017, GitLab had a major database incident that led to hours of downtime and roughly six hours of lost data. The failure was not just about primary storage. It exposed weak backup coverage and weak restore readiness. Persistence is broader than <code class="inline">fsync()</code>. If a backup has never been restored successfully, it has not earned much trust. <a href="#ref6" class="ref">[6]</a></p>
   </div>
 </section>
 

@@ -94,6 +94,14 @@ GRAPH_LAYOUT = {
         "deps": ["network-protocols", "storage", "latency-and-throughput"],
         "orbit_rotation": -90,
     },
+    "relational-databases": {
+        "x": 1000,
+        "y": 180,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["storage", "client-server-model"],
+        "orbit_rotation": -36,
+    },
 }
 
 

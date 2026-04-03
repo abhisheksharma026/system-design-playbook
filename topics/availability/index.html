@@ -531,7 +531,7 @@ print(<span class="str">"[Monitor] Checking every 5s. Ctrl+C for report.\n"</spa
 
   <div class="callout red">
     <div class="callout-label">The 2017 S3 Outage</div>
-    <p>On February 28, 2017, an incorrectly entered parameter during S3 maintenance removed more server capacity than intended in us-east-1. Because other AWS systems and many customer applications depended on that regional S3 control path, the blast radius was large and recovery took several hours while key subsystems restarted. AWS later added stronger safeguards to the tooling and reprioritized work to improve recovery speed. The lesson: even extremely durable storage can still suffer major availability events due to operational mistakes and recovery-path bottlenecks. <a href="#ref5" class="ref">[5]</a></p>
+    <p>On February 28, 2017, an incorrectly entered parameter during S3 maintenance removed more server capacity than intended in us-east-1. Because other AWS systems and many customer applications depended on that regional S3 control path, the blast radius was large and recovery took several hours while key subsystems restarted. AWS later added stronger safeguards to the tooling and reprioritized work to improve recovery speed. Even extremely durable storage can still go down because of operational mistakes and slow recovery in the control path. <a href="#ref5" class="ref">[5]</a></p>
   </div>
 </section>
 
@@ -575,7 +575,7 @@ print(<span class="str">"[Monitor] Checking every 5s. Ctrl+C for report.\n"</spa
 
   <div class="callout red">
     <div class="callout-label">Production War Story</div>
-    <p>On October 4, 2021, Meta suffered a multi-hour outage after configuration changes on backbone routers disrupted communication between data centers. Public-facing services and many internal tools were affected at the same time, which made diagnosis and recovery harder. The lesson is broader than one company: your recovery path, control plane, and internal tooling should not all depend on the same failing layer. <a href="#ref6" class="ref">[6]</a></p>
+    <p>On October 4, 2021, Meta suffered a multi-hour outage after configuration changes on backbone routers disrupted communication between data centers. Public-facing services and many internal tools were affected at the same time, which made diagnosis and recovery harder. The broader point is simple: do not let the recovery path, the control plane, and your internal tooling all depend on the same failing layer. <a href="#ref6" class="ref">[6]</a></p>
   </div>
 </section>
 
@@ -730,19 +730,19 @@ KEY INSIGHT: Replicas are multiplicative force multipliers.
   <h3>Actual System Design Interview</h3>
   <div class="callout blue">
     <div class="callout-label">A Prompt You Could Actually Get</div>
-    <p><strong>Design a payment-facing API for 99.99% monthly availability.</strong> The real test here is not whether you know the phrase “multi-AZ.” It is whether you can translate an availability target into dependency math, failure isolation, error-budget tradeoffs, and an operational plan that still makes sense during a regional event. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a></p>
+    <p><strong>Design a payment-facing API for 99.99% monthly availability.</strong> The hard part is not saying "multi-AZ." It is turning that target into dependency math, failure isolation, error-budget decisions, and a recovery plan that still works during a regional event. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref4" class="ref">[4]</a></p>
   </div>
   <div class="callout green">
     <div class="callout-label">How I'd Structure the Answer</div>
-    <p>I would start by naming the SLI first: for example, successful authorization responses within a defined latency bound. Then I would turn the 99.99% target into an error budget and say out loud that every hard dependency spends from the same budget. That changes the architecture discussion immediately: one load balancer, one primary database, or one regional control plane is no longer “just an implementation detail.” I would also separate data-plane availability from control-plane availability, because many famous outages kept the serving fleet alive while the coordination layer failed. If the system is partitioned by merchant, account, or card range, I would name that ownership key explicitly and explain how failover updates the routing view without leaving half the fleet on the old owner. <a href="#ref1" class="ref">[1]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref6" class="ref">[6]</a></p>
+    <p>I would start with the SLI: for example, successful authorization responses inside a latency bound. Then I would turn 99.99% into an error budget and make the obvious point that every hard dependency spends from that same budget. Once you say that out loud, one load balancer or one regional control plane stops looking like a small detail. I would also separate data-plane and control-plane availability, because many real outages break coordination long before they break serving capacity. If traffic is partitioned by merchant, account, or card range, I would name that key and explain how failover updates routing cleanly. <a href="#ref1" class="ref">[1]</a> <a href="#ref4" class="ref">[4]</a> <a href="#ref6" class="ref">[6]</a></p>
   </div>
   <div class="callout orange">
     <div class="callout-label">Where the Interviewer Pushes</div>
-    <p>The next question is usually: <em>what happens during a partition or a partial regional failure?</em> That is where CAP stops being abstract. I would explain which operations are allowed to fail closed for correctness and which ones can keep serving from a degraded path. I would also expect a follow-up on failover drills: if the design assumes standby promotion or region evacuation, I need evidence that it has been exercised, not just diagrammed. For partitioned systems, I would add one more failure mode: traffic does get remapped to survivors, but stale endpoint maps, cold caches, or ownership disagreement can burn the latency and error budget even if the service stays “up.” The SRE framing matters here because availability is not only replicas; it is safe release policy, observability, and tested recovery paths. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref6" class="ref">[6]</a></p>
+    <p>The next question is usually: <em>what happens during a partition or a partial regional failure?</em> That is where CAP stops being abstract. I would say which operations fail closed for correctness and which ones can limp along on a degraded path. I would also expect a follow-up on drills. If the design assumes promotion or regional evacuation, I want to know it has been exercised, not just drawn in a diagram. In partitioned systems, stale endpoint maps, cold caches, and routing disagreement can still burn the latency and error budget even when the service looks "up" from far away. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref3" class="ref">[3]</a> <a href="#ref6" class="ref">[6]</a></p>
   </div>
   <div class="callout purple">
     <div class="callout-label">Production Case Study Lens</div>
-    <p><strong>Think an SRE-run payment API:</strong> global routing, multi-AZ regional serving, and a control plane that may degrade differently from the data plane. The interview quality comes from turning “multi-region” into error-budget math, failover behavior, and routing convergence rather than treating redundancy as a box-counting exercise. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref6" class="ref">[6]</a></p>
+    <p><strong>Think in terms of an SRE-run payment API:</strong> global routing, regional serving, and a control plane that can fail differently from the data plane. The stronger answer turns "multi-region" into budget math, failover behavior, and routing convergence instead of just counting boxes. <a href="#ref1" class="ref">[1]</a> <a href="#ref2" class="ref">[2]</a> <a href="#ref6" class="ref">[6]</a></p>
   </div>
   <div class="diagram-wrap">
     <pre class="mermaid">
@@ -1000,7 +1000,7 @@ flowchart LR
     <p>• The durability docs are worth reading for the exact separation of concerns: <strong>11 nines durability</strong> comes from redundant multi-AZ storage plus integrity checking and repair, while availability is about whether reads and writes succeed right now.</p>
     <p>• The SLA is the contractual layer, not the design explanation: monthly uptime percentages define customer compensation thresholds, which is why SLA numbers should never be read as the same thing as internal SLO targets.</p>
     <p>• The 2017 us-east-1 event summary is technically useful because it shows a <strong>subsystem dependency chain</strong>: an operator command removed more capacity than intended, which forced restart of indexing and placement subsystems before request traffic could recover.</p>
-    <p>• The lesson is that availability failures often come from metadata and control-path recovery time, not from losing object replicas themselves.</p>
+    <p>• A lot of availability failures start in metadata and control-path recovery, not in the object replicas themselves.</p>
   </div>
 
   <div id="ref6" class="callout red">
