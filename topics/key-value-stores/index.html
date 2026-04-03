@@ -476,49 +476,42 @@ $ <span class="fn">curl</span> -X DELETE localhost:8080/greeting
     <p>"Design a rate limiter that enforces 100 requests per minute per user across a distributed system with multiple API servers. It should handle 50K RPS total and not become a bottleneck."</p>
   </div>
 
-  <!-- Architecture diagram -->
   <div class="diagram-wrap">
-    <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <defs>
-        <marker id="ma" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#8891a8"/></marker>
-        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
-      </defs>
-      <!-- Client -->
-      <rect x="20" y="110" width="80" height="50" rx="8" fill="#222734" stroke="#f87171" stroke-width="1.5"/>
-      <text x="60" y="140" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#f87171" font-weight="600">Clients</text>
-      <!-- API servers -->
-      <rect x="150" y="40" width="110" height="40" rx="6" fill="#222734" stroke="#a78bfa" stroke-width="1.5"/>
-      <text x="205" y="65" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#a78bfa">API Server 1</text>
-      <rect x="150" y="110" width="110" height="40" rx="6" fill="#222734" stroke="#a78bfa" stroke-width="1.5"/>
-      <text x="205" y="135" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#a78bfa">API Server 2</text>
-      <rect x="150" y="180" width="110" height="40" rx="6" fill="#222734" stroke="#a78bfa" stroke-width="1.5"/>
-      <text x="205" y="205" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#a78bfa">API Server N</text>
-      <path d="M100 125 L150 60" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <path d="M100 135 L150 130" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <path d="M100 145 L150 200" stroke="#8891a8" stroke-width="1" marker-end="url(#ma)"/>
-      <!-- Rate Limiter middleware -->
-      <rect x="310" y="90" width="130" height="80" rx="8" fill="#222734" stroke="#fb923c" stroke-width="2"/>
-      <text x="375" y="120" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#fb923c" font-weight="600">Rate Limiter</text>
-      <text x="375" y="140" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">INCR + EXPIRE</text>
-      <text x="375" y="155" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">per user per window</text>
-      <path d="M260 60 L310 110" stroke="#fb923c" stroke-width="1" marker-end="url(#ma)"/>
-      <path d="M260 130 L310 130" stroke="#fb923c" stroke-width="1" marker-end="url(#ma)"/>
-      <path d="M260 200 L310 155" stroke="#fb923c" stroke-width="1" marker-end="url(#ma)"/>
-      <!-- Redis -->
-      <rect x="500" y="95" width="120" height="70" rx="8" fill="#222734" stroke="#6ee7b7" stroke-width="2"/>
-      <text x="560" y="122" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="13" fill="#6ee7b7" font-weight="600">Redis</text>
-      <text x="560" y="142" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#5c6580">shared counter store</text>
-      <text x="560" y="155" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">~50K ops/sec</text>
-      <path d="M440 130 L500 130" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <!-- Labels -->
-      <rect x="445" y="200" width="295" height="108" rx="8" fill="#14171e" stroke="#2a3040" stroke-width="1"/>
-      <text x="475" y="222" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7" font-weight="600">WHY REDIS?</text>
-      <text x="475" y="244" font-family="DM Sans,sans-serif" font-size="9" fill="#8891a8">&#x25B8; Atomic INCR keeps updates safe</text>
-      <text x="475" y="262" font-family="DM Sans,sans-serif" font-size="9" fill="#8891a8">&#x25B8; EXPIRE clears each window</text>
-      <text x="475" y="280" font-family="DM Sans,sans-serif" font-size="8.5" fill="#8891a8">&#x25B8; One shared counter across every API server</text>
-      <text x="475" y="298" font-family="DM Sans,sans-serif" font-size="9" fill="#8891a8">&#x25B8; Sub-ms reads and writes</text>
-    </svg>
-    <div class="diagram-caption">Distributed rate limiter: API servers share a Redis counter per user per time window</div>
+    <pre class="mermaid">
+flowchart LR
+    C["Clients"]
+    A1["API Server 1"]
+    A2["API Server 2"]
+    AN["API Server N"]
+    R["Rate Limiter"]
+    X["Redis"]
+    N1["Atomic INCR keeps updates safe"]
+    N2["EXPIRE clears each window"]
+    N3["One shared counter across every API server"]
+    N4["Sub-ms reads and writes"]
+
+    C --> A1 --> R
+    C --> A2 --> R
+    C --> AN --> R
+    R --> X
+    X -.-> N1
+    X -.-> N2
+    R -.-> N3
+    X -.-> N4
+
+    classDef user fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef api fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C user;
+    class A1,A2,AN api;
+    class R core;
+    class X data;
+    class N1,N2,N3,N4 note;
+    </pre>
+    <div class="diagram-caption">Distributed rate limiter: API servers share one Redis-backed counter per user per time window, so enforcement remains global instead of fragmenting across instances.</div>
   </div>
 
   <h3>Interviewer Follow-ups</h3>
@@ -578,53 +571,34 @@ $ <span class="fn">curl</span> -X DELETE localhost:8080/greeting
   <h2>Mental Model — KV Store Decision Tree</h2>
 
   <div class="diagram-wrap">
-    <svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" fill="none">
-      <defs>
-        <marker id="mg" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#6ee7b7"/></marker>
-        <marker id="mo" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#fb923c"/></marker>
-      </defs>
-      <!-- Root question -->
-      <polygon points="200,15 310,45 200,75 90,45" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
-      <text x="200" y="42" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#fbbf24" font-weight="600">Must data survive</text>
-      <text x="200" y="56" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#fbbf24" font-weight="600">a crash?</text>
-      <!-- NO: in-memory -->
-      <path d="M90 45 L30 110" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <text x="45" y="80" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">No</text>
-      <rect x="5" y="115" width="100" height="40" rx="6" fill="#222734" stroke="#6ee7b7" stroke-width="1.5"/>
-      <text x="55" y="140" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6ee7b7" font-weight="600">Redis</text>
-      <text x="55" y="170" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">cache, sessions, counters</text>
-      <!-- YES: persistent -->
-      <path d="M310 45 L390 110" stroke="#fb923c" stroke-width="1.5" marker-end="url(#mo)"/>
-      <text x="365" y="80" font-family="IBM Plex Mono,monospace" font-size="9" fill="#fb923c">Yes</text>
-      <!-- Second question -->
-      <polygon points="450,110 560,140 450,170 340,140" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
-      <text x="450" y="137" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#fbbf24" font-weight="600">Strong consistency</text>
-      <text x="450" y="152" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#fbbf24" font-weight="600">needed?</text>
-      <!-- YES: consensus -->
-      <path d="M560 140 L630 200" stroke="#fb923c" stroke-width="1.5" marker-end="url(#mo)"/>
-      <text x="610" y="175" font-family="IBM Plex Mono,monospace" font-size="9" fill="#fb923c">Yes</text>
-      <rect x="590" y="205" width="100" height="40" rx="6" fill="#222734" stroke="#a78bfa" stroke-width="1.5"/>
-      <text x="640" y="228" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#a78bfa" font-weight="600">etcd / ZK</text>
-      <text x="640" y="260" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">coordination, config, locks</text>
-      <!-- NO: AP-style -->
-      <path d="M340 140 L270 200" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <text x="285" y="175" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">No</text>
-      <!-- Third question -->
-      <polygon points="270,200 360,230 270,260 180,230" fill="#222734" stroke="#fbbf24" stroke-width="1.5"/>
-      <text x="270" y="227" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#fbbf24" font-weight="600">Managed or</text>
-      <text x="270" y="242" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#fbbf24" font-weight="600">self-hosted?</text>
-      <path d="M180 230 L100 290" stroke="#6ee7b7" stroke-width="1.5" marker-end="url(#mg)"/>
-      <text x="120" y="265" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6ee7b7">Managed</text>
-      <rect x="50" y="295" width="110" height="40" rx="6" fill="#222734" stroke="#fb923c" stroke-width="1.5"/>
-      <text x="105" y="320" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#fb923c" font-weight="600">DynamoDB</text>
-      <path d="M360 230 L440 290" stroke="#fb923c" stroke-width="1.5" marker-end="url(#mo)"/>
-      <text x="420" y="265" font-family="IBM Plex Mono,monospace" font-size="9" fill="#fb923c">Self-hosted</text>
-      <rect x="390" y="295" width="110" height="40" rx="6" fill="#222734" stroke="#fb923c" stroke-width="1.5"/>
-      <text x="445" y="320" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#fb923c" font-weight="600">Cassandra</text>
-      <text x="445" y="348" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">write-heavy, time-series</text>
-      <text x="105" y="348" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#5c6580">serverless, auto-scaling</text>
-    </svg>
-    <div class="diagram-caption">Decision tree: choosing the right KV store based on durability, consistency, and operational model</div>
+    <pre class="mermaid">
+flowchart TB
+    Q{"Must data survive a crash?"}
+    R["Redis<br/>cache · sessions · counters"]
+    C{"Strong consistency needed?"}
+    E["etcd / ZooKeeper<br/>coordination · config · locks"]
+    M{"Managed or self-hosted?"}
+    D["DynamoDB<br/>serverless · auto-scaling"]
+    K["Cassandra<br/>write-heavy · time-series"]
+
+    Q -- "No" --> R
+    Q -- "Yes" --> C
+    C -- "Yes" --> E
+    C -- "No" --> M
+    M -- "Managed" --> D
+    M -- "Self-hosted" --> K
+
+    classDef cache fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef question fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef consensus fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef durable fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+
+    class Q,C,M question;
+    class R cache;
+    class E consensus;
+    class D,K durable;
+    </pre>
+    <div class="diagram-caption">Decision tree: durability comes first, then consistency, then operational model. That narrows the KV choice quickly in most design discussions.</div>
   </div>
 
   <div class="callout green">
@@ -685,5 +659,6 @@ $ <span class="fn">curl</span> -X DELETE localhost:8080/greeting
 
 </div>
 <script src="../../assets/js/topic.js"></script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
 </body>
 </html>
