@@ -134,6 +134,14 @@ GRAPH_LAYOUT = {
         "deps": ["availability", "network-protocols", "replication-sharding"],
         "orbit_rotation": -54,
     },
+    "peer-networking": {
+        "x": 170,
+        "y": 250,
+        "cluster": "Foundations",
+        "tone": "foundation",
+        "deps": ["network-protocols", "hashing", "latency-and-throughput"],
+        "orbit_rotation": -42,
+    },
 }
 
 

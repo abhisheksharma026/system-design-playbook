@@ -20,7 +20,7 @@
 <nav class="toc">
   <div class="toc-title">Contents</div>
   <ol>
-    <li><a href="#s0">Prerequisites &amp; Key Terms</a></li>
+    <li><a href="#s0">Key Terms</a></li>
     <li><a href="#s1">What Is a Key-Value Store?</a></li>
     <li><a href="#s2">The KV Store Spectrum</a></li>
     <li><a href="#s3">Redis Deep Dive</a></li>
@@ -44,7 +44,7 @@
 <!-- ============ KEY TERMS ============ -->
 <section class="section" id="s0">
   <div class="section-num">00</div>
-  <h2>Prerequisites &amp; Key Terms</h2>
+  <h2>Key Terms</h2>
 
   <h3>Key-Value Store</h3>
   <p>A database with a very small API: <code class="inline">GET(key) → value</code>, <code class="inline">PUT(key, value)</code>, <code class="inline">DELETE(key)</code>. No tables, no joins, no SQL. The key is usually a string. The value can be raw bytes, JSON, or whatever your app wants to store. That narrow model is what makes KV stores fast enough for caches, sessions, rate limiting, feature flags, and some primary data paths.</p>
