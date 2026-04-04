@@ -878,10 +878,10 @@ flowchart LR
     utilEl.style.color=util>100?'#f87171':util>80?'#fb923c':'#6ee7b7';
     document.getElementById('lb-n1').textContent=`If 1 server dies: ${n1PerServer.toLocaleString()} RPS each (${n1Util.toFixed(0)}%)`;
     const vEl=document.getElementById('lb-verdict');
-    if(util>100){vEl.textContent='⛔ OVERLOADED — add servers';vEl.style.color='#f87171';}
-    else if(n1Util>100){vEl.textContent='⚠️ No N+1 headroom — one failure = outage';vEl.style.color='#fb923c';}
-    else if(util>80){vEl.textContent='⚠️ Running hot — consider adding capacity';vEl.style.color='#fb923c';}
-    else{vEl.textContent='✅ Healthy with N+1 headroom';vEl.style.color='#6ee7b7';}
+    if(util>100){vEl.textContent='Overloaded — add servers';vEl.style.color='#f87171';}
+    else if(n1Util>100){vEl.textContent='No N+1 headroom — one failure = outage';vEl.style.color='#fb923c';}
+    else if(util>80){vEl.textContent='Running hot — consider adding capacity';vEl.style.color='#fb923c';}
+    else{vEl.textContent='Healthy with N+1 headroom';vEl.style.color='#6ee7b7';}
   }
   rS.addEventListener('input',calc);rR.addEventListener('input',calc);rC.addEventListener('input',calc);
   calc();
