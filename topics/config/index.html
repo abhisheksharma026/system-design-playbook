@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Configuration</title>
+<meta name="description" content="A system design guide to configuration management, feature flags, secrets, config propagation, rollout safety, and the distributed systems mechanics behind runtime config changes.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+<style>
+:root{--bg:#0c0e13;--surface:#14171e;--surface-2:#1a1e28;--surface-3:#222734;--border:#2a3040;--border-accent:#3d4663;--text:#e2e6f0;--text-dim:#8891a8;--text-muted:#5c6580;--accent:#6ee7b7;--accent-dim:#34d399;--accent-bg:rgba(110,231,183,0.08);--orange:#fb923c;--orange-bg:rgba(251,146,60,0.1);--blue:#60a5fa;--blue-bg:rgba(96,165,250,0.08);--red:#f87171;--red-bg:rgba(248,113,113,0.08);--purple:#a78bfa;--purple-bg:rgba(167,139,250,0.08);--yellow:#fbbf24;--yellow-bg:rgba(251,191,36,0.08);--mono:'IBM Plex Mono',monospace;--serif:'Source Serif 4',Georgia,serif;--sans:'DM Sans',system-ui,sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased}.container{max-width:920px;margin:0 auto;padding:0 28px}
+.hero{padding:80px 0 60px;border-bottom:1px solid var(--border)}.hero-label{font-family:var(--mono);font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--accent);margin-bottom:16px}.hero h1{font-family:var(--serif);font-size:clamp(36px,5vw,56px);font-weight:700;line-height:1.15;color:var(--text);margin-bottom:20px}.hero h1 span{color:var(--accent)}.hero-sub{font-size:18px;color:var(--text-dim);line-height:1.7}
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;margin:48px 0}.toc-title{font-family:var(--mono);font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:20px}.toc ol{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:8px 32px}.toc li::before{content:none}.toc a{color:var(--text-dim);text-decoration:none;font-size:15px;transition:color .2s}.toc a:hover{color:var(--accent)}
+section{padding:56px 0;border-bottom:1px solid var(--border)}section:last-of-type{border-bottom:none}
+h2{font-family:var(--serif);font-size:clamp(24px,3.5vw,36px);font-weight:700;margin-bottom:24px;color:var(--text)}h2 .num{color:var(--accent);font-family:var(--mono);font-size:0.6em;margin-right:8px}
+h3{font-family:var(--sans);font-size:20px;font-weight:600;margin:32px 0 16px;color:var(--text)}
+p{margin-bottom:16px;color:var(--text-dim)}
+strong{color:var(--text);font-weight:600}
+code{font-family:var(--mono);font-size:0.9em;background:var(--surface-2);padding:2px 7px;border-radius:4px;color:var(--accent)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;overflow-x:auto;margin:20px 0;font-family:var(--mono);font-size:13.5px;line-height:1.7;color:var(--text-dim)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px 28px;margin:20px 0}
+.card-accent{border-left:3px solid var(--accent);background:var(--accent-bg)}
+.card-orange{border-left:3px solid var(--orange);background:var(--orange-bg)}
+.card-blue{border-left:3px solid var(--blue);background:var(--blue-bg)}
+.card-red{border-left:3px solid var(--red);background:var(--red-bg)}
+.card-purple{border-left:3px solid var(--purple);background:var(--purple-bg)}
+.card-yellow{border-left:3px solid var(--yellow);background:var(--yellow-bg)}
+.term{margin-bottom:24px}.term-name{font-family:var(--mono);font-weight:600;color:var(--accent);font-size:17px;margin-bottom:6px;display:flex;align-items:center;gap:8px}.term-name::before{content:'';width:3px;height:18px;background:var(--accent);border-radius:2px;flex-shrink:0}.term-def{color:var(--text-dim);padding-left:11px}
+table{width:100%;border-collapse:collapse;margin:20px 0;font-size:14.5px}th{font-family:var(--mono);font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--accent);text-align:left;padding:12px 16px;border-bottom:2px solid var(--border);background:var(--surface)}td{padding:12px 16px;border-bottom:1px solid var(--border);color:var(--text-dim)}tr:hover td{background:var(--surface)}
+.qa{border:1px solid var(--border);border-radius:10px;margin:12px 0;overflow:hidden;transition:all .3s}.qa-q{padding:18px 24px;font-weight:600;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:12px;font-size:15px}.qa-q::before{content:'Q';font-family:var(--mono);font-size:11px;background:var(--accent);color:var(--bg);padding:2px 8px;border-radius:4px;font-weight:700}.qa-q::after{content:'+';margin-left:auto;font-family:var(--mono);color:var(--text-muted);font-size:20px;transition:transform .3s}.qa.open .qa-q::after{transform:rotate(45deg)}.qa-a{max-height:0;overflow:hidden;transition:max-height .4s ease,padding .3s}.qa.open .qa-a{max-height:3000px;padding:0 24px 20px}
+.ref{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px 28px;margin:16px 0}.ref-title{font-family:var(--mono);font-size:13px;color:var(--accent);margin-bottom:8px}.ref p{font-size:14px;margin-bottom:6px}.ref a{color:var(--purple);text-decoration:none}.ref a:hover{text-decoration:underline}
+.slider-group{margin:20px 0}.slider-label{font-family:var(--mono);font-size:13px;color:var(--text-dim);margin-bottom:8px;display:flex;justify-content:space-between}.slider-label span{color:var(--accent)}.slider-input{width:100%;-webkit-appearance:none;appearance:none;height:6px;background:var(--surface-3);border-radius:3px;outline:none}.slider-input::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--accent);cursor:pointer}
+.tradeoff-cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+@media(max-width:700px){.toc ol{grid-template-columns:1fr}.tradeoff-cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- HERO -->
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 17</div>
+  <h1>Configuration <span>Management</span></h1>
+  <p class="hero-sub">The invisible backbone of every production system — how parameters, secrets, and feature flags flow from source to running process, and why getting this wrong takes down more services than any code bug.</p>
+</header>
+
+<!-- TABLE OF CONTENTS -->
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms</a></li>
+    <li><a href="#s2">Why Configuration Matters</a></li>
+    <li><a href="#s3">Static vs. Dynamic Config</a></li>
+    <li><a href="#s4">Config Formats Deep Dive</a></li>
+    <li><a href="#s5">Environment Variables</a></li>
+    <li><a href="#s6">Feature Flags</a></li>
+    <li><a href="#s7">Secrets Management</a></li>
+    <li><a href="#s8">Config in Distributed Systems</a></li>
+    <li><a href="#s9">Architecture Diagrams</a></li>
+    <li><a href="#s10">Memory Map</a></li>
+    <li><a href="#s11">Terminal Demos</a></li>
+    <li><a href="#s12">Mini-Projects</a></li>
+    <li><a href="#s13">Production Examples</a></li>
+    <li><a href="#s14">Edge Cases &amp; War Stories</a></li>
+    <li><a href="#s15">Interview Q&amp;A</a></li>
+    <li><a href="#s16">Actual System Design Interview</a></li>
+    <li><a href="#s17">What If? Interactive</a></li>
+    <li><a href="#s18">Mental Model</a></li>
+    <li><a href="#s19">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- S1: KEY TERMS -->
+<section class="section" id="s0">
+  <h2><span class="num">01</span>Key Terms</h2>
+
+  <div class="term">
+    <div class="term-name">Configuration</div>
+    <div class="term-def">A set of parameters, constants, or settings that control a system's behavior without changing its code. Config lives in files (JSON, YAML, TOML), environment variables, databases, or dedicated services. Every production system has config — from the database connection string to the color of a button. Kubernetes stores all cluster state as configuration in etcd. Your laptop's <code>/etc/hosts</code> file is configuration. A neural network's hyperparameters are configuration. The line between "code" and "config" is the line between "what the system does" and "how it does it in this environment."</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Static Configuration</div>
+    <div class="term-def">Config that is baked into the application at build or deploy time and requires a redeploy to change. Think of a React app's <code>API_BASE_URL</code> injected during <code>npm run build</code>, or a Go binary compiled with <code>-ldflags</code> embedding a version string. Static config is simple and predictable — you know exactly what's running because it shipped with the code. The downside: changing a single feature flag means a full CI/CD pipeline cycle (build → test → deploy → rollout). Netflix uses static config for values that must be identical across all instances of a microservice release.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Dynamic Configuration</div>
+    <div class="term-def">Config that lives outside the application binary and can be changed at runtime without redeploying. The app reads config from an external source (file on disk, database, config service like etcd/Consul/ZooKeeper) and picks up changes either by periodic polling, filesystem watches, or push notifications. Dynamic config powers feature flags, A/B tests, rate limits, and circuit breaker thresholds. The tradeoff: more flexibility but more risk — a bad dynamic config change propagates to all instances instantly with no CI gate.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Feature Flag (Feature Toggle)</div>
+    <div class="term-def">A boolean or multi-variant configuration value that enables or disables a feature at runtime without deploying new code. Martin Fowler categorizes them into release toggles (ship dark, enable later), experiment toggles (A/B tests), ops toggles (kill switches), and permission toggles (per-user access). LaunchDarkly, Unleash, and Flagsmith are dedicated feature flag platforms. GitHub uses feature flags to gradually roll out new UI to employees → beta users → 1% → 10% → 100% of users.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Environment Variable</div>
+    <div class="term-def">A key-value pair set in the operating system's process environment, accessible to the running program via <code>process.env</code> (Node.js), <code>os.environ</code> (Python), or <code>os.Getenv</code> (Go). The Twelve-Factor App methodology (Factor III) mandates storing all environment-varying config in env vars — not in code, not in config files checked into git. Heroku, Docker, and Kubernetes all use env vars as the primary config injection mechanism. The limitation: env vars are flat strings with no nesting, no types, and no built-in change notification.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Config Precedence (Override Chain)</div>
+    <div class="term-def">The order in which multiple config sources are consulted, where later sources override earlier ones. A typical chain: hardcoded defaults → config file → environment variables → command-line flags → runtime overrides. Libraries like Viper (Go), python-decouple, and dotenv implement this layered resolution. The chain enables setting safe defaults that developers can override locally without touching shared config files.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Secrets Manager</div>
+    <div class="term-def">A dedicated service for storing, rotating, and auditing access to sensitive configuration values — API keys, database passwords, TLS certificates, encryption keys. HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager, and Azure Key Vault all provide encryption at rest, fine-grained IAM policies, automatic rotation, and audit logs. The fundamental rule: secrets must never appear in source code, config files committed to git, or container images. In 2019, a researcher found over 100,000 repos on GitHub with hardcoded AWS keys.</div>
+  </div>
+</section>
+
+<!-- S2: WHY CONFIG MATTERS -->
+<section class="section" id="s2">
+  <h2><span class="num">02</span>Why Configuration Matters</h2>
+  <p>Configuration is the most common cause of production outages that aren't code bugs. A misconfigured timeout, a wrong database endpoint, a feature flag flipped to the wrong value — these take down systems faster than any software defect because they bypass testing pipelines.</p>
+  <div class="card card-red">
+    <p><strong>Facebook, October 2021:</strong> A configuration change to the backbone routers caused a cascading failure that took Facebook, Instagram, and WhatsApp offline for ~6 hours. The config change withdrew BGP route advertisements, making Facebook's DNS servers unreachable. This wasn't a code bug — it was a config update that passed automated validation but had a devastating real-world effect.</p>
+    <p><strong>Google, December 2020:</strong> A misconfigured authentication quota caused a ~47-minute global outage of Gmail, YouTube, and Google Cloud. The config update reduced the authentication token quota below the level needed to handle current traffic.</p>
+    <p style="margin-bottom:0"><strong>Cloudflare, June 2019:</strong> A single bad regex in a WAF rule (which is configuration, not code) caused CPU exhaustion across all edge servers globally for ~27 minutes.</p>
+  </div>
+  <p>The pattern is clear: <strong>configuration changes are deployments</strong>. They should go through the same review, testing, and gradual rollout process as code changes. The industry is slowly learning this — Google's SRE book calls it "treating configuration as code."</p>
+</section>
+
+<!-- S3: STATIC vs DYNAMIC -->
+<section class="section" id="s3">
+  <h2><span class="num">03</span>Static vs. Dynamic Configuration</h2>
+
+  <table>
+    <thead>
+      <tr><th>Dimension</th><th>Static Config</th><th>Dynamic Config</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>When applied</strong></td><td>Build time or deploy time</td><td>Runtime (no redeploy)</td></tr>
+      <tr><td><strong>Change velocity</strong></td><td>Minutes–hours (CI/CD pipeline)</td><td>Seconds–milliseconds</td></tr>
+      <tr><td><strong>Safety</strong></td><td>High (tested in CI, reviewed in PR)</td><td>Lower (bypasses CI gate)</td></tr>
+      <tr><td><strong>Rollback</strong></td><td>Redeploy previous version</td><td>Revert the config value</td></tr>
+      <tr><td><strong>Consistency</strong></td><td>All instances identical (same binary)</td><td>Propagation delay between instances</td></tr>
+      <tr><td><strong>Storage</strong></td><td>Files in repo, compiled into binary</td><td>Database, KV store, config service</td></tr>
+      <tr><td><strong>Best for</strong></td><td>API URLs, build constants, schema</td><td>Feature flags, rate limits, thresholds</td></tr>
+      <tr><td><strong>Risk</strong></td><td>Slow to respond to incidents</td><td>Bad change reaches all instances fast</td></tr>
+    </tbody>
+  </table>
+
+  <h3>The Hybrid Approach (Most Common)</h3>
+  <p>In practice, real systems layer both. Static config defines the structure and defaults, dynamic config overrides specific values at runtime. A typical Express/Flask app reads a <code>config.json</code> baked into the Docker image (static defaults), then overlays environment variables (per-environment overrides), then connects to a config service like Consul for dynamic values (feature flags, rate limits). The precedence chain ensures that a missing dynamic value falls back to the static default gracefully.</p>
+</section>
+
+<!-- S4: CONFIG FORMATS -->
+<section class="section" id="s4">
+  <h2><span class="num">04</span>Config Formats Deep Dive</h2>
+
+  <h3>JSON</h3>
+  <pre>{
+  "database": {
+    "host": "db.prod.internal",
+    "port": 5432,
+    "pool_size": 20,
+    "ssl": true
+  },
+  "feature_flags": {
+    "new_checkout": false,
+    "dark_mode": true
+  },
+  "rate_limit": {
+    "requests_per_minute": 1000
+  }
+}</pre>
+  <p><strong>Strengths:</strong> Universal parser support in every language. Strict syntax catches typos (missing comma = parse error). Native types: strings, numbers, booleans, arrays, objects. <strong>Weaknesses:</strong> No comments (a constant pain when documenting config). No multi-line strings. Trailing comma is invalid. Verbose for deeply nested structures.</p>
+
+  <h3>YAML</h3>
+  <pre># Database configuration
+database:
+  host: db.prod.internal
+  port: 5432
+  pool_size: 20
+  ssl: true
+
+# Feature flags - updated by product team
+feature_flags:
+  new_checkout: false
+  dark_mode: true
+
+rate_limit:
+  requests_per_minute: 1000</pre>
+  <p><strong>Strengths:</strong> Comments. Human-readable. Less punctuation. Multi-line strings with <code>|</code> and <code>&gt;</code>. Anchors and aliases (<code>&amp;default</code> / <code>*default</code>) for DRY config. <strong>Weaknesses:</strong> Indentation-sensitive (a single space error silently changes structure). Implicit type coercion is dangerous — YAML parses <code>no</code> as boolean <code>false</code>, <code>3.14</code> as float, and country codes like <code>NO</code> (Norway) as <code>false</code>. The "Norway problem" has caused real production bugs. YAML 1.2 fixed some of these, but many parsers still use YAML 1.1 rules.</p>
+
+  <h3>TOML</h3>
+  <pre>[database]
+host = "db.prod.internal"
+port = 5432
+pool_size = 20
+ssl = true
+
+[feature_flags]
+new_checkout = false
+dark_mode = true
+
+[rate_limit]
+requests_per_minute = 1000</pre>
+  <p><strong>Strengths:</strong> Explicit typing (strings always quoted, booleans are only <code>true</code>/<code>false</code>). Comments. No indentation sensitivity. First-class date/time support. Used by Rust's Cargo, Python's <code>pyproject.toml</code>, and Hugo. <strong>Weaknesses:</strong> Less widely supported than JSON/YAML. Deeply nested tables become awkward syntactically.</p>
+
+  <h3>.env Files</h3>
+  <pre>DATABASE_HOST=db.prod.internal
+DATABASE_PORT=5432
+DATABASE_POOL_SIZE=20
+FEATURE_NEW_CHECKOUT=false
+SECRET_API_KEY=sk-abc123  # NEVER commit this to git</pre>
+  <p>Flat key-value pairs. No nesting. No types (everything is a string). Loaded into the process environment via <code>dotenv</code> libraries. The convention: <code>.env</code> for local dev (gitignored), <code>.env.example</code> committed as a template. In production, the real env vars are injected by the orchestrator (Kubernetes ConfigMap, Docker Compose environment block, Heroku config vars).</p>
+</section>
+
+<!-- S5: ENVIRONMENT VARIABLES -->
+<section class="section" id="s5">
+  <h2><span class="num">05</span>Environment Variables &amp; the Twelve-Factor App</h2>
+  <p>The Twelve-Factor App methodology (Factor III) is the single most influential idea in modern configuration management. Its rule is simple: <strong>store config in the environment, not in code.</strong></p>
+
+  <div class="card card-accent">
+    <p>The core insight: anything that changes between deploys (staging vs. production, region A vs. region B) is config. Anything that stays the same across deploys is code. Config belongs in the environment — not in a checked-in file, not in a build constant, not in a database that could be down when the app starts.</p>
+    <p style="margin-bottom:0"><strong>The litmus test:</strong> Could the codebase be made open source at any moment without compromising any credentials? If yes, your config is properly separated. If no, you have config (probably secrets) embedded in code.</p>
+  </div>
+
+  <h3>How Env Vars Flow in Production</h3>
+  <p><strong>Docker:</strong> <code>docker run -e DATABASE_URL=postgres://... myapp</code> or via <code>--env-file .env</code>. The container's PID 1 process inherits these env vars.</p>
+  <p><strong>Kubernetes:</strong> ConfigMaps for non-sensitive config, Secrets for sensitive values. Both can be mounted as env vars or as files in the pod's filesystem. Secrets are Base64-encoded (not encrypted!) by default — you need a KMS plugin or external operator (Sealed Secrets, External Secrets Operator) for real encryption.</p>
+  <p><strong>CI/CD:</strong> GitHub Actions secrets, GitLab CI variables, CircleCI contexts — all inject env vars into the build/deploy process. These are never visible in logs or build artifacts.</p>
+</section>
+
+<!-- S6: FEATURE FLAGS -->
+<section class="section" id="s6">
+  <h2><span class="num">06</span>Feature Flags</h2>
+  <p>Feature flags are the most powerful form of dynamic configuration. They decouple <strong>deployment</strong> (shipping code to production) from <strong>release</strong> (making the feature visible to users). This is a fundamental operational capability — it means you can deploy on Friday afternoon, ship the feature on Monday morning, and have a kill switch if anything goes wrong.</p>
+
+  <h3>Flag Categories</h3>
+  <table>
+    <thead><tr><th>Type</th><th>Lifespan</th><th>Owner</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Release Toggle</strong></td><td>Days–weeks</td><td>Engineering</td><td>Ship new checkout behind a flag, enable after QA</td></tr>
+      <tr><td><strong>Experiment Toggle</strong></td><td>Weeks–months</td><td>Product/Data</td><td>A/B test: blue vs. green "Buy" button</td></tr>
+      <tr><td><strong>Ops Toggle</strong></td><td>Permanent</td><td>SRE/Ops</td><td>Kill switch to disable recommendations during traffic spikes</td></tr>
+      <tr><td><strong>Permission Toggle</strong></td><td>Permanent</td><td>Product</td><td>Premium users see advanced analytics dashboard</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Gradual Rollout Pattern</h3>
+  <pre>// Pseudocode: percentage-based rollout
+function isFeatureEnabled(userId, flagName) {
+  const flag = configService.getFlag(flagName);
+  if (flag.type === 'boolean') return flag.value;
+  if (flag.type === 'percentage') {
+    // Deterministic: same user always gets same result
+    const hash = murmur3(userId + flagName) % 100;
+    return hash < flag.percentage;
+  }
+  if (flag.type === 'allowlist') {
+    return flag.userIds.includes(userId);
+  }
+  return false; // default off
+}</pre>
+  <p>The key property: the hash is <strong>deterministic</strong>. User "alice" at 10% rollout will either always see the feature or never see it — she won't flip between states on every page load. As the percentage increases from 10% → 50% → 100%, users already included stay included.</p>
+
+  <div class="card card-orange">
+    <p style="margin-bottom:0"><strong>Flag debt:</strong> Stale feature flags are a real maintenance burden. A codebase with 500 flags where 300 are permanently "on" is a minefield of dead branches, untested code paths, and confusing conditionals. Best practice: every flag has an expiration date. When the flag is fully rolled out or the experiment concludes, the flag and its conditional code are removed in a cleanup PR.</p>
+  </div>
+</section>
+
+<!-- S7: SECRETS MANAGEMENT -->
+<section class="section" id="s7">
+  <h2><span class="num">07</span>Secrets Management</h2>
+  <p>Secrets are configuration values that provide access to protected resources — database passwords, API keys, TLS private keys, OAuth client secrets, encryption keys. They require fundamentally different handling from regular config.</p>
+
+  <h3>The Rules</h3>
+  <div class="card card-red">
+    <p><strong>1. Never in source control.</strong> Not in code, not in config files, not in comments, not in commit history. Use <code>.gitignore</code> and pre-commit hooks (e.g., <code>git-secrets</code>, <code>trufflehog</code>) to catch accidental commits. If a secret is committed, consider it compromised — rotate it immediately, don't just delete and force-push.</p>
+    <p><strong>2. Never in logs.</strong> Middleware should redact known secret patterns. A common mistake: logging the full request body that contains an API key in a header.</p>
+    <p><strong>3. Encrypted at rest.</strong> Kubernetes Secrets are only Base64-encoded by default — this is encoding, not encryption. Enable etcd encryption at rest or use Sealed Secrets / External Secrets Operator backed by Vault or cloud KMS.</p>
+    <p><strong>4. Rotated regularly.</strong> If a secret never changes, its blast radius on compromise is infinite. Automatic rotation (AWS Secrets Manager supports Lambda-based rotation) limits exposure to the rotation window.</p>
+    <p style="margin-bottom:0"><strong>5. Least-privilege access.</strong> A frontend service should never have the database root password. Issue per-service credentials with the minimum required permissions. Vault's dynamic secrets generate short-lived, per-request database credentials that automatically expire.</p>
+  </div>
+
+  <h3>Secrets Distribution Patterns</h3>
+  <table>
+    <thead><tr><th>Pattern</th><th>Mechanism</th><th>Pros</th><th>Cons</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Env vars</strong></td><td>Injected by orchestrator</td><td>Simple, 12-factor compliant</td><td>Visible in <code>/proc/PID/environ</code>, no rotation</td></tr>
+      <tr><td><strong>Mounted files</strong></td><td>K8s Secret as volume</td><td>File permissions, auto-update</td><td>On-disk, need tmpfs for memory-only</td></tr>
+      <tr><td><strong>Vault API</strong></td><td>App fetches at startup</td><td>Dynamic secrets, audit log, rotation</td><td>Vault availability = app availability</td></tr>
+      <tr><td><strong>Sidecar agent</strong></td><td>Vault Agent in pod</td><td>Transparent to app, handles renewal</td><td>Extra process, resource overhead</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- S8: CONFIG IN DISTRIBUTED SYSTEMS -->
+<section class="section" id="s8">
+  <h2><span class="num">08</span>Configuration in Distributed Systems</h2>
+  <p>When you have 500 microservices across 10,000 containers, config management becomes a distributed systems problem. The core challenges: <strong>consistency</strong> (all instances see the same config), <strong>propagation speed</strong> (how fast does a change reach every instance), and <strong>availability</strong> (what happens when the config store is down).</p>
+
+  <h3>Centralized Config Services</h3>
+  <div class="card">
+    <p><strong>etcd:</strong> Distributed key-value store using Raft consensus. Kubernetes stores all cluster state here — pod specs, ConfigMaps, Secrets, service endpoints. Linearizable writes, watch API for real-time change notifications. Typical cluster: 3 or 5 nodes for fault tolerance. Write throughput: ~10K writes/sec. Read throughput: ~100K reads/sec (served locally from any replica). Used when you need strong consistency over partition tolerance.</p>
+    <p><strong>ZooKeeper:</strong> The original distributed coordination service (Yahoo, 2010). Hierarchical namespace (like a filesystem), ephemeral nodes for presence detection, sequential nodes for distributed locks. Used by Kafka (pre-KRaft), HBase, Solr. Operational complexity is higher than etcd — JVM tuning, session management, and the "herd effect" on watched nodes.</p>
+    <p><strong>Consul:</strong> HashiCorp's service mesh + config store. Key-value storage with HTTP API, DNS interface for service discovery, health checking, and multi-datacenter support. Unique feature: "watches" that trigger handler scripts when config values change. Used when you want config + service discovery + health checking in one system.</p>
+    <p style="margin-bottom:0"><strong>Spring Cloud Config:</strong> Git-backed config server for Java/Spring microservices. Config files live in a Git repo; the config server serves them over HTTP. Change the git repo → webhook triggers refresh → apps pick up new config. Good for teams that want config versioning and PR-based review, but it adds a single point of failure (the config server) and has higher latency than a KV store.</p>
+  </div>
+
+  <h3>Config Propagation Patterns</h3>
+  <table>
+    <thead><tr><th>Pattern</th><th>Latency</th><th>Complexity</th><th>Used By</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Polling</strong></td><td>Up to poll interval</td><td>Low</td><td>Spring Cloud Config (default 30s)</td></tr>
+      <tr><td><strong>Watch/Push</strong></td><td>Sub-second</td><td>Medium</td><td>etcd watch, Consul watch, ZooKeeper watcher</td></tr>
+      <tr><td><strong>File watch</strong></td><td>~1s (inotify)</td><td>Low</td><td>K8s ConfigMap volume mount, Prometheus config reload</td></tr>
+      <tr><td><strong>Signal-based</strong></td><td>Instant (within host)</td><td>Low</td><td>nginx <code>SIGHUP</code>, HAProxy reload</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- S9: ARCHITECTURE DIAGRAMS -->
+<section class="section" id="s9">
+  <h2><span class="num">09</span>Architecture Diagrams</h2>
+
+  <h3>Static vs. Dynamic Config Flow</h3>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    subgraph S["Static path"]
+      G["Git repo<br/>config files"]
+      B["CI / build"]
+      I["Image / artifact<br/>defaults baked in"]
+      D["Deploy<br/>env overlay"]
+      A["Running app"]
+      G --> B --> I --> D --> A
+    end
+
+    subgraph R["Dynamic path"]
+      U["Admin / product team"]
+      C["Config service<br/>etcd / Consul / flag service"]
+      X1["Instance 1"]
+      X2["Instance 2"]
+      X3["Instance N"]
+      N1["Static: change moves through build and rollout"]
+      N2["Dynamic: push or poll updates the fleet"]
+      U -->|"flag / threshold change"| C
+      C -. "watch / poll" .-> X1
+      C -.-> X2
+      C -.-> X3
+      C -.-> N2
+      A -.-> N1
+    end
+
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef static fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef dynamic fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef runtime fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class G,B,I,D static;
+    class U,C dynamic;
+    class A,X1,X2,X3 runtime;
+    class N1,N2 note;
+    </pre>
+    <div class="diagram-caption">Static config travels with the artifact and deployment pipeline; dynamic config comes from a control plane that has to propagate changes safely to running instances.</div>
+  </div>
+
+  <h3>Config Precedence Stack</h3>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart BT
+    D["Hardcoded defaults"]
+    F["Config file"]
+    E["Environment variables"]
+    C["Command-line flags"]
+    R["Runtime override / config service"]
+    N["Higher layer wins if the same key exists twice"]
+
+    D --> F --> E --> C --> R
+    R -.-> N
+
+    classDef low fill:#222734,stroke:#3d4663,color:#e2e6f0,stroke-width:3px;
+    classDef file fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef env fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef cli fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef top fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class D low;
+    class F file;
+    class E env;
+    class C cli;
+    class R top;
+    class N note;
+    </pre>
+    <div class="diagram-caption">Precedence is an override chain, not a merge party. If the same key exists in several places, the highest-priority source must win deterministically.</div>
+  </div>
+</section>
+
+<!-- S10: MEMORY MAP -->
+<section class="section" id="s10">
+  <h2><span class="num">10</span>Memory Map: Where Config Lives at Runtime</h2>
+  <svg viewBox="0 0 860 240" xmlns="http://www.w3.org/2000/svg" style="width:100%;margin:24px 0">
+    <!-- Process box -->
+    <rect x="30" y="20" width="800" height="200" rx="12" fill="#14171e" stroke="#3d4663" stroke-dasharray="6,3"/>
+    <text x="430" y="16" fill="#8891a8" font-family="IBM Plex Mono" font-size="11" text-anchor="middle">APPLICATION PROCESS MEMORY</text>
+
+    <!-- Env vars block -->
+    <rect x="60" y="45" width="170" height="80" rx="6" fill="#222734" stroke="#6ee7b7"/>
+    <text x="145" y="68" fill="#6ee7b7" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">environ[]</text>
+    <text x="145" y="85" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">DATABASE_URL=...</text>
+    <text x="145" y="98" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">API_KEY=sk-...</text>
+    <text x="145" y="111" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">NODE_ENV=production</text>
+    <text x="145" y="140" fill="#8891a8" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Set once at process start</text>
+    <text x="145" y="153" fill="#8891a8" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Immutable unless restarted</text>
+
+    <!-- Parsed config object -->
+    <rect x="260" y="45" width="170" height="80" rx="6" fill="#222734" stroke="#60a5fa"/>
+    <text x="345" y="68" fill="#60a5fa" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">config{}</text>
+    <text x="345" y="85" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Merged from file + env</text>
+    <text x="345" y="98" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Typed & validated</text>
+    <text x="345" y="111" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">In-memory singleton</text>
+    <text x="345" y="140" fill="#8891a8" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Read at startup or</text>
+    <text x="345" y="153" fill="#8891a8" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">hot-reloaded via watch</text>
+
+    <!-- Feature flag cache -->
+    <rect x="460" y="45" width="170" height="80" rx="6" fill="#222734" stroke="#fb923c"/>
+    <text x="545" y="68" fill="#fb923c" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">flagCache{}</text>
+    <text x="545" y="85" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">new_checkout: false</text>
+    <text x="545" y="98" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">dark_mode: {pct: 25}</text>
+    <text x="545" y="111" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">TTL: 30s, then re-fetch</text>
+    <text x="545" y="140" fill="#8891a8" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Polled/pushed from</text>
+    <text x="545" y="153" fill="#8891a8" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">LaunchDarkly / Unleash</text>
+
+    <!-- Secrets -->
+    <rect x="660" y="45" width="150" height="80" rx="6" fill="#222734" stroke="#f87171"/>
+    <text x="735" y="68" fill="#f87171" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">secrets{}</text>
+    <text x="735" y="85" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">db_password: ****</text>
+    <text x="735" y="98" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">tls_cert: [bytes]</text>
+    <text x="735" y="111" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">lease_ttl: 3600s</text>
+    <text x="735" y="140" fill="#8891a8" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">From Vault, renewed</text>
+    <text x="735" y="153" fill="#8891a8" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">by sidecar agent</text>
+
+    <!-- Size annotations -->
+    <text x="145" y="190" fill="#6ee7b7" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">~2-10 KB</text>
+    <text x="345" y="190" fill="#60a5fa" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">~1-50 KB</text>
+    <text x="545" y="190" fill="#fb923c" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">~1-5 KB</text>
+    <text x="735" y="190" fill="#f87171" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">~1-10 KB</text>
+  </svg>
+</section>
+
+<!-- S11: TERMINAL DEMOS -->
+<section class="section" id="s11">
+  <h2><span class="num">11</span>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: Config Precedence in Action</h3>
+  <pre><span style="color:var(--accent)"># Create a config file with defaults</span>
+<span style="color:var(--yellow)">$ cat > config.json &lt;&lt;'EOF'
+{"port": 3000, "debug": false, "db_host": "localhost"}
+EOF</span>
+
+<span style="color:var(--accent)"># Python script that demonstrates precedence</span>
+<span style="color:var(--yellow)">$ cat > app.py &lt;&lt;'PYEOF'
+import json, os, sys
+
+# Layer 1: Hardcoded defaults
+config = {"port": 8080, "debug": False, "db_host": "127.0.0.1", "log_level": "info"}
+
+# Layer 2: Config file overrides defaults
+with open("config.json") as f:
+    file_config = json.load(f)
+    config.update(file_config)
+
+# Layer 3: Env vars override file (if set)
+for key in config:
+    env_val = os.environ.get(key.upper())
+    if env_val is not None:
+        # Coerce types
+        if isinstance(config[key], bool):
+            config[key] = env_val.lower() in ("true","1","yes")
+        elif isinstance(config[key], int):
+            config[key] = int(env_val)
+        else:
+            config[key] = env_val
+
+print("Final config:")
+for k, v in config.items():
+    print(f"  {k} = {v!r}")
+PYEOF</span>
+
+<span style="color:var(--accent)"># Run with no env vars — file overrides defaults</span>
+<span style="color:var(--yellow)">$ python3 app.py</span>
+<span style="color:var(--text-dim)"># Expected:</span>
+Final config:
+  port = 3000           <span style="color:var(--text-muted)"># from config.json (overrode default 8080)</span>
+  debug = False          <span style="color:var(--text-muted)"># from config.json</span>
+  db_host = 'localhost'  <span style="color:var(--text-muted)"># from config.json</span>
+  log_level = 'info'     <span style="color:var(--text-muted)"># from default (not in file)</span>
+
+<span style="color:var(--accent)"># Run with env vars — env overrides file</span>
+<span style="color:var(--yellow)">$ PORT=9090 DEBUG=true DB_HOST=db.prod.internal python3 app.py</span>
+<span style="color:var(--text-dim)"># Expected:</span>
+Final config:
+  port = 9090            <span style="color:var(--text-muted)"># env var overrode file's 3000</span>
+  debug = True           <span style="color:var(--text-muted)"># env var overrode file's false</span>
+  db_host = 'db.prod.internal'  <span style="color:var(--text-muted)"># env var overrode file</span>
+  log_level = 'info'     <span style="color:var(--text-muted)"># still default</span></pre>
+
+  <h3>Demo 2: Dynamic Config with File Watching</h3>
+  <pre><span style="color:var(--accent)"># Terminal 1: Start a server that watches config.json for changes</span>
+<span style="color:var(--yellow)">$ python3 -c "</span>
+import json, time, os
+
+config_path = 'config.json'
+last_mtime = 0
+
+while True:
+    mtime = os.path.getmtime(config_path)
+    if mtime != last_mtime:
+        with open(config_path) as f:
+            config = json.load(f)
+        print(f'[{time.strftime(\"%H:%M:%S\")}] Config reloaded: {config}')
+        last_mtime = mtime
+    time.sleep(1)
+<span style="color:var(--yellow)">"</span>
+
+<span style="color:var(--accent)"># Terminal 2: Modify config while server is running</span>
+<span style="color:var(--yellow)">$ cat config.json</span>
+{"port": 3000, "debug": false, "db_host": "localhost"}
+
+<span style="color:var(--accent)"># Change debug to true — server picks it up in &lt;1s</span>
+<span style="color:var(--yellow)">$ python3 -c "
+import json
+c = json.load(open('config.json'))
+c['debug'] = True
+json.dump(c, open('config.json','w'), indent=2)
+print('Updated debug to True')
+"</span>
+
+<span style="color:var(--text-dim)"># Terminal 1 output:</span>
+[14:30:01] Config reloaded: {'port': 3000, 'debug': False, 'db_host': 'localhost'}
+[14:30:15] Config reloaded: {'port': 3000, 'debug': True, 'db_host': 'localhost'}</pre>
+
+  <h3>Demo 3: YAML's Norway Problem</h3>
+  <pre><span style="color:var(--accent)"># Watch YAML silently turn country codes into booleans</span>
+<span style="color:var(--yellow)">$ pip install pyyaml --break-system-packages -q 2>/dev/null
+$ python3 -c "</span>
+import yaml
+data = yaml.safe_load('''
+countries:
+  - NO    # Norway
+  - SE    # Sweden  
+  - DK    # Denmark
+  - YES   # not a country, but YAML thinks...
+''')
+print('Parsed countries:', data['countries'])
+print('Types:', [type(c).__name__ for c in data['countries']])
+<span style="color:var(--yellow)">"</span>
+
+<span style="color:var(--text-dim)"># Expected output:</span>
+Parsed countries: [False, 'SE', 'DK', True]
+Types: ['bool', 'str', 'str', 'bool']
+<span style="color:var(--text-muted)"># Norway became False! YES became True! YAML 1.1 implicit typing.</span></pre>
+</section>
+
+<!-- S12: MINI-PROJECTS -->
+<section class="section" id="s12">
+  <h2><span class="num">12</span>Mini-Projects</h2>
+
+  <h3>Simple: Feature Flag Gate</h3>
+  <div class="card card-accent">
+    <p><strong>Goal:</strong> Build a Python HTTP server that reads feature flags from a JSON file. One endpoint (<code>/feature</code>) returns different content based on a flag. Change the flag file while the server is running — observe hot-reload.</p>
+  </div>
+  <pre><span style="color:var(--accent)"># Save as flag_server.py</span>
+import json, os, time
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+FLAG_FILE = 'flags.json'
+flags = {}
+last_load = 0
+
+def load_flags():
+    global flags, last_load
+    mtime = os.path.getmtime(FLAG_FILE)
+    if mtime != last_load:
+        with open(FLAG_FILE) as f:
+            flags = json.load(f)
+        last_load = mtime
+        print(f"[{time.strftime('%H:%M:%S')}] Flags reloaded: {flags}")
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        load_flags()
+        if self.path == '/feature':
+            if flags.get('new_ui', False):
+                body = '{"ui": "v2", "message": "Welcome to the new experience!"}'
+            else:
+                body = '{"ui": "v1", "message": "Classic view"}'
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(body.encode())
+        else:
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(flags).encode())
+    def log_message(self, *a): pass
+
+# Create initial flags
+if not os.path.exists(FLAG_FILE):
+    json.dump({"new_ui": False, "dark_mode": True}, open(FLAG_FILE, 'w'))
+
+load_flags()
+print("Flag server on :8080 | GET / (all flags) | GET /feature (gated content)")
+HTTPServer(('', 8080), Handler).serve_forever()</pre>
+  <pre><span style="color:var(--accent)"># Terminal 1:</span> python3 flag_server.py
+<span style="color:var(--accent)"># Terminal 2:</span> curl http://localhost:8080/feature
+<span style="color:var(--text-dim)">→ {"ui": "v1", "message": "Classic view"}</span>
+
+<span style="color:var(--accent)"># Flip the flag:</span>
+python3 -c "import json; json.dump({'new_ui':True,'dark_mode':True},open('flags.json','w'))"
+
+<span style="color:var(--accent)"># Hit the endpoint again (no server restart!):</span>
+curl http://localhost:8080/feature
+<span style="color:var(--text-dim)">→ {"ui": "v2", "message": "Welcome to the new experience!"}</span></pre>
+
+  <h3>Advanced: Config Service with Watchers</h3>
+  <p>Build a tiny config server that stores key-value pairs in memory, exposes a REST API (<code>GET/PUT /config/:key</code>), and supports a <code>GET /watch/:key</code> endpoint using long polling — when the key changes, all watchers receive the new value immediately. This mirrors how etcd's watch API works. Add a TTL mechanism: keys can optionally expire after N seconds (like a session or a temporary override). Build a client that watches a key and prints changes in real time.</p>
+</section>
+
+<!-- S13: PRODUCTION EXAMPLES -->
+<section class="section" id="s13">
+  <h2><span class="num">13</span>Production Examples</h2>
+
+  <h3>Kubernetes: ConfigMaps &amp; Secrets</h3>
+  <div class="card">
+    <p>Kubernetes separates configuration from container images using two primitives: <strong>ConfigMaps</strong> for non-sensitive data and <strong>Secrets</strong> for sensitive data. Both can be consumed as environment variables or as files mounted into the pod's filesystem.</p>
+    <p><strong>The live-update behavior:</strong> When a ConfigMap is mounted as a volume, Kubernetes periodically syncs the mounted files with the ConfigMap's current state (kubelet sync period, default ~1 minute). The application can use inotify/fswatch to detect the change and reload. This is dynamic configuration without a redeploy — but the application must be written to handle mid-flight config changes gracefully (e.g., don't crash if the config format changes unexpectedly).</p>
+    <p style="margin-bottom:0"><strong>Immutable ConfigMaps</strong> (Kubernetes 1.21+): Setting <code>immutable: true</code> on a ConfigMap prevents accidental changes and improves performance by disabling the kubelet's periodic sync. For truly static config, this is the safest option — changes require creating a new ConfigMap with a new name and updating the pod spec.</p>
+  </div>
+
+  <h3>Netflix: Archaius &amp; Dynamic Properties</h3>
+  <div class="card">
+    <p>Netflix's Archaius is a Java configuration library that implements a layered config model with dynamic property support. Config sources are stacked in priority order: defaults → config file → database → environment → runtime override. Each source can be polled independently — the database source polls every 30 seconds, while the runtime override takes effect instantly.</p>
+    <p><strong>The killer feature:</strong> Dynamic property callbacks. You register a callback on a config key, and Archaius invokes it whenever the value changes. This lets Netflix engineers change circuit breaker thresholds, timeout values, and feature flags in production without redeploying any service. A single Archaius config change can propagate to thousands of instances within 30 seconds.</p>
+    <p style="margin-bottom:0"><strong>Safety mechanism:</strong> Netflix's config changes go through a "canary" process — the change is applied to a small percentage of instances first, and if error rates spike, the change is automatically rolled back. This is the dynamic config equivalent of a canary deployment.</p>
+  </div>
+
+  <h3>Google: Borg &amp; Global Config Distribution</h3>
+  <div class="card">
+    <p>Google's internal config system (described in SRE book Chapter 14) treats configuration as a form of code. Config changes go through the same review process as code changes — they have owners, reviewers, automated tests, and a staged rollout process. Config is stored in a version-controlled repository and distributed to production machines via a global config distribution service.</p>
+    <p style="margin-bottom:0"><strong>The principle:</strong> "Configuration is the most common cause of serious production problems at Google. The most insidious configuration problems are not syntax errors — they are logical errors where the config is valid but wrong." Google's response: config validation that goes beyond syntax checks to test the config against a model of the system's expected behavior.</p>
+  </div>
+</section>
+
+<!-- S14: EDGE CASES -->
+<section class="section" id="s14">
+  <h2><span class="num">14</span>Edge Cases &amp; War Stories</h2>
+
+  <div class="card card-red">
+    <p><strong>The Partial Update Problem:</strong> You update a config file with 5 fields. The file write is not atomic — the app reads the file between the 3rd and 4th field being written. It sees a half-written config with an inconsistent state (e.g., new database host but old database port). <strong>Fix:</strong> Write to a temporary file, then <code>rename()</code> — rename is atomic on POSIX filesystems within the same partition. Kubernetes ConfigMap volume mounts use this pattern internally (symlink swap).</p>
+  </div>
+
+  <div class="card card-red">
+    <p><strong>Config Drift Between Instances:</strong> Instance A polls the config service and gets the new value. Instance B's poll hasn't fired yet. For the next 30 seconds, A and B behave differently — A serves the new feature, B serves the old one. If a load balancer round-robins between them, users experience inconsistent behavior on every other request. <strong>Fix:</strong> Use push-based propagation (etcd watch) instead of polling, or accept the drift window and ensure the feature is safe during mixed-state operation.</p>
+  </div>
+
+  <div class="card card-red">
+    <p><strong>The Config Service is Down:</strong> Your app reads all config from etcd/Consul at startup. The config service is temporarily unavailable. Options: (1) Fail to start — simple, safe, but fragile. (2) Use a cached copy from the last successful fetch — more resilient, but the cache could be stale. (3) Fall back to static defaults baked into the binary — safest, but the defaults might not be suitable for production. <strong>Best practice:</strong> Cache the last known good config locally. Start with the cache. Log a warning. Retry connection in the background. This is what the Consul agent does — it maintains a local snapshot of the service catalog.</p>
+  </div>
+
+  <div class="card card-red">
+    <p><strong>Secret Rotation Breaks Running Connections:</strong> You rotate the database password in Vault. The new password propagates to all app instances. But Instance A has a long-running database connection pool using the old password. When that pool needs to create a new connection (e.g., the old connection times out), it fails because it's using the stale credential. <strong>Fix:</strong> Application-level secret refresh: when a connection fails with an auth error, re-fetch the credential from Vault and retry before reporting the error to the caller.</p>
+  </div>
+
+  <div class="card card-red">
+    <p style="margin-bottom:0"><strong>Env Var Leakage in Logs/Errors:</strong> A Python traceback prints the full stack including variables in scope. If <code>os.environ['SECRET_KEY']</code> was recently accessed, it can appear in the traceback. Many error tracking services (Sentry, Bugsnag) capture environment variables by default. <strong>Fix:</strong> Configure error reporters to redact sensitive keys. Use a secret management wrapper that never stores the raw value in a variable longer than needed.</p>
+  </div>
+</section>
+
+<!-- S15: INTERVIEW Q&A -->
+<section class="section" id="s15">
+  <h2><span class="num">15</span>Interview Q&amp;A</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: What's the difference between static and dynamic configuration? When would you use each?</div>
+    <div class="qa-a">
+      <p><strong>Static config</strong> is baked into the artifact at build/deploy time — config files committed to the repo, env vars set in the deployment manifest. Changes require a redeploy. Use it for values that are fundamental to the application's identity in an environment: API base URLs, database schemas, service names, TLS certificate paths.</p>
+      <p><strong>Dynamic config</strong> lives in an external store and can be changed at runtime. Use it for values that need to change faster than your deploy cycle: feature flags, rate limit thresholds, circuit breaker timeouts, A/B test parameters.</p>
+      <p><strong>Follow-up nuance:</strong> The boundary isn't binary — it's a spectrum of change frequency and risk. A database connection string changes maybe once a year (static). A rate limit threshold might change during a traffic spike (dynamic). A feature flag for a gradual rollout changes daily for a week then becomes permanent (starts dynamic, becomes static, then gets removed). Design your config system to handle all three gracefully.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: How would you safely roll out a configuration change to 10,000 servers?</div>
+    <div class="qa-a">
+      <p>Same way you roll out a code change: <strong>progressively</strong>. Step 1: Apply to a canary group (1% of instances). Step 2: Monitor error rates, latency, and business metrics for 5–10 minutes. Step 3: If healthy, expand to 10%, then 50%, then 100%. Step 4: If anything looks wrong at any stage, roll back the config change instantly.</p>
+      <p><strong>Implementation:</strong> Your config service should support targeting — "apply this value to instances with label canary=true." This is what LaunchDarkly calls "segments" and what Netflix Archaius calls "deployment context." The config propagation system should support both the new and old values simultaneously during rollout.</p>
+      <p><strong>Deep follow-up:</strong> What if the config change is non-reversible? Example: you change a database migration flag that triggers a schema change. Once the schema is changed, you can't just revert the flag. This is where config changes must be treated as <em>deployments</em> — with pre-flight validation, staged rollout, and a tested rollback plan (including the database migration rollback).</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: An application reads its config from a centralized config service. The config service goes down. What happens?</div>
+    <div class="qa-a">
+      <p>It depends on two design decisions: (1) when does the app read config, and (2) does it cache.</p>
+      <p><strong>Startup-only read, no cache:</strong> If the app reads config only at boot and the config service is down, the app fails to start. Existing running instances are fine (they already have their config in memory), but any new instances, restarts, or scaling events fail. This is a hard dependency.</p>
+      <p><strong>Startup + periodic refresh, with cache:</strong> Running instances continue with their last fetched config. New instances start with a locally cached copy (written to disk on each successful fetch). The app logs a warning and retries in the background. When the config service recovers, apps pick up the latest values. The risk: if the config service was down during a critical config change, some instances run with stale config.</p>
+      <p><strong>Best practice (as described in DDIA):</strong> The config service should be treated as a hard dependency only at first boot of a fresh instance with no cache. After that, it should be a soft dependency — nice to have, not required for continued operation. This mirrors how DNS works: DNS being down doesn't break existing connections, only new lookups.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: Why shouldn't you store secrets in environment variables?</div>
+    <div class="qa-a">
+      <p>This is a nuanced question — the Twelve-Factor App says <em>do</em> store config in env vars, and for many teams, env vars for secrets are fine. But at scale, there are real concerns:</p>
+      <p><strong>1. Process environment is readable:</strong> On Linux, any process running as the same user can read <code>/proc/PID/environ</code>. If an attacker gets code execution (even limited), they can dump all secrets from the process environment.</p>
+      <p><strong>2. Inherited by child processes:</strong> If your app spawns a subprocess (e.g., shelling out to a CLI tool), that subprocess inherits all env vars — including secrets it doesn't need. This violates least privilege.</p>
+      <p><strong>3. No audit trail:</strong> Env vars don't have access logging. You can't answer "who accessed the database password at 3:47 AM?" A secrets manager like Vault provides an audit log of every secret access.</p>
+      <p><strong>4. No rotation:</strong> Changing an env var requires a process restart. A secrets manager can rotate credentials and push the new value to the app without downtime.</p>
+      <p><strong>Pragmatic answer:</strong> For small teams and non-critical systems, env vars for secrets are fine with proper access controls. For regulated industries, multi-team organizations, or systems handling financial/medical data, a dedicated secrets manager is necessary.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: How do you validate configuration before it reaches production?</div>
+    <div class="qa-a">
+      <p><strong>Layer 1 — Syntax:</strong> JSON/YAML linters in CI. Catches parse errors before merge. This is trivial but essential — a missing comma in a JSON config has caused more than one outage.</p>
+      <p><strong>Layer 2 — Schema:</strong> JSON Schema, YAML schema validation, or typed config libraries (TypeScript's <code>zod</code>, Python's <code>pydantic</code>). Catches wrong types (string where number expected), missing required fields, values outside allowed ranges.</p>
+      <p><strong>Layer 3 — Semantic:</strong> Application-specific validation. Does this database host actually resolve? Is this port number in the valid range? Is this rate limit value sane (not 0, not 10 billion)? This runs as part of the app's startup — if validation fails, the app refuses to start and the deploy is rolled back.</p>
+      <p><strong>Layer 4 — Integration:</strong> Staging environment with production-like traffic. Apply the config change to staging first, run smoke tests, verify behavior. Only then promote to production.</p>
+      <p><strong>Google's approach:</strong> Their config system runs the config through a "hermetic build" that simulates the system's behavior with the new config. If the simulation shows unexpected state transitions, the change is blocked.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: You notice that after a config change, some users see the new behavior and some see the old behavior, alternating on each request. What's happening?</div>
+    <div class="qa-a">
+      <p>This is <strong>config drift between instances</strong>. The load balancer is round-robining requests across multiple app instances. Some instances have picked up the new config, others haven't yet. Each request hits a different instance, so the user alternates between old and new behavior.</p>
+      <p><strong>Root cause analysis:</strong> (1) Polling-based config propagation with staggered poll timers — Instance A polled 2 seconds ago (has new config), Instance B won't poll for another 28 seconds (still has old config). (2) A failed config fetch on some instances — they're stuck on the old cached value while others have the new one.</p>
+      <p><strong>Fix approaches:</strong> (1) Use push-based config propagation (etcd watch) so all instances get the change simultaneously. (2) If using polling, reduce the poll interval. (3) Add a "config version" header to responses so you can see which config version served each request. (4) For user-visible features, use feature flags with sticky assignment (hash-based) so each user consistently sees one version regardless of which instance serves them.</p>
+    </div>
+  </div>
+</section>
+
+<!-- S16: SYSTEM DESIGN INTERVIEW -->
+<section class="section" id="s16">
+  <h2><span class="num">16</span>Actual System Design Interview</h2>
+  <div class="card card-accent">
+    <p style="margin-bottom:0"><strong>Scenario:</strong> Design a feature flag system for a company with 200 microservices, 50 engineering teams, and 100 million daily active users. The system should support boolean flags, percentage rollouts, user-segment targeting, and A/B experiments with metrics tracking.</p>
+  </div>
+
+  <div class="card card-purple">
+    <p style="margin-bottom:0"><strong>Production case study lens:</strong> think LaunchDarkly or an internal control plane for rollouts. The interview quality comes from separating authoring, distribution, local evaluation, and analytics, then naming what happens when the control plane is stale or unavailable.</p>
+  </div>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    PM["Product / ops UI"]
+    M["Flag management API"]
+    DB["Flag store<br/>rules · owners · audit log"]
+    BUS["Change stream<br/>Kafka / SSE fan-out"]
+    SDK["In-process SDK cache"]
+    APP["Microservice request path"]
+    WH["Exposure events<br/>analytics warehouse"]
+    N1["No network hop on each check"]
+    N2["Stale SDK cache during partition"]
+    N3["Cold start uses snapshot fallback"]
+
+    PM --> M --> DB
+    M --> BUS
+    BUS --> SDK
+    APP --> SDK
+    SDK -.-> N1
+    SDK -.-> N2
+    SDK -.-> N3
+    SDK -->|"exposure event"| WH
+
+    classDef user fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef stream fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class PM user;
+    class M,SDK core;
+    class DB,WH data;
+    class BUS,APP stream;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: author flags in a control plane, stream updates to SDK caches, evaluate locally on the request path, and emit exposure data off the hot path.</div>
+  </div>
+
+  <h3>Round 1: Core Architecture</h3>
+  <p><strong>Interviewer:</strong> "Walk me through the high-level design."</p>
+  <div class="card">
+    <p>Three components: a <strong>Flag Management Service</strong> (CRUD API + admin UI), a <strong>Flag Distribution Layer</strong> (how flags get to SDKs), and <strong>Evaluation SDKs</strong> embedded in each microservice.</p>
+    <p><strong>Flag Management Service:</strong> REST API backed by a PostgreSQL database. Each flag has a name, type (boolean/percentage/segment/experiment), targeting rules, owner team, and expiration date. Changes are audited (who changed what, when). The admin UI lets product managers create flags and set rollout percentages without engineering involvement.</p>
+    <p><strong>Flag Distribution Layer:</strong> When a flag is changed, the management service publishes an event to a Kafka topic. A distribution service consumes these events and pushes updates to all connected SDKs via SSE (or long polling as fallback). Each SDK maintains an in-memory cache of all flag definitions relevant to its service. If the distribution layer is down, the SDK uses its last known cache.</p>
+    <p style="margin-bottom:0"><strong>Evaluation SDK:</strong> A lightweight library (one per language: Go, Java, Python, JS) that evaluates flag rules locally. The SDK takes a user context (user ID, attributes like plan, country, device) and the flag definition, and returns the evaluated value. All evaluation happens in-process — no network call per flag check. This is critical for latency: a flag check must be &lt;1ms, not a network round-trip.</p>
+  </div>
+
+  <h3>Round 2: Evaluation Logic</h3>
+  <p><strong>Interviewer:</strong> "How does percentage-based rollout work? How do you ensure consistency?"</p>
+  <div class="card">
+    <p>The SDK hashes <code>user_id + flag_name</code> using a deterministic hash (MurmurHash3) and takes the result modulo 100. If the result is less than the rollout percentage, the user is in. This guarantees: (1) the same user always gets the same evaluation for a given flag, (2) different flags distribute independently because <code>flag_name</code> is part of the hash input, and (3) increasing the rollout from 10% to 20% adds users without ejecting the ones already in.</p>
+    <p style="margin-bottom:0"><strong>Segment targeting:</strong> Before percentage rollout, the SDK evaluates targeting rules such as <code>country = US AND plan = premium</code>. Rules run in priority order, so you can express combinations like "100% of employees, 50% of premium US users, 0% of everyone else." In practice this is a short-circuit rule engine that has to stay deterministic across every language SDK.</p>
+  </div>
+
+  <h3>Round 3: Edge Cases</h3>
+  <p><strong>Interviewer:</strong> "What happens during a network partition between the SDK and the flag distribution layer?"</p>
+  <div class="card">
+    <p>The SDK operates in <strong>degraded mode</strong>: it continues evaluating flags using its local cache. New flag changes won't be reflected until connectivity is restored. The SDK should log a warning and expose a health metric ("time since last successful sync") so monitoring can detect the drift.</p>
+    <p><strong>Critical design decision:</strong> Should the SDK fail open (feature enabled if no data) or fail closed (feature disabled if no data)? This should be configurable per flag. For a new, risky feature: fail closed (if you can't check the flag, don't show it). For an established, critical feature: fail open (if you can't check, assume it's on).</p>
+    <p style="margin-bottom:0"><strong>Boot-time concern:</strong> If a brand-new service instance starts and cannot reach the flag distribution layer, it has no cache to fall back on. Solution: bake a "default flag snapshot" into the Docker image during CI/CD. This snapshot is updated on each deploy and serves as the cold-start fallback. It may be hours stale, but it's better than having zero flag definitions.</p>
+  </div>
+
+  <p><strong>Interviewer:</strong> "How do you handle A/B experiment metrics tracking?"</p>
+  <div class="card">
+    <p style="margin-bottom:0">The SDK emits an "exposure event" every time it evaluates an experiment flag: <code>{user_id, flag_name, variant, timestamp}</code>. These events are batched and sent asynchronously to an analytics pipeline (Kafka → data warehouse). The data science team joins exposure events with outcome events (conversion, revenue, engagement) to compute experiment results. The key: exposure events must be deduped per user-session to avoid inflating sample sizes. The experiment is statistically valid only if exposure logging is reliable.</p>
+  </div>
+</section>
+
+<!-- S17: WHAT IF? INTERACTIVE -->
+<section class="section" id="s17">
+  <h2><span class="num">17</span>What If? Interactive</h2>
+  <p>Vary the <strong>config propagation delay</strong> and observe how it affects consistency between instances during a rollout.</p>
+
+  <div class="slider-group">
+    <div class="slider-label">Number of Instances <span id="v-inst">100</span></div>
+    <input type="range" class="slider-input" id="sl-inst" min="5" max="1000" step="5" value="100">
+  </div>
+  <div class="slider-group">
+    <div class="slider-label">Propagation Delay (seconds) <span id="v-delay">5</span>s</div>
+    <input type="range" class="slider-input" id="sl-delay" min="0" max="60" step="1" value="5">
+  </div>
+  <div class="slider-group">
+    <div class="slider-label">Requests/sec (across all instances) <span id="v-rps">10000</span></div>
+    <input type="range" class="slider-input" id="sl-rps" min="100" max="100000" step="100" value="10000">
+  </div>
+
+  <div class="tradeoff-cards">
+    <div class="card card-orange">
+      <p style="font-family:var(--mono);font-size:12px;color:var(--orange);margin-bottom:8px">DURING PROPAGATION WINDOW</p>
+      <p style="font-size:14px"><strong>Inconsistent requests:</strong> <span id="r-incon">50,000</span></p>
+      <p style="font-size:14px"><strong>% of instances on old config:</strong> <span id="r-old">50%</span> (avg)</p>
+      <p style="font-size:14px;margin-bottom:0"><strong>User-visible flicker probability:</strong> <span id="r-flicker">50%</span></p>
+    </div>
+    <div class="card card-accent">
+      <p style="font-family:var(--mono);font-size:12px;color:var(--accent);margin-bottom:8px">AFTER FULL PROPAGATION</p>
+      <p style="font-size:14px"><strong>All instances consistent:</strong> ✅</p>
+      <p style="font-size:14px"><strong>Time to full consistency:</strong> <span id="r-ttc">5s</span></p>
+      <p style="font-size:14px;margin-bottom:0"><strong>Total inconsistent requests:</strong> <span id="r-total">50,000</span></p>
+    </div>
+  </div>
+
+  <div id="tc-verdict2" class="card card-purple">
+    <p style="margin-bottom:0;font-size:14px" id="r-verdict2">With a 5s propagation window, approximately 50,000 requests will be served with inconsistent config. Using push-based propagation (sub-second) would reduce this to ~5,000.</p>
+  </div>
+
+</section>
+
+<!-- S18: MENTAL MODEL -->
+<section class="section" id="s18">
+  <h2><span class="num">18</span>Mental Model</h2>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart TB
+    Q{"Is it a secret?"}
+    S["Secrets manager<br/>Vault / AWS SM / K8s Secret"]
+    D{"Does it vary between deploys?"}
+    K["Constant / code default"]
+    R{"Must it change without redeploy?"}
+    T["Static config<br/>file + env vars"]
+    U{"User-facing rollout?"}
+    O["Dynamic config store<br/>etcd / Consul"]
+    F["Feature flag system<br/>LaunchDarkly / Unleash"]
+    N["Config is code that skipped CI<br/>Give it review, versioning, and rollout control"]
+
+    Q -- "Yes" --> S
+    Q -- "No" --> D
+    D -- "No" --> K
+    D -- "Yes" --> R
+    R -- "No" --> T
+    R -- "Yes" --> U
+    U -- "No" --> O
+    U -- "Yes" --> F
+    F -.-> N
+    O -.-> N
+
+    classDef question fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef secrets fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef static fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef dynamic fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef feature fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class Q,D,R,U question;
+    class S secrets;
+    class K,T static;
+    class O dynamic;
+    class F feature;
+    class N note;
+    </pre>
+    <div class="diagram-caption">Decision tree: first separate secrets from ordinary config, then separate deploy-time values from runtime control-plane values, and finally decide whether the runtime change is operational or user-facing.</div>
+  </div>
+</section>
+
+<!-- S19: REFERENCES -->
+<section class="section" id="s19">
+  <h2><span class="num">19</span>References &amp; Further Reading</h2>
+  <p>Use these sources to study the actual mechanics behind config systems: precedence rules, watch semantics, consensus-backed control planes, rollout safety, and cache invalidation during live config change.</p>
+
+  <div class="ref">
+    <div class="ref-title">[1] The Twelve-Factor App — Factor III: Config (Wiggins, 2011)</div>
+    <p><strong>Adam Wiggins.</strong> 2011.<br>
+    <a href="https://12factor.net/config" target="_blank">https://12factor.net/config</a></p>
+    <p>• Defines "config" as anything that varies between deploys (staging, production, developer environments) — database handles, credentials, per-deploy values like canonical hostname. Explicitly excludes internal application config that does not vary between deploys.</p>
+    <p>• Prescribes environment variables as the config mechanism because they are language- and OS-agnostic, unlikely to be accidentally committed to source control, and granular (each var is orthogonal, never grouped into "environments" like "staging" or "production").</p>
+    <p>• The litmus test for correct config separation: the codebase could be open-sourced at any moment without compromising credentials. This single sentence has driven more config architecture decisions than any other principle in cloud-native development.</p>
+    <p>• Explicitly rejects "config files that are not checked into revision control" (e.g., Java property files in <code>config/</code>) because they tend to be scattered, in different formats, and language-specific. Env vars are a universal primitive.</p>
+    <p>• The methodology emerged from observing patterns across hundreds of thousands of Heroku deployments (2007–2011), codifying what worked and what consistently caused outages.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[2] ZooKeeper: Wait-free Coordination for Internet-scale Systems (Hunt et al., 2010)</div>
+    <p><strong>Patrick Hunt, Mahadev Konar, Flavio P. Junqueira, Benjamin Reed.</strong> USENIX ATC, June 2010.<br>
+    <a href="https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf" target="_blank">https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf</a></p>
+    <p>• Introduces a coordination kernel rather than a fixed set of primitives — the API exposes hierarchical znodes (like a filesystem) with <code>create</code>, <code>delete</code>, <code>getData</code>, <code>setData</code>, <code>getChildren</code>, and <code>exists</code> operations. Locks, leader election, and config distribution are built on top by clients, not baked into the service.</p>
+    <p>• Wait-free reads: any server in the ensemble can serve reads locally without contacting the leader, achieving 10:1 to 100:1 read:write ratios in Yahoo's production deployment. The tradeoff: reads are not linearizable (a client might read stale data), but writes are linearizable (total order via ZAB atomic broadcast).</p>
+    <p>• Watch mechanism: a client can set a one-time watch on a znode. When the znode changes, the server sends a notification to the client before any subsequent operation on that znode is visible. This enables reactive config propagation — when a config znode changes, all watching clients are notified before any new value can be read.</p>
+    <p>• Benchmarked at ~21K create operations/sec (3 servers), ~70K reads/sec with saturated read load. Write throughput is limited by the atomic broadcast protocol (ZAB), while read throughput scales linearly with the number of servers because reads are served locally.</p>
+    <p>• Ephemeral znodes (deleted automatically when the creating client's session expires) enable presence detection: a service registers an ephemeral node at startup; if it crashes, the node disappears, and watchers are notified. This is the foundation of ZooKeeper-based service discovery.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[3] In Search of an Understandable Consensus Algorithm (Ongaro &amp; Ousterhout, 2014)</div>
+    <p><strong>Diego Ongaro, John Ousterhout.</strong> USENIX ATC, June 2014.<br>
+    <a href="https://raft.github.io/raft.pdf" target="_blank">https://raft.github.io/raft.pdf</a></p>
+    <p>• Raft decomposes consensus into three independent subproblems: leader election (randomized timeouts, typically 150–300ms, prevent split votes), log replication (leader appends entries, followers replicate; a log entry is committed once a majority of servers have written it), and safety (the Election Restriction ensures a leader always has the most up-to-date log).</p>
+    <p>• etcd's implementation of Raft powers Kubernetes' entire config store. Every ConfigMap, Secret, pod spec, and service definition is a Raft log entry replicated across 3–5 etcd nodes. A Kubernetes config change is literally a Raft proposal that must achieve majority consensus before taking effect.</p>
+    <p>• Cluster membership changes use a joint consensus protocol: old and new configurations overlap during the transition, requiring majorities in both old and new configs for any decision. This prevents split-brain during cluster expansion/contraction.</p>
+    <p>• Log compaction via snapshotting: the Raft log grows indefinitely as config changes accumulate. Periodically, the state machine's current state is snapshotted and the log is truncated. etcd defaults to snapshots every 10,000 applied entries.</p>
+    <p>• User study results: 33 students at Stanford and UC Berkeley scored significantly better on Raft than Paxos after studying both (median quiz score 25.7 vs 20.8 out of 60). This understandability advantage is the reason etcd, Consul, CockroachDB, and TiKV chose Raft over Paxos.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[4] Site Reliability Engineering — Chapter 14: Managing Machine Configuration (Google, 2016)</div>
+    <p><strong>Betsy Beyer, Chris Jones, Jennifer Petoff, Niall Richard Murphy.</strong> O'Reilly, 2016.<br>
+    <a href="https://sre.google/sre-book/configuration-management/" target="_blank">https://sre.google/sre-book/configuration-management/</a></p>
+    <p>• The chapter treats config as an operational change stream, not just a file format problem. The key lesson is that a syntactically valid change can still be catastrophically wrong because it changes system behavior everywhere at once.</p>
+    <p>• "Configuration as code" in this chapter is a workflow discipline: review, test, staged rollout, and rollback for config changes, not only for binaries. That is the operational control loop the rest of the page is arguing for.</p>
+    <p>• The most technical part is the rollout model: emergency changes need a fast path, but the default path still has to preserve validation and blast-radius control. The point is to speed up change safely, not to bypass safety.</p>
+    <p>• The hermetic-build recommendation matters because it closes the gap between what was tested and what is actually deployed. If environment-specific interpolation happens later, you have already lost that guarantee.</p>
+    <p>• The "N+1 problem" is the cluster-level failure mode: a change that looks fine on one machine can still break the fleet when every machine responds to it at once, for example by reopening connections or rebalancing load simultaneously.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[5] Chubby: The Lock Service for Loosely-Coupled Distributed Systems (Burrows, 2006)</div>
+    <p><strong>Mike Burrows.</strong> OSDI, November 2006.<br>
+    <a href="https://static.googleusercontent.com/media/research.google.com/en//archive/chubby-osdi06.pdf" target="_blank">https://research.google.com/archive/chubby-osdi06.pdf</a></p>
+    <p>• Chubby is Google's internal coordination service — the predecessor and inspiration for ZooKeeper. It provides a small file-based namespace where each "file" is a small (up to 256KB) key-value pair. Originally built for distributed lock management, it evolved into Google's primary config distribution mechanism.</p>
+    <p>• Event-driven config: clients cache Chubby file contents and register callbacks. When a file changes, Chubby invalidates caches and delivers events, so config updates propagate without polling. This cache-invalidation model was directly adopted by ZooKeeper's watch mechanism.</p>
+    <p>• Design insight: Burrows observes that developers initially intended to use Chubby as a lock service but overwhelmingly used it as a config/naming store. Writes to Chubby are infrequent (minutes to hours apart), but reads are extremely frequent. This led to the design decision of caching aggressively and invalidating on write — the exact read-heavy pattern that ZooKeeper later formalized.</p>
+    <p>• The paper documents Chubby's Paxos-based replication across 5 replicas (typically 2 in the same datacenter, 3 in nearby datacenters). A master lease of ~12 seconds ensures a single leader; if the master fails, a new election happens within seconds. DNS-based discovery lets clients find the current master.</p>
+    <p>• Discusses the "thundering herd" problem when the Chubby leader changes: thousands of clients simultaneously reconnect, potentially overwhelming the new leader. The mitigation: random back-off on reconnection and grace periods during leader transitions.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals &middot; Topic 17 &middot; built for deep understanding
+</footer>
+
+</div>
+
+<script src="../../assets/js/topic.js"></script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+<script>
+// What If? Calculator
+function updateCalc2(){
+  const inst=+document.getElementById('sl-inst').value;
+  const delay=+document.getElementById('sl-delay').value;
+  const rps=+document.getElementById('sl-rps').value;
+
+  document.getElementById('v-inst').textContent=inst;
+  document.getElementById('v-delay').textContent=delay;
+  document.getElementById('v-rps').textContent=rps.toLocaleString();
+
+  // During propagation, instances transition linearly from old→new over delay seconds
+  // Average fraction on old config = 50% during the window
+  const avgOldPct = delay > 0 ? 50 : 0;
+  const inconsistentReqs = Math.round(rps * delay * 0.5);
+  const flickerPct = delay > 0 ? Math.round(100 * (1 - 1/inst)) : 0;
+
+  document.getElementById('r-incon').textContent=inconsistentReqs.toLocaleString();
+  document.getElementById('r-old').textContent=avgOldPct+'%';
+  document.getElementById('r-flicker').textContent=Math.min(flickerPct,99)+'%';
+  document.getElementById('r-ttc').textContent=delay+'s';
+  document.getElementById('r-total').textContent=inconsistentReqs.toLocaleString();
+
+  const pushReqs = Math.round(rps * 0.5 * 0.5); // 0.5s push delay
+  document.getElementById('r-verdict2').innerHTML=
+    `With a <strong>${delay}s propagation window</strong>, approximately <strong>${inconsistentReqs.toLocaleString()} requests</strong> will be served with inconsistent config. Using push-based propagation (sub-second) would reduce this to ~${pushReqs.toLocaleString()}.`;
+}
+['sl-inst','sl-delay','sl-rps'].forEach(id=>{
+  document.getElementById(id).addEventListener('input',updateCalc2);
+});
+updateCalc2();
+</script>
+</body>
+</html>
