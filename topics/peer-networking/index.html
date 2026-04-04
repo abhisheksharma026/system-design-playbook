@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Peer-to-Peer Networks</title>
+<meta name="description" content="A system design guide to peer-to-peer networking, gossip protocols, DHTs, Chord, BitTorrent, Cassandra membership, and large-scale binary distribution.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 15</div>
+  <h1><span>Peer-to-Peer</span> Networks</h1>
+  <p class="hero-sub">A peer-to-peer system grows by turning consumers into contributors. Each machine can fetch, serve, relay, and help the rest of the network make progress, which is why P2P shows up wherever one central server would melt under distribution load.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms</a></li>
+    <li><a href="#s1">Client-Server vs Peer-to-Peer</a></li>
+    <li><a href="#s2">Distributed Hash Tables (DHTs)</a></li>
+    <li><a href="#s3">Chord — The Ring Protocol</a></li>
+    <li><a href="#s4">BitTorrent — File Distribution at Scale</a></li>
+    <li><a href="#s5">Gossip Protocols</a></li>
+    <li><a href="#s6">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s7">Mini-Project: Gossip Simulator</a></li>
+    <li><a href="#s8">Production: Uber Kraken</a></li>
+    <li><a href="#s9">Production: Cassandra Gossip</a></li>
+    <li><a href="#s10">Edge Cases &amp; Gotchas</a></li>
+    <li><a href="#s11">What If? — Interactive Exploration</a></li>
+    <li><a href="#s12">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s12b">Actual System Design Interview</a></li>
+    <li><a href="#s13">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Key Terms</h2>
+
+  <h3>Peer-to-Peer Network</h3>
+  <p>A peer-to-peer network is one where participants are not just consumers. Each peer can download, upload, relay, or store data for somebody else. There is little or no central coordinator, so capacity grows as more machines join instead of collapsing onto one origin. That is why P2P keeps showing up in file distribution, decentralized storage, browser-to-browser media, and internal rollout systems like Uber Kraken. The engineering trade-off is that you gain aggregate bandwidth and fault tolerance, but you now have to handle churn, peer discovery, routing, and abuse without one central authority making every decision.</p>
+
+  <h3>Gossip Protocol</h3>
+  <p>Gossip is the simplest scalable answer to "how do all these nodes learn the same thing?" Every node periodically talks to a random peer, they exchange what they know, and the information spreads like a rumor. With high probability that takes <strong>O(log N)</strong> rounds, which is why gossip works well for membership, failure suspicion, topology updates, and other control-plane state. The important detail is that gossip is usually a control-plane protocol, not a data-plane one: it spreads summaries, versions, and health signals cheaply, then lets other mechanisms act on that information.</p>
+
+  <h3>Distributed Hash Table (DHT)</h3>
+  <p>A DHT is the lookup layer for a decentralized system. Keys and nodes are placed in the same identifier space, and each node becomes responsible for one slice of that space. If you know the key, you can route toward the owning node in <strong>O(log N)</strong> hops without asking a central directory. The data structure that makes this work is the overlay routing table: Chord uses a ring plus finger tables, while Kademlia uses XOR distance and k-buckets. Either way, the goal is the same: find the peer for a key without flooding the network. <a href="#ref1" class="ref">[1]</a></p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>Client-Server vs Peer-to-Peer</h2>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Property</th><th>Client-Server</th><th>Peer-to-Peer</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Bandwidth scaling</strong></td><td>Server is the bottleneck. N clients downloading a 5GB file = server uploads 5GB × N.</td><td>Every downloader becomes an uploader. N peers downloading = aggregate upload capacity grows with N.</td></tr>
+        <tr><td><strong>Failure resilience</strong></td><td>Server down = service down.</td><td>Any individual peer can fail without affecting the system.</td></tr>
+        <tr><td><strong>Coordination</strong></td><td>Central server coordinates everything — simple to reason about.</td><td>No central coordinator — peers must discover each other, negotiate, handle churn.</td></tr>
+        <tr><td><strong>Consistency</strong></td><td>Server is the single source of truth.</td><td>No single source of truth — eventual consistency via gossip or DHT lookups.</td></tr>
+        <tr><td><strong>Best for</strong></td><td>Most web applications, APIs, databases.</td><td>Large file distribution, decentralized storage, cluster membership, content delivery.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">The Bandwidth Math</div>
+    <p>A 5GB file needs to reach 1000 machines. <strong>Client-server:</strong> one server uploads 5GB × 1000 = 5TB of data. On a 40Gbps (5GB/s) server link, that takes ~1000 seconds (~17 minutes). <strong>P2P (BitTorrent-style):</strong> the file is split into 5MB pieces (1000 pieces). Each machine downloads different pieces from different peers simultaneously. As soon as a machine has a piece, it can upload it to others. With 1000 machines × 1Gbps each = 1Tbps of aggregate bandwidth. The 5GB file distributes in ~40 seconds. <strong>P2P is ~25× faster</strong> because it harnesses all peers' upload bandwidth instead of relying on one server.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 2: DHTs ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>Distributed Hash Tables (DHTs)</h2>
+
+  <p>A DHT solves the core P2P lookup problem: <strong>given a key, find the peer responsible for it without asking a central service</strong>. In practice that means two things: the keyspace has to be partitioned deterministically, and the routing table has to move you toward the owner fast enough that a lookup does not turn into a broadcast storm.</p>
+
+  <div class="memory-map"><span class="h">DHT — HOW IT WORKS (conceptual)</span>
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Identifier space</span>: 0 to 2^m - 1 (e.g., m=160 for SHA-1)
+<span class="d">│</span>   Both nodes and keys are mapped to this space via hashing.
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Key assignment</span>: key K is stored at the node whose ID is the
+<span class="d">│</span>   closest successor of hash(K) on the ring (just like consistent hashing).
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Routing</span>: to find key K, a node forwards the query to the peer
+<span class="d">│</span>   closest to hash(K) in its routing table. Each hop halves the distance.
+<span class="d">│</span>   → O(log N) hops to reach the responsible node.
+<span class="d">│</span>
+<span class="d">├──</span> <span class="b">Routing table size</span>: each node stores O(log N) entries (fingers/neighbors).
+<span class="d">│</span>   With 1 million nodes: each node knows ~20 others, lookups take ~20 hops.
+<span class="d">│</span>
+<span class="d">└──</span> <span class="b">Node join/leave</span>: only O(log² N) messages needed to update routing tables.
+    Keys move from the predecessor to the new node (consistent hashing property).</div>
+</section>
+
+<!-- ============ SECTION 3: CHORD ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Chord — The Ring Protocol</h2>
+
+  <p>Chord is the most studied DHT protocol, developed at MIT in 2001. <a href="#ref1" class="ref">[1]</a> It maps both nodes and keys to positions on a circular identifier space (0 to 2ᵐ − 1).</p>
+
+  <h3>Finger Tables</h3>
+  <p>Chord gets its speed from the <strong>finger table</strong>. Instead of only knowing the next node on the ring, each peer keeps shortcuts at exponentially increasing distances. A lookup always jumps to the closest shortcut that does not overshoot the target, so the remaining search space shrinks fast and the route finishes in <strong>O(log N)</strong> hops. The other half of the protocol is stabilization: successors, predecessors, and finger entries have to be repaired in the background as peers join and leave, otherwise the nice asymptotic lookup bound collapses under churn.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Chord lookup — the algorithm</span></div>
+    <pre><span class="cm"># m = 8 bits (ring has 256 positions). N = 10 nodes.</span>
+<span class="cm"># Node 42 wants to find key 200.</span>
+
+<span class="h">Node 42's finger table:</span>
+  finger[1]: successor of (42 + 2⁰)  = 43  → Node <span class="num">50</span>
+  finger[2]: successor of (42 + 2¹)  = 44  → Node <span class="num">50</span>
+  finger[3]: successor of (42 + 2²)  = 46  → Node <span class="num">50</span>
+  finger[4]: successor of (42 + 2³)  = 50  → Node <span class="num">50</span>
+  finger[5]: successor of (42 + 2⁴)  = 58  → Node <span class="num">62</span>
+  finger[6]: successor of (42 + 2⁵)  = 74  → Node <span class="num">80</span>
+  finger[7]: successor of (42 + 2⁶)  = 106 → Node <span class="num">120</span>
+  finger[8]: successor of (42 + 2⁷)  = 170 → Node <span class="num">190</span>
+
+<span class="h">Lookup(200) from Node 42:</span>
+  Hop 1: Closest finger not past 200 = finger[8] → Node <span class="num">190</span>
+  Hop 2: Node 190 → its closest finger to 200 → Node <span class="num">195</span>
+  Hop 3: Node 195 → successor is Node <span class="num">210</span>, which owns key 200. <span class="str">Found!</span>
+
+<span class="cm">3 hops for 10 nodes. With 1M nodes: ~20 hops. O(log N).</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 4: BITTORRENT ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>BitTorrent — File Distribution at Scale</h2>
+
+  <p>BitTorrent is the most successful P2P distribution protocol because it turns one large transfer into thousands of small parallel ones. <strong>Files are split into pieces, and peers fetch different pieces from different sources at the same time.</strong></p>
+
+  <h3>How BitTorrent Works</h3>
+  <p><strong>Torrent file or magnet link:</strong> carries the metadata, including piece boundaries and a hash per piece, so every chunk can be verified on its own. That matters because a swarm assumes peers may be buggy, stale, or malicious.</p>
+  <p><strong>Tracker or DHT:</strong> tells the client which peers are in the swarm. The tracker is centralized. The DHT is the decentralized fallback once you want peer discovery without one always-on directory.</p>
+  <p><strong>Rarest first:</strong> the client prefers the least common pieces so the swarm does not end up with one scarce chunk that everybody still needs. This is the rule that keeps the swarm healthy when the original seeder disappears early.</p>
+  <p><strong>Tit-for-tat:</strong> upload goes to peers that reciprocate. Free-riders get choked, which is how the swarm protects itself from becoming download-only traffic. Optimistic unchoke is the escape hatch that lets new peers earn their way into the active set.</p>
+
+  <div class="callout orange">
+    <div class="callout-label">Why BitTorrent Matters for System Design</div>
+    <p>BitTorrent's piece-based distribution with rarest-first selection is the model for internal deployment systems at scale. When you need to distribute a 5GB Docker image to 10,000 machines in a datacenter, a central registry would take hours. P2P-based distribution (Uber Kraken, Facebook's FBDP, Twitter's Murder) completes the same task in seconds by turning every machine into both a downloader and an uploader.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 5: GOSSIP ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Gossip Protocols</h2>
+
+  <p>Gossip protocols spread state without any central announcer. Each node periodically compares notes with a few peers, and the cluster converges over time instead of trying to coordinate one giant broadcast. That buys robustness and scale, but the trade-off is important: gossip gives you probabilistic convergence and short-lived disagreement, not an instant globally consistent view.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Gossip protocol — the core loop</span></div>
+    <pre><span class="kw">every</span> T seconds (e.g., T=1):
+    peer = <span class="fn">random_choice</span>(known_peers)
+    <span class="fn">send</span>(peer, my_state)
+    their_state = <span class="fn">receive</span>(peer)
+    my_state = <span class="fn">merge</span>(my_state, their_state)
+
+<span class="h">CONVERGENCE SPEED</span>
+Round 0: 1 node knows the update
+Round 1: 1 node tells 1 peer → 2 nodes know
+Round 2: 2 nodes each tell 1 peer → 4 nodes know
+Round 3: 4 → 8 → 16 → ...
+Round k: 2^k nodes know
+→ <span class="v">All N nodes know after O(log₂ N) rounds</span>
+
+<span class="cm">With 1000 nodes and 1-second gossip interval:</span>
+<span class="cm">  log₂(1000) ≈ 10 rounds → all nodes converge in ~10 seconds.</span>
+<span class="cm">With 1M nodes: ~20 seconds. Scales logarithmically.</span></pre>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Gossip Variant</th><th>What It Spreads</th><th>Used By</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Anti-entropy</strong></td><td>Full state comparison — detect and repair differences between replicas.</td><td>Cassandra (Merkle tree-based repair), DynamoDB (background sync)</td></tr>
+        <tr><td><strong>Rumor mongering</strong></td><td>New updates only — each node spreads a "rumor" until enough peers already know it.</td><td>Consul (membership updates), Serf (event propagation)</td></tr>
+        <tr><td><strong>SWIM (Scalable Weakly-consistent Infection-style Membership)</strong></td><td>Failure detection — probe random peers, use indirect probes via third parties to confirm failures.</td><td>Consul, Memberlist (HashiCorp), Serf</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SECTION 6: DEMOS ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: See Gossip Convergence</h3>
+  <div class="code-block">
+    <div class="code-header"><span>gossip_demo.py — gossip convergence timing (macOS/Linux/WSL, Python 3.7+)</span></div>
+    <pre>$ <span class="fn">python3</span> -c "
+<span class="kw">import</span> random
+
+<span class="kw">def</span> <span class="fn">simulate_gossip</span>(n_nodes, fanout=<span class="num">1</span>):
+    informed = {<span class="num">0</span>}  <span class="cm"># Node 0 starts with the rumor</span>
+    rounds = <span class="num">0</span>
+    <span class="kw">while</span> len(informed) < n_nodes:
+        newly_informed = set()
+        <span class="kw">for</span> node <span class="kw">in</span> list(informed):
+            <span class="kw">for</span> _ <span class="kw">in</span> range(fanout):
+                target = random.randint(<span class="num">0</span>, n_nodes - <span class="num">1</span>)
+                newly_informed.add(target)
+        informed |= newly_informed
+        rounds += <span class="num">1</span>
+    <span class="kw">return</span> rounds
+
+<span class="kw">import</span> math
+print(f'{'N':>10} {'Rounds (avg)':>12} {'O(log N)':>10}')
+print('-' * <span class="num">35</span>)
+<span class="kw">for</span> n <span class="kw">in</span> [<span class="num">100</span>, <span class="num">1000</span>, <span class="num">10000</span>, <span class="num">100000</span>]:
+    avg = sum(simulate_gossip(n) <span class="kw">for</span> _ <span class="kw">in</span> range(<span class="num">20</span>)) / <span class="num">20</span>
+    print(f'{n:>10} {avg:>12.1f} {math.log2(n):>10.1f}')
+"
+
+         N  Rounds (avg)   O(log N)
+-----------------------------------
+       <span class="num">100</span>         <span class="num">12.3</span>        <span class="num">6.6</span>
+     <span class="num">1,000</span>         <span class="num">17.8</span>       <span class="num">10.0</span>
+    <span class="num">10,000</span>         <span class="num">23.5</span>       <span class="num">13.3</span>
+   <span class="num">100,000</span>         <span class="num">29.1</span>       <span class="num">16.6</span>
+
+<span class="cm"># Rounds grow ~logarithmically. The constant factor (~1.7× log₂ N)</span>
+<span class="cm"># comes from randomness — some peers are contacted multiple times.</span></pre>
+  </div>
+
+  <h3>Demo 2: DHT Lookup Simulation</h3>
+  <div class="code-block">
+    <div class="code-header"><span>chord_sim.py — Chord ring lookup hops (macOS/Linux/WSL)</span></div>
+    <pre>$ <span class="fn">python3</span> -c "
+<span class="kw">import</span> hashlib, bisect, random
+
+<span class="kw">def</span> <span class="fn">h</span>(s): <span class="kw">return</span> int(hashlib.sha1(s.encode()).hexdigest(), <span class="num">16</span>) % (2**<span class="num">20</span>)
+
+<span class="cm"># Create N nodes on a 2^20 ring</span>
+N = <span class="num">1000</span>
+nodes = sorted(set(h(f'node_{i}') <span class="kw">for</span> i <span class="kw">in</span> range(N)))
+RING_SIZE = 2**<span class="num">20</span>
+
+<span class="kw">def</span> <span class="fn">successor</span>(pos):
+    idx = bisect.bisect_right(nodes, pos) % len(nodes)
+    <span class="kw">return</span> nodes[idx]
+
+<span class="cm"># Build finger tables (simplified)</span>
+fingers = {}
+<span class="kw">for</span> n <span class="kw">in</span> nodes:
+    fingers[n] = [successor((n + 2**i) % RING_SIZE) <span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">20</span>)]
+
+<span class="kw">def</span> <span class="fn">lookup</span>(start, key_hash):
+    current = start
+    hops = <span class="num">0</span>
+    <span class="kw">while</span> <span class="num">True</span>:
+        succ = successor(current)
+        <span class="kw">if</span> (current < key_hash <= succ) <span class="kw">or</span> (current > succ <span class="kw">and</span> (key_hash > current <span class="kw">or</span> key_hash <= succ)):
+            <span class="kw">return</span> hops + <span class="num">1</span>
+        best = current
+        <span class="kw">for</span> f <span class="kw">in</span> reversed(fingers.get(current, [])):
+            <span class="kw">if</span> current < f <= key_hash <span class="kw">or</span> (current > key_hash <span class="kw">and</span> (f > current <span class="kw">or</span> f <= key_hash)):
+                best = f; <span class="kw">break</span>
+        <span class="kw">if</span> best == current: <span class="kw">return</span> hops + <span class="num">1</span>
+        current = best; hops += <span class="num">1</span>
+        <span class="kw">if</span> hops > <span class="num">30</span>: <span class="kw">return</span> hops
+
+<span class="cm"># Measure average hops for 1000 random lookups</span>
+total_hops = sum(lookup(random.choice(nodes), h(f'key_{i}')) <span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">1000</span>))
+<span class="kw">import</span> math
+print(f'Nodes: {len(nodes)}, Avg hops: {total_hops/<span class="num">1000</span>:.1f}, log₂(N): {math.log2(len(nodes)):.1f}')
+"
+
+Nodes: <span class="num">1000</span>, Avg hops: <span class="num">5.4</span>, log₂(N): <span class="num">10.0</span>
+<span class="cm"># Finger tables reduce hops from O(N) to O(log N).</span>
+<span class="cm"># With 1M nodes: ~20 hops. Each hop is a network round-trip.</span></pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 7: MINI-PROJECT ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Mini-Project: Gossip Simulator</h2>
+  <h4>Simple: Feel What Gossip Does</h4>
+  <div class="code-block">
+    <div class="code-header"><span>gossip_membership.py — membership failure detection via gossip (macOS/Linux/WSL)</span></div>
+    <pre><span class="kw">import</span> random, time
+
+<span class="kw">class</span> <span class="fn">Node</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, nid, all_nodes):
+        self.id = nid
+        self.heartbeats = {n: <span class="num">0</span> <span class="kw">for</span> n <span class="kw">in</span> all_nodes}  <span class="cm"># {node_id: last_seen_counter}</span>
+        self.heartbeats[nid] = <span class="num">1</span>
+        self.alive = <span class="num">True</span>
+
+    <span class="kw">def</span> <span class="fn">tick</span>(self):
+        <span class="kw">if</span> self.alive: self.heartbeats[self.id] += <span class="num">1</span>
+
+    <span class="kw">def</span> <span class="fn">gossip_with</span>(self, other):
+        <span class="kw">if not</span> self.alive <span class="kw">or not</span> other.alive: <span class="kw">return</span>
+        <span class="kw">for</span> nid <span class="kw">in</span> self.heartbeats:
+            self.heartbeats[nid] = max(self.heartbeats[nid], other.heartbeats.get(nid, <span class="num">0</span>))
+            other.heartbeats[nid] = max(other.heartbeats.get(nid, <span class="num">0</span>), self.heartbeats[nid])
+
+    <span class="kw">def</span> <span class="fn">suspected_dead</span>(self, threshold=<span class="num">3</span>):
+        my_counter = self.heartbeats[self.id]
+        <span class="kw">return</span> [nid <span class="kw">for</span> nid, hb <span class="kw">in</span> self.heartbeats.items()
+                <span class="kw">if</span> nid != self.id <span class="kw">and</span> my_counter - hb > threshold]
+
+<span class="cm"># Setup: 10 nodes</span>
+node_ids = list(range(<span class="num">10</span>))
+nodes = {nid: Node(nid, node_ids) <span class="kw">for</span> nid <span class="kw">in</span> node_ids}
+
+<span class="cm"># Simulate 20 rounds of gossip</span>
+<span class="kw">for</span> rnd <span class="kw">in</span> range(<span class="num">20</span>):
+    <span class="cm"># Kill node 7 at round 5</span>
+    <span class="kw">if</span> rnd == <span class="num">5</span>: nodes[<span class="num">7</span>].alive = <span class="num">False</span>; print(f<span class="str">"  Round {rnd}: ☠ Node 7 CRASHED"</span>)
+
+    <span class="kw">for</span> n <span class="kw">in</span> nodes.values(): n.tick()
+    <span class="cm"># Each alive node gossips with one random peer</span>
+    <span class="kw">for</span> n <span class="kw">in</span> nodes.values():
+        <span class="kw">if</span> n.alive:
+            peer = nodes[random.choice([x <span class="kw">for</span> x <span class="kw">in</span> node_ids <span class="kw">if</span> x != n.id])]
+            n.gossip_with(peer)
+
+    <span class="cm"># Check who suspects node 7 is dead</span>
+    <span class="kw">if</span> rnd >= <span class="num">5</span>:
+        detectors = [nid <span class="kw">for</span> nid, n <span class="kw">in</span> nodes.items()
+                     <span class="kw">if</span> n.alive <span class="kw">and</span> <span class="num">7</span> <span class="kw">in</span> n.suspected_dead()]
+        <span class="kw">if</span> detectors:
+            print(f<span class="str">"  Round {rnd}: {len(detectors)}/9 nodes suspect node 7 is dead"</span>)
+
+print(<span class="str">"  → All alive nodes eventually detect the failure via gossip."</span>)</pre>
+  </div>
+</section>
+
+<!-- ============ PRODUCTION EXAMPLES ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Production: Uber Kraken</h2>
+  <p>Kraken is Uber's internal-style answer to a basic rollout problem: one registry cannot feed an entire datacenter fast enough. It distributes container images with a BitTorrent-like swarm so the machines receiving an image immediately help serve it to the rest.</p>
+  <h3>Key Numbers</h3>
+  <p><strong>Scale:</strong> 1 million+ blobs per day in production, including 100K+ blobs over 1GB. At peak load, Kraken can push 20K 100MB-1GB blobs in under 30 seconds. The important point is not the benchmark itself, but the shape of the system: every newly updated machine becomes another source for the rollout, so fan-out improves as the deployment grows.</p>
+  <p><strong>Architecture:</strong> an <strong>origin</strong> seeds the first copies, a <strong>tracker</strong> knows who has which pieces, and an <strong>agent</strong> on every machine joins the swarm. The tracker is centralized control-plane metadata, not a data-plane bottleneck. That separation is the design pattern to remember: centralize coordination if you need to, but decentralize the byte movement.</p>
+</section>
+
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production: Cassandra Gossip</h2>
+  <p>Cassandra uses gossip as the cluster's shared memory. Nodes learn who is alive, who owns which tokens, and whether schema or membership has changed without asking one master coordinator to keep everybody synchronized.</p>
+  <h3>How Cassandra's Gossip Works</h3>
+  <p><strong>Gossip round:</strong> every second, each node picks a few peers and exchanges a compact digest of what it knows. That state includes heartbeat versioning, node status, schema version, rack/DC placement, and token ownership. This is how partition maps and membership drift across the cluster without one node acting as the canonical announcer.</p>
+  <p><strong>Failure detection:</strong> Cassandra uses <strong>Phi Accrual</strong> rather than a hard timeout. Instead of saying "mark down after X seconds," it computes a suspicion score from recent heartbeat timing and only declares a node dead when that score crosses a threshold. That makes the detector less brittle under uneven networks, which matters because a distributed database cannot afford to flap leadership and routing decisions every time one AZ gets noisy.</p>
+</section>
+
+<!-- ============ EDGE CASES ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Edge Cases &amp; Gotchas</h2>
+
+  <h3>1. DHT Churn — Nodes Joining and Leaving Rapidly</h3>
+  <p>In high-churn environments (e.g., ephemeral cloud instances), nodes join and leave the DHT faster than the routing tables can stabilize. Lookups may fail because finger tables point to nodes that have already left. Fix: Chord's stabilization protocol runs periodically to update successors and fingers. In practice, Kademlia (used by BitTorrent) handles churn better than Chord because its bucket-based routing is more robust to stale entries.</p>
+
+  <h3>2. Free-Rider Problem</h3>
+  <p>Peers that download but refuse to upload (by setting upload speed to zero). In BitTorrent, tit-for-tat reciprocity helps — free-riders get choked (deprioritized). But in pure P2P systems without incentive mechanisms, free-riding can degrade performance for everyone. Blockchain-based P2P systems (Filecoin, Arweave) address this with economic incentives.</p>
+
+  <h3>3. Gossip Partitions</h3>
+  <p>If the network partitions, gossip within each partition converges — but the two partitions have divergent state. When the partition heals, gossip eventually reconciles, but there may be a window where nodes disagree on membership. In Cassandra, this can cause conflicting writes if both sides believe they have quorum. Fix: seed nodes (bootstrap nodes known to all) help reconnect partitions faster.</p>
+
+  <h3>4. Sybil Attacks on DHTs</h3>
+  <p>An attacker creates many fake identities (Sybil nodes) to control a portion of the DHT ring. If they control enough nodes near a target key, they can intercept or deny lookups for that key. Fix: proof-of-work for node IDs (makes Sybil creation expensive), social trust networks, or admission control. This is a fundamental vulnerability of open P2P systems.</p>
+
+  <h3>5. NAT Traversal</h3>
+  <p>Most home networks use NAT — peers behind NAT can make outgoing connections but can't receive incoming ones. This means they can download but can't serve pieces to others, reducing the swarm's aggregate upload capacity. Fix: STUN/TURN servers for NAT hole-punching (WebRTC uses this), relay nodes, or UPnP port mapping.</p>
+</section>
+
+<!-- ============ WHAT IF ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>What If? — Interactive Exploration</h2>
+
+  <h3>Tradeoff Cards</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout blue" style="margin:0;">
+      <div class="callout-label">Centralized registry vs P2P distribution</div>
+      <p><strong>Central:</strong> Simple, reliable, easy to secure. But bandwidth-limited — one server uploads to N clients serially.<br>
+      <strong>P2P:</strong> Aggregate bandwidth scales with N. But complex (tracker, piece management, NAT) and harder to secure.<br>
+      <strong>Decision:</strong> Small deployments (&lt;100 machines) → central registry. Large deployments (1000+) → P2P (Kraken, Dragonfly).</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">Structured DHT vs unstructured flooding</div>
+      <p><strong>DHT (Chord, Kademlia):</strong> O(log N) lookups, guaranteed to find data if it exists. But requires routing table maintenance and stabilization.<br>
+      <strong>Flooding (Gnutella):</strong> No routing tables. Query every neighbor, who queries their neighbors. Simple but O(N) messages per query — doesn't scale.<br>
+      <strong>Modern P2P:</strong> Kademlia (used by BitTorrent, IPFS) — DHT with XOR distance metric, simpler stabilization than Chord.</p>
+    </div>
+    <div class="callout purple" style="margin:0;">
+      <div class="callout-label">Gossip vs broadcast for cluster membership</div>
+      <p><strong>Gossip:</strong> O(N log N) total messages, O(log N) convergence time. Robust to failures — no single point of failure.<br>
+      <strong>Broadcast:</strong> O(N) messages per update (one to each node). Faster convergence (1 round) but requires knowledge of all nodes. Single sender failure = missed update.<br>
+      <strong>Decision:</strong> Gossip for large clusters (100+ nodes). Broadcast for small, stable clusters.</p>
+    </div>
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">Push gossip vs pull gossip</div>
+      <p><strong>Push:</strong> Informed nodes push updates to random peers. Fast initial spread. Wastes bandwidth later (pushing to already-informed nodes).<br>
+      <strong>Pull:</strong> Uninformed nodes pull updates from random peers. Efficient in later rounds. Slow initial spread (uninformed nodes don't know they should pull).<br>
+      <strong>Push-pull (optimal):</strong> Combine both. Push in early rounds (fast spread), pull in later rounds (efficient convergence). Used by most production systems.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ INTERVIEW Q&A ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>Interview Questions &amp; Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: When would you use P2P instead of client-server architecture?</div>
+    <div class="qa-a">
+      <p>Use P2P when the receivers can help do the serving. The classic case is <strong>large distribution to many machines</strong>, like shipping a multi-GB image to a whole fleet, where one origin uplink would become the hard bottleneck. It also fits cases where <strong>decentralization is a requirement</strong> or where <strong>membership and failure state</strong> should spread without one coordinator. For ordinary APIs, databases, and web apps, client-server is still simpler and usually the right answer. P2P only pays for itself when the bandwidth curve, trust model, or topology makes the extra complexity worth it.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: How does a DHT achieve O(log N) lookups?</div>
+    <div class="qa-a">
+      <p>Each node maintains a <strong>finger table</strong> with O(log N) entries, where the i-th finger points to the first node at least 2ⁱ positions ahead on the ring. To look up a key, a node forwards the query to the finger closest to (but not past) the target. Each hop covers at least half the remaining distance on the ring — so after O(log N) hops, the responsible node is reached. With 1M nodes: each node stores ~20 finger table entries (O(log N) space) and any lookup takes ~20 hops (O(log N) time). The tradeoff: maintaining finger tables requires periodic stabilization messages (O(log² N) per join/leave). In high-churn environments, stale fingers cause failed lookups — this is why Kademlia's XOR-based routing (used by BitTorrent) is preferred over Chord for open P2P networks.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: What is gossip protocol and how fast does it converge?</div>
+    <div class="qa-a">
+      <p>Gossip is an epidemic-style protocol where each node periodically sends its state to a randomly chosen peer, and they merge their states. Convergence: if one node has an update and the gossip interval is T seconds, after k rounds, approximately 2ᵏ nodes know the update. To reach all N nodes: k = O(log₂ N) rounds = O(T × log₂ N) seconds. With N=10,000 and T=1s: ~14 seconds. The constant factor is ~1.5-2× because random selection sometimes contacts already-informed peers. Gossip is used by Cassandra (cluster membership, 1s interval), Consul (service mesh, SWIM protocol), and Redis Cluster (node discovery). The advantage: no single point of failure, no coordinator, robust to network partitions. The cost: O(N log N) total messages and eventual (not instant) convergence.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: Why does BitTorrent use "rarest first" piece selection?</div>
+    <div class="qa-a">
+      <p>If all peers download pieces in order (piece 1 first, then piece 2, etc.), every peer has the same pieces — they can't help each other. If the original seeder leaves, pieces not yet distributed to any peer are lost forever. <strong>Rarest first</strong> ensures piece diversity: each peer prioritizes downloading the piece that fewest other peers have. This maximizes the number of unique pieces across the swarm, making the swarm resilient to churn (if any peer leaves, others have its pieces). It also maximizes parallelism — every peer has different pieces to offer, so every connection is productive. The one exception: the <strong>first piece</strong> is selected randomly (not rarest-first) to get the new peer contributing as quickly as possible — a peer with zero pieces can't upload anything.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ACTUAL SYSTEM DESIGN INTERVIEW ============ -->
+<section class="section" id="s12b">
+  <div class="section-num">12b</div>
+  <h2>Actual System Design Interview — "Design a Large-Scale Deployment System" (Meta/Uber-style)</h2>
+  <p>This is really a bandwidth and topology question. The interviewer wants to hear why a central origin collapses, how you localize traffic by datacenter, and what keeps the swarm working when peers are slow or disappear.</p>
+
+  <div class="callout blue">
+    <div class="callout-label">The Prompt</div>
+    <p>"Design a system that deploys a 2GB binary to 50,000 machines across 5 datacenters within 60 seconds. A central server has 40Gbps uplink. How would you do it?"</p>
+  </div>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    O["Origin"]
+    T["Tracker"]
+    D1["DC-1 swarm"]
+    D2["DC-2 swarm"]
+    D3["DC-3..5 swarm"]
+    N1["Seed one peer per DC"]
+    N2["Keep peer lists local to each DC"]
+    N3["Piece exchange does the heavy lifting inside the swarm"]
+
+    O -.-> T
+    O --> D1
+    O --> D2
+    O --> D3
+    D1 -.-> N1
+    D2 -.-> N2
+    D3 -.-> N3
+
+    classDef origin fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef tracker fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef swarm fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class O origin;
+    class T tracker;
+    class D1,D2,D3 swarm;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Hierarchical P2P: the origin only bootstraps each datacenter. Most bytes move inside local swarms, where every machine can upload as well as download.</div>
+  </div>
+
+  <h3>Interviewer Follow-ups</h3>
+
+  <div class="qa">
+    <div class="qa-q">"Why can't you just use the central server with 40Gbps?"</div>
+    <div class="qa-a">
+      <p><strong>The math:</strong> 2GB × 50,000 machines = 100TB total data transfer. At 40Gbps (5GB/s), the server would take 100TB / 5GB/s = 20,000 seconds ≈ <strong>5.5 hours</strong>. With P2P: the origin seeds to 5 peers (one per DC, ~2GB each at 5GB/s = 0.4 seconds). Within each DC, 10K machines with 1Gbps each provide 10Tbps aggregate bandwidth. 2GB / 10Tbps = ~1.6ms — but the bottleneck is propagation time (pieces need to cascade). With BitTorrent-style piece selection: ~20-40 seconds for full distribution. <strong>P2P is ~500× faster</strong> because it parallelizes across all peers' bandwidth.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"What if some machines are slow or fail mid-download?"</div>
+    <div class="qa-a">
+      <p><strong>Slow peers:</strong> BitTorrent's tit-for-tat naturally handles this — slow uploaders are deprioritized by other peers, and they can still download slowly from the origin or less-busy peers. They don't block the rest of the swarm. <strong>Failed peers:</strong> Pieces they held are still available from other peers (rarest-first ensures piece redundancy). The tracker removes dead peers from the swarm after a timeout. A new peer can join mid-deployment and catch up by downloading from the swarm. <strong>Verification:</strong> Each piece has a SHA-256 hash. If a piece fails verification (bit rot, corrupted transfer), it's re-downloaded from another peer. The deployment controller tracks per-machine completion status and retries failures.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">"How do you minimize cross-datacenter traffic?"</div>
+    <div class="qa-a">
+      <p><strong>Hierarchical seeding:</strong> The origin sends one full copy to a designated seed node in each DC. From then on, all distribution is intra-DC — peers within a DC only connect to other peers in the same DC. The tracker enforces DC-locality by returning only same-DC peers in swarm lists. Cross-DC traffic = 5 × 2GB = 10GB total (one copy per DC). Intra-DC traffic = 50,000 × 2GB / N_replicas, but this stays within the DC's internal network (typically 100Gbps+ spine). This is exactly how Uber Kraken works: the origin seeds per-DC, then DC-local agents handle the P2P swarm within each DC boundary.</p>
+    </div>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">What the Interviewer Is Testing</div>
+    <p>(1) <strong>Bandwidth math</strong> — can you calculate why a central server can't meet the 60-second SLA. (2) <strong>P2P as a scaling primitive</strong> — understanding that P2P turns N consumers into N uploaders. (3) <strong>Hierarchical design</strong> — minimizing cross-DC traffic by seeding per-DC. (4) <strong>Failure resilience</strong> — rarest-first piece selection + piece verification + retry logic. (5) <strong>Production awareness</strong> — referencing Uber Kraken, Facebook FBDP, or Twitter Murder shows you've seen this pattern in real systems.</p>
+  </div>
+</section>
+
+<!-- ============ CHEAT SHEET ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 10 Things You Must Know</div>
+    <p><strong>1.</strong> P2P: every node is both client and server. Aggregate bandwidth scales with N — the system gets faster as more peers join.<br>
+    <strong>2.</strong> DHTs map keys and nodes to the same identifier space. Lookup in O(log N) hops using finger tables (Chord) or routing tables (Kademlia).<br>
+    <strong>3.</strong> Chord: ring topology, finger table with O(log N) entries, each hop halves remaining distance. SIGCOMM 2001 Test of Time award.<br>
+    <strong>4.</strong> BitTorrent: split files into pieces, rarest-first selection maximizes piece diversity, tit-for-tat prevents free-riding.<br>
+    <strong>5.</strong> Gossip: each node tells a random peer. Convergence in O(log N) rounds. Used for membership (Cassandra), failure detection (SWIM), metadata sync.<br>
+    <strong>6.</strong> Uber Kraken: P2P Docker image distribution. 20K 100MB-1GB blobs in under 30 seconds at peak. Hierarchical seeding per DC.<br>
+    <strong>7.</strong> Cassandra gossip: 1-second interval, Phi Accrual failure detector adapts to network conditions (no fixed timeout).<br>
+    <strong>8.</strong> P2P bandwidth math: 2GB to 50K machines. Central = 5.5 hours. P2P = ~30 seconds. ~500× difference.<br>
+    <strong>9.</strong> NAT traversal is the #1 practical challenge for open P2P (STUN/TURN/UPnP). Internal datacenter P2P avoids this entirely.<br>
+    <strong>10.</strong> In interviews: P2P appears in "deploy at scale" and "file distribution" questions. Always start with the bandwidth math to justify P2P.</p>
+  </div>
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model — P2P Distribution Scaling</h2>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    C["Client-server"]
+    P["Peer-to-peer"]
+    N1["One origin uplink carries all demand"]
+    N2["Time grows with file size × number of machines"]
+    N3["Every new peer adds upload capacity"]
+    N4["Distribution cascades through the swarm"]
+
+    C -.-> N1
+    C -.-> N2
+    P -.-> N3
+    P -.-> N4
+
+    classDef central fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef p2p fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C central;
+    class P p2p;
+    class N1,N2,N3,N4 note;
+    </pre>
+    <div class="diagram-caption">Client-server burns one fixed uplink. P2P turns every recipient into another source, so the system gets more distribution capacity as the rollout grows.</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Key Intuition</div>
+    <p><strong>P2P flips the direction of scaling.</strong> In a client-server design, more receivers mean more pressure on one origin. In a P2P design, more receivers mean more helpers. That is why the pattern keeps showing up in large rollouts, swarm downloads, and membership propagation: the system improves by recruiting the machines that were going to consume the data anyway. The practical limit then moves away from origin bandwidth and toward peer churn, integrity checks, and locality-aware routing.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References &amp; Further Reading</h2>
+  <p>Use these as protocol notes rather than general reading suggestions. Each source is here because it explains a concrete routing rule, incentive mechanism, or membership behavior that shows up in real systems.</p>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Stoica et al. — "Chord: A Scalable Peer-to-peer Lookup Service for Internet Applications" (ACM SIGCOMM 2001)</div>
+    <p><strong>Ion Stoica, Robert Morris, David Karger, M. Frans Kaashoek, Hari Balakrishnan.</strong> MIT. ACM SIGCOMM 2001, pp. 149-160. Test of Time Award 2011.<br>
+    <a href="https://pdos.csail.mit.edu/papers/chord:sigcomm01/chord_sigcomm.pdf" style="color:var(--accent);" target="_blank">https://pdos.csail.mit.edu/papers/chord:sigcomm01/chord_sigcomm.pdf</a></p>
+    <p>&#x2022; Nodes and keys are both hashed to an m-bit identifier circle using SHA-1. Key k is assigned to the first node whose identifier is ≥ hash(k) — the <strong>successor(k)</strong>. This is consistent hashing (Karger et al., 1997) applied to a self-organizing overlay network.</p>
+    <p>&#x2022; Each node maintains a <strong>finger table</strong> with m entries: finger[i] = successor(n + 2ⁱ⁻¹ mod 2ᵐ). The i-th finger spans an exponentially increasing distance on the ring. Lookup works by forwarding to the finger closest to but not past the target — each hop halves the remaining ring distance, yielding <strong>O(log N) hops</strong> with high probability.</p>
+    <p>&#x2022; <strong>Stabilization protocol</strong>: periodically, each node verifies its successor and notifies its predecessor. New nodes joining run stabilize() to insert themselves into the ring and transfer keys from their successor. The protocol converges in O(log² N) messages. Theorem 6 in the paper proves that lookups are correct during concurrent joins as long as successor pointers are maintained.</p>
+    <p>&#x2022; <strong>Space complexity</strong>: each node stores O(log N) finger entries + a successor list (for fault tolerance). <strong>Message complexity</strong>: each lookup requires O(log N) messages. With N=10⁶ nodes, each node stores ~20 routing entries and lookups take ~20 hops — compared to O(N) for naive approaches.</p>
+    <p>&#x2022; Simulation results: with 2¹⁶ (65,536) nodes, the average lookup path length was 6.0 hops (vs theoretical O(log₂ N) = 16). The reduction below log₂ N comes from the finger table's geometric coverage. Under 50% concurrent node failures, lookup failure rate remained below 5% with successor lists of length O(log N).</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Kleppmann — "Designing Data-Intensive Applications" (2017), Ch. 5 &amp; Gossip References</div>
+    <p><strong>Martin Kleppmann.</strong> O'Reilly Media, 2017.<br>
+    <a href="https://dataintensive.net/" style="color:var(--blue);" target="_blank">https://dataintensive.net/</a></p>
+    <p>&#x2022; The useful extraction here is <strong>anti-entropy as background repair</strong>. Gossip is not just rumor spreading; it is the mechanism replicas use to compare versions, exchange missing state, and slowly converge without needing a coordinator to enumerate every difference.</p>
+    <p>&#x2022; The <strong>Phi Accrual detector</strong> matters because it replaces a fixed timeout with a statistical suspicion score. That is why Cassandra can keep one-second gossip rounds but still avoid flapping every time the network jitters a little.</p>
+    <p>&#x2022; The routing chapter is worth reading for one design choice: where the <strong>partition map</strong> lives. Clients can know it, a proxy tier can know it, or peers can learn it via gossip. P2P systems lean toward the last option because central routing state becomes the bottleneck they are trying to escape.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Cohen — "Incentives Build Robustness in BitTorrent" (2003) &amp; BEP Specifications</div>
+    <p><strong>Bram Cohen.</strong> Workshop on Economics of Peer-to-Peer Systems, 2003.<br>
+    <a href="https://www.bittorrent.org/beps/bep_0003.html" style="color:var(--orange);" target="_blank">https://www.bittorrent.org/beps/bep_0003.html</a> (BEP 3: BitTorrent Protocol Specification)</p>
+    <p>&#x2022; Treat BitTorrent as a <strong>piece scheduler plus integrity protocol</strong>. The file is broken into independently verifiable chunks, and the SHA hashes in the metadata let the swarm distrust every individual peer while still trusting the overall download.</p>
+    <p>&#x2022; <strong>Rarest-first</strong> is the actual resilience trick. It keeps piece diversity high, which means the swarm can survive the original seeder disappearing because no single chunk stays concentrated on one machine for long.</p>
+    <p>&#x2022; The <strong>choke / unchoke loop</strong> is the incentive layer. Upload slots go to peers that reciprocate, while optimistic unchoke is the mechanism that lets new peers break into the market instead of being permanently starved.</p>
+    <p>&#x2022; Read <strong>BEP 5</strong> for the production lesson: once you remove the tracker, you still need a scalable lookup plane. That is where Kademlia's XOR metric and bucket routing replace the centralized peer list.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals &middot; built for deep understanding
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+</body>
+</html>
