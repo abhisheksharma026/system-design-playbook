@@ -20,7 +20,7 @@
 <nav class="toc">
   <div class="toc-title">Contents</div>
   <ol>
-    <li><a href="#s0">Prerequisites &amp; Key Terms</a></li>
+    <li><a href="#s0">Key Terms</a></li>
     <li><a href="#s1">What Is Hashing &amp; Why It Matters</a></li>
     <li><a href="#s2">Hash Functions — Properties &amp; Types</a></li>
     <li><a href="#s3">The Naive Approach: Modulo Hashing</a></li>
@@ -44,7 +44,7 @@
 <!-- ============ KEY TERMS ============ -->
 <section class="section" id="s0">
   <div class="section-num">00</div>
-  <h2>Prerequisites &amp; Key Terms</h2>
+  <h2>Key Terms</h2>
 
   <h3>Hashing Function</h3>
   <p>A function that accepts an input of arbitrary size (a string, a file, a number) and produces a fixed-size output (typically an integer). A good hash function distributes outputs uniformly across its range, minimizing <strong>collisions</strong> (different inputs producing the same output). The output is deterministic — the same input always produces the same hash. Used everywhere: hash tables, checksums, caching keys, load balancer routing, and cryptography. Examples: MD5 (128-bit output, fast but broken for security), SHA-256 (256-bit, cryptographically secure), MurmurHash3 (fast, non-cryptographic, good distribution), xxHash (extremely fast, non-cryptographic).</p>

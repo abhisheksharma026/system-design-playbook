@@ -20,7 +20,7 @@
 <nav class="toc">
   <div class="toc-title">Contents</div>
   <ol>
-    <li><a href="#s0">Key Terms Overview</a></li>
+    <li><a href="#s0">Key Terms</a></li>
     <li><a href="#s1">Blob Storage — S3 &amp; GCS</a></li>
     <li><a href="#s2">Time Series Databases</a></li>
     <li><a href="#s3">Graph Databases</a></li>
@@ -43,7 +43,7 @@
 <!-- ============ KEY TERMS ============ -->
 <section class="section" id="s0">
   <div class="section-num">00</div>
-  <h2>Key Terms Overview</h2>
+  <h2>Key Terms</h2>
 
   <h3>Blob Storage</h3>
   <p>A storage service optimized for holding large, unstructured binary objects — images, videos, database backups, ML model artifacts, log archives. Unlike a KV store (which optimizes for small, fast reads), blob storage optimizes for <strong>large object throughput and durability</strong> at low cost per GB. The API is minimal: <code class="inline">PUT(key, bytes)</code>, <code class="inline">GET(key) → bytes</code>, <code class="inline">DELETE(key)</code>. Internally, objects are split into chunks, replicated across multiple disks/datacenters, and erasure-coded for durability. AWS S3 guarantees 99.999999999% (eleven 9s) durability. GCS and Azure Blob Storage offer similar guarantees. In system design interviews, blob storage is the default answer for "where do I put images/videos/files?" — never store large binaries in a relational database.</p>

@@ -126,6 +126,30 @@ GRAPH_LAYOUT = {
         "deps": ["storage", "relational-databases", "availability", "hashing"],
         "orbit_rotation": -8,
     },
+    "leader-election": {
+        "x": 820,
+        "y": 80,
+        "cluster": "Reliability",
+        "tone": "reliability",
+        "deps": ["availability", "network-protocols", "replication-sharding"],
+        "orbit_rotation": -54,
+    },
+    "peer-networking": {
+        "x": 170,
+        "y": 250,
+        "cluster": "Foundations",
+        "tone": "foundation",
+        "deps": ["network-protocols", "hashing", "latency-and-throughput"],
+        "orbit_rotation": -42,
+    },
+    "sockets": {
+        "x": 170,
+        "y": 540,
+        "cluster": "Foundations",
+        "tone": "foundation",
+        "deps": ["client-server-model", "network-protocols", "latency-and-throughput"],
+        "orbit_rotation": -24,
+    },
 }
 
 
