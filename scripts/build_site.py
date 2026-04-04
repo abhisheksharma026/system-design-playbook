@@ -142,6 +142,14 @@ GRAPH_LAYOUT = {
         "deps": ["network-protocols", "hashing", "latency-and-throughput"],
         "orbit_rotation": -42,
     },
+    "sockets": {
+        "x": 170,
+        "y": 540,
+        "cluster": "Foundations",
+        "tone": "foundation",
+        "deps": ["client-server-model", "network-protocols", "latency-and-throughput"],
+        "orbit_rotation": -24,
+    },
 }
 
 
