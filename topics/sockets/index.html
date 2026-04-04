@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Polling, Streaming &amp; Sockets</title>
+<meta name="description" content="A system design guide to polling, long polling, server-sent events, WebSockets, reconnection, real-time fan-out, and the tradeoffs behind live client updates.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+<style>
+.section h2 .num{color:var(--accent-dim);font-family:var(--mono);font-size:.6em;margin-right:8px}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;overflow-x:auto;margin:20px 0;font-family:var(--mono);font-size:13.5px;line-height:1.7;color:var(--text-dim)}
+code{font-family:var(--mono);font-size:.9em;background:var(--surface-2);padding:2px 7px;border-radius:4px;color:var(--accent)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px 28px;margin:20px 0}
+.card-accent{border-left:3px solid var(--accent);background:var(--accent-bg)}
+.card-orange{border-left:3px solid var(--orange);background:var(--orange-bg)}
+.card-blue{border-left:3px solid var(--blue);background:var(--blue-bg)}
+.card-red{border-left:3px solid var(--red);background:var(--red-bg)}
+.card-purple{border-left:3px solid var(--purple);background:var(--purple-bg)}
+.card-yellow{border-left:3px solid var(--yellow);background:var(--yellow-bg)}
+.term{margin-bottom:24px}.term-name{font-family:var(--mono);font-weight:600;color:var(--accent);font-size:17px;margin-bottom:6px;display:flex;align-items:center;gap:8px}.term-name::before{content:'';width:3px;height:18px;background:var(--accent);border-radius:2px;flex-shrink:0}.term-def{color:var(--text-dim);padding-left:11px}
+table{width:100%;border-collapse:collapse;margin:20px 0;font-size:14.5px}th{font-family:var(--mono);font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--accent);text-align:left;padding:12px 16px;border-bottom:2px solid var(--border);background:var(--surface)}td{padding:12px 16px;border-bottom:1px solid var(--border);color:var(--text-dim)}tr:hover td{background:var(--surface)}
+.qa{border:1px solid var(--border);border-radius:10px;margin:12px 0;overflow:hidden;transition:all .3s}.qa-q{padding:18px 24px;font-weight:600;color:var(--text);cursor:pointer;display:flex;align-items:center;gap:12px;font-size:15px}.qa-q::before{content:'Q';font-family:var(--mono);font-size:11px;background:var(--accent);color:var(--bg);padding:2px 8px;border-radius:4px;font-weight:700}.qa-q::after{content:'+';margin-left:auto;font-family:var(--mono);color:var(--text-muted);font-size:20px;transition:transform .3s}.qa.open .qa-q::after{transform:rotate(45deg)}.qa-a{max-height:0;overflow:hidden;transition:max-height .4s ease,padding .3s}.qa.open .qa-a{max-height:2000px;padding:0 24px 20px}
+.ref{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px 28px;margin:16px 0}.ref-title{font-family:var(--mono);font-size:13px;color:var(--accent);margin-bottom:8px}.ref p{font-size:14px;margin-bottom:6px}.ref a{color:var(--purple);text-decoration:none}.ref a:hover{text-decoration:underline}
+.slider-group{margin:20px 0}.slider-label{font-family:var(--mono);font-size:13px;color:var(--text-dim);margin-bottom:8px;display:flex;justify-content:space-between}.slider-label span{color:var(--accent)}.slider-input{width:100%;-webkit-appearance:none;appearance:none;height:6px;background:var(--surface-3);border-radius:3px;outline:none}.slider-input::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--accent);cursor:pointer}
+.tradeoff-cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+@media(max-width:700px){.toc ol{grid-template-columns:1fr}.tradeoff-cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- HERO -->
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 16</div>
+  <h1>Polling, Streaming <span>&amp; Sockets</span></h1>
+  <p class="hero-sub">How clients and servers keep data fresh in real time — from the brute-force simplicity of periodic polling to the elegance of persistent bidirectional channels.</p>
+</header>
+
+<!-- TABLE OF CONTENTS -->
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms</a></li>
+    <li><a href="#s3">The Core Problem</a></li>
+    <li><a href="#s4">Short Polling</a></li>
+    <li><a href="#s5">Long Polling</a></li>
+    <li><a href="#s6">Server-Sent Events (SSE)</a></li>
+    <li><a href="#s7">WebSockets</a></li>
+    <li><a href="#s8">Comparison Matrix</a></li>
+    <li><a href="#s9">Architecture Diagrams</a></li>
+    <li><a href="#s10">Memory Map</a></li>
+    <li><a href="#s11">Terminal Demos</a></li>
+    <li><a href="#s12">Mini-Project: Chat Room</a></li>
+    <li><a href="#s13">Production Examples</a></li>
+    <li><a href="#s14">Edge Cases &amp; War Stories</a></li>
+    <li><a href="#s15">Interview Q&amp;A</a></li>
+    <li><a href="#s16">Actual System Design Interview</a></li>
+    <li><a href="#s17">What If? Interactive</a></li>
+    <li><a href="#s18">Mental Model</a></li>
+    <li><a href="#s19">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- S2: KEY TERMS -->
+<section class="section" id="s0">
+  <h2><span class="num">01</span>Key Terms</h2>
+
+  <div class="term">
+    <div class="term-name">Polling</div>
+    <div class="term-def">A client-driven pattern where the browser (or any consumer) sends repeated requests to the server at a fixed interval to check for new data. Think of refreshing your email inbox every 30 seconds — simple to implement, but you burn bandwidth and CPU cycles even when nothing has changed. Used by early AJAX dashboards, Kubernetes controller loops, and Prometheus metric scrapers.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Long Polling</div>
+    <div class="term-def">An evolution of short polling where the client sends a request but the server holds the connection open until it has new data to send (or a timeout fires). The moment the client gets a response, it immediately opens a new long-poll request. Facebook's original chat in 2008 and early Slack prototypes used long polling before migrating to WebSockets. Reduces empty responses but ties up a server thread (or connection slot) per waiting client.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Streaming (Server-Sent Events / SSE)</div>
+    <div class="term-def">A server-push mechanism over a single long-lived HTTP connection. The server sends events as they occur using the <code>text/event-stream</code> MIME type, and the browser's built-in <code>EventSource</code> API handles reconnection, last-event-ID tracking, and parsing automatically. Unidirectional (server → client only). Ideal for live feeds: stock tickers, CI/CD build logs, ChatGPT's token-by-token output. Standardized by the WHATWG as part of the HTML Living Standard.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">WebSocket</div>
+    <div class="term-def">A full-duplex, bidirectional communication protocol (RFC 6455) that starts with an HTTP Upgrade handshake and then switches to a lightweight framed binary protocol over a single TCP connection. Either side can send messages at any time without waiting for a request. Per-frame overhead is just 2–14 bytes vs. hundreds of bytes for HTTP headers. Used by Discord (voice + text), multiplayer games, collaborative editors (Figma), and financial trading platforms.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Socket</div>
+    <div class="term-def">A general-purpose OS-level abstraction representing one endpoint of a two-way network communication link, identified by an IP address + port number. Every TCP connection is backed by a pair of sockets. The term "WebSocket" borrows the name but operates at a higher layer (application-level framing on top of TCP). Don't confuse raw TCP sockets with the WebSocket protocol — they're different abstraction levels.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">HTTP Upgrade</div>
+    <div class="term-def">The mechanism in HTTP/1.1 that lets a client request switching to a different protocol on the same TCP connection. The client sends <code>Connection: Upgrade</code> and <code>Upgrade: websocket</code> headers; if the server agrees, it responds with <code>101 Switching Protocols</code>. After this handshake, HTTP is no longer spoken on that connection — it's purely WebSocket frames.</div>
+  </div>
+
+  <div class="term">
+    <div class="term-name">Heartbeat / Ping-Pong</div>
+    <div class="term-def">A keep-alive mechanism where one side of a persistent connection periodically sends a small control message (ping) and expects a reply (pong) to confirm the other side is still alive. WebSocket defines native ping/pong control frames. Without heartbeats, connections can silently die behind NATs, load balancers, or mobile network switches — and neither side knows until the next data send fails.</div>
+  </div>
+</section>
+
+<!-- S3: THE CORE PROBLEM -->
+<section class="section" id="s3">
+  <h2><span class="num">02</span>The Core Problem</h2>
+  <p>HTTP was designed as a request-response protocol: the client asks, the server answers, and the connection is done. This works perfectly for loading web pages — but it breaks down the moment your application needs <strong>real-time updates</strong>.</p>
+  <p>Consider a chat application. When Alice sends a message, Bob's browser needs to know about it. But HTTP gives the server no way to reach out to Bob — the server can only respond to requests Bob has already made. This is the fundamental tension: <strong>HTTP is client-initiated, but real-time data is server-initiated.</strong></p>
+  <p>Every technique in this topic is a different answer to the same question: <em>How does the server tell the client that something has changed?</em></p>
+  <div class="card card-accent">
+    <p style="margin-bottom:0"><strong>The spectrum:</strong> Short polling is the simplest but most wasteful. Long polling is more efficient but awkward. SSE is elegant for one-way push. WebSockets give you a full bidirectional pipe at the cost of operational complexity. The right choice depends on your data flow direction, update frequency, and infrastructure constraints.</p>
+  </div>
+</section>
+
+<!-- S4: SHORT POLLING -->
+<section class="section" id="s4">
+  <h2><span class="num">03</span>Short Polling</h2>
+  <p>The simplest possible approach: set a timer, fire a request, process the response, repeat.</p>
+  <pre>// Client polls every 3 seconds
+setInterval(async () => {
+  const res = await fetch('/api/messages?after=' + lastSeenId);
+  const newMsgs = await res.json();
+  if (newMsgs.length > 0) {
+    render(newMsgs);
+    lastSeenId = newMsgs[newMsgs.length - 1].id;
+  }
+}, 3000);</pre>
+
+  <h3>How It Works</h3>
+  <p>1. Client sends a GET request to the server. 2. Server immediately returns whatever data is currently available (possibly an empty array). 3. Client waits for the interval timer to fire. 4. Goto step 1.</p>
+
+  <h3>When It's Actually Fine</h3>
+  <div class="card card-blue">
+    <p><strong>Low-frequency dashboards:</strong> A Grafana panel refreshing every 30s doesn't need a persistent connection — polling is simpler and the overhead is negligible.</p>
+    <p><strong>Batch-oriented workflows:</strong> Checking if a CI build has finished, or if a file-processing job is complete. You only need to check once per minute.</p>
+    <p style="margin-bottom:0"><strong>Behind firewalls/proxies that kill long connections:</strong> Some enterprise networks terminate idle connections after 30–60 seconds. Short polling works regardless of infrastructure constraints.</p>
+  </div>
+
+  <h3>The Cost</h3>
+  <p>If you have 10,000 users polling every 3 seconds, that's <strong>~3,333 requests/second</strong> hitting your server — most returning empty responses. Each request carries ~500 bytes of HTTP headers. That's 1.6 MB/s of pure overhead with zero useful data. At scale, the wasted compute (TCP handshake, TLS negotiation, request parsing, DB query for "nothing new") dominates your server's resource budget.</p>
+</section>
+
+<!-- S5: LONG POLLING -->
+<section class="section" id="s5">
+  <h2><span class="num">04</span>Long Polling (Hanging GET)</h2>
+  <p>Long polling flips the cost model: instead of the client asking repeatedly and mostly getting nothing, the <strong>server holds the request open</strong> until it actually has something to say.</p>
+  <pre>// Client — immediately reconnects after each response
+async function longPoll() {
+  try {
+    const res = await fetch('/api/messages/subscribe?timeout=30');
+    const data = await res.json();
+    if (data.messages) render(data.messages);
+  } catch (e) {
+    await sleep(1000); // back-off on error
+  }
+  longPoll(); // immediately re-open
+}
+longPoll();</pre>
+
+  <h3>Server-Side Mechanics</h3>
+  <p>The server receives the request and, if no new data is available, parks the request in a waiting queue rather than sending an immediate response. When an event occurs (e.g., a new chat message is written to the DB), the server iterates through all parked requests that are subscribed to that event, writes the response, and closes each connection. The client, upon receiving the response, immediately opens a new long-poll request.</p>
+
+  <h3>The Timeout Problem</h3>
+  <p>If nothing happens for a long time, the connection will eventually time out — either from the server's configured timeout, a reverse proxy (nginx default: 60s), a load balancer (AWS ALB: 60s default, max 4000s), or a corporate firewall. The typical pattern: server responds with an empty body after 30 seconds to preempt upstream timeouts, and the client immediately reconnects.</p>
+
+  <div class="card card-orange">
+    <p><strong>Thread exhaustion:</strong> In thread-per-request servers (classic Tomcat, Apache + mod_php), each parked long-poll request occupies a thread that does nothing but wait. With 10,000 concurrent users, you need 10,000 threads just idling. This is why long polling pushed adoption of event-loop architectures (Node.js) and async I/O (Netty, Go goroutines, Python asyncio).</p>
+    <p style="margin-bottom:0"><strong>Message ordering gap:</strong> Between the moment a long-poll response is sent and the moment the client's next request arrives, events can occur that the client misses. The fix: include a cursor/sequence ID so the server can replay anything the client hasn't seen.</p>
+  </div>
+</section>
+
+<!-- S6: SERVER-SENT EVENTS -->
+<section class="section" id="s6">
+  <h2><span class="num">05</span>Server-Sent Events (SSE)</h2>
+  <p>SSE is a W3C standard that gives the browser a built-in, production-ready streaming client via the <code>EventSource</code> API. The server holds a single HTTP connection open and writes events as they happen. No custom client code for reconnection — the browser handles it.</p>
+
+  <h3>The Wire Format</h3>
+  <pre>HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+
+data: {"user":"alice","msg":"hello"}
+
+event: typing
+data: {"user":"bob"}
+
+id: 42
+data: {"user":"bob","msg":"hi back"}
+
+: this is a comment (used as keepalive)
+</pre>
+  <p>Each event is a set of <code>field: value</code> lines terminated by a blank line. The <code>data:</code> field carries the payload. The <code>id:</code> field sets a cursor — if the connection drops, the browser automatically reconnects and sends <code>Last-Event-ID: 42</code> in the request headers, enabling the server to resume from where it left off. The <code>event:</code> field lets you dispatch to different listeners on the client side.</p>
+
+  <h3>Client Code</h3>
+  <pre>const source = new EventSource('/api/stream');
+
+source.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  render(msg);
+};
+
+source.addEventListener('typing', (e) => {
+  showTypingIndicator(JSON.parse(e.data));
+});
+
+source.onerror = (e) => {
+  // Browser auto-reconnects; you can show a "reconnecting..." banner
+  console.log('SSE connection lost, reconnecting...');
+};</pre>
+
+  <h3>Limits and Gotchas</h3>
+  <div class="card card-red">
+    <p><strong>Unidirectional only:</strong> Data flows server → client. If the client needs to send data (e.g., a chat message), it still uses a regular POST/PUT request. This is fine for dashboards, live feeds, and notification streams, but not for truly interactive protocols.</p>
+    <p><strong>HTTP/1.1 connection limit:</strong> Browsers allow only ~6 concurrent connections per domain per browser. If you open 6 tabs each with an SSE connection to the same domain, no more HTTP requests can be made to that domain from that browser. HTTP/2 solves this (streams are multiplexed over one TCP connection, default limit: 100 streams).</p>
+    <p style="margin-bottom:0"><strong>No binary data:</strong> SSE is text-only (UTF-8). You'd need to Base64-encode binary payloads, adding ~33% overhead.</p>
+  </div>
+
+  <h3>Real-World Usage</h3>
+  <p>ChatGPT's streaming response (tokens appearing one by one) uses SSE. The OpenAI API with <code>stream: true</code> returns <code>text/event-stream</code> with each token as a separate <code>data:</code> line. This is a perfect SSE use case: unidirectional (server → client), text-based, and the client only needs to render what arrives.</p>
+</section>
+
+<!-- S7: WEBSOCKETS -->
+<section class="section" id="s7">
+  <h2><span class="num">06</span>WebSockets (RFC 6455)</h2>
+  <p>WebSockets provide full-duplex, bidirectional communication over a single TCP connection. After an initial HTTP handshake, the protocol switches entirely — no more HTTP headers, no more request/response model. Either side can send a message at any time.</p>
+
+  <h3>The Upgrade Handshake</h3>
+  <pre>// Client → Server
+GET /chat HTTP/1.1
+Host: server.example.com
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+
+// Server → Client
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=</pre>
+  <p>The <code>Sec-WebSocket-Key</code> is a random Base64 nonce. The server concatenates it with a magic GUID, SHA-1 hashes it, and Base64-encodes the result as <code>Sec-WebSocket-Accept</code>. This proves the server understands WebSocket — it's not a security mechanism, it's a protocol identification check to prevent accidental upgrades.</p>
+
+  <h3>Frame Structure</h3>
+  <p>After the handshake, data travels in lightweight <strong>frames</strong>. Each frame has a 2-byte minimum header: 1 bit for FIN (is this the last fragment?), 4 bits for opcode (text=0x1, binary=0x2, close=0x8, ping=0x9, pong=0xA), 1 bit for MASK, and 7+ bits for payload length. Client-to-server frames are XOR-masked (4-byte mask key) to prevent cache poisoning attacks on intermediary proxies. The total per-message overhead is 2–14 bytes — compare that to ~500+ bytes of HTTP headers per request.</p>
+
+  <h3>Client Code</h3>
+  <pre>const ws = new WebSocket('wss://server.example.com/chat');
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({ type: 'join', room: 'general' }));
+};
+
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.type === 'chat') render(msg);
+  if (msg.type === 'presence') updateUserList(msg);
+};
+
+ws.onclose = (event) => {
+  console.log(`Closed: code=${event.code} reason=${event.reason}`);
+  // Reconnect with exponential backoff
+  setTimeout(connect, backoff());
+};</pre>
+
+  <h3>Operational Complexity</h3>
+  <div class="card card-purple">
+    <p><strong>Load balancer stickiness:</strong> A WebSocket connection is long-lived and stateful. If your load balancer reassigns the TCP connection to a different backend server, the connection breaks. You need layer-4 (TCP) load balancing with sticky sessions, or layer-7 balancers that understand WebSocket (nginx, HAProxy, AWS ALB all support this).</p>
+    <p><strong>Horizontal scaling:</strong> If user A is connected to Server 1 and user B to Server 2, how does A's message reach B? You need a pub/sub backplane (Redis Pub/Sub, NATS, Kafka) to fan out messages across servers. This is the #1 operational challenge of WebSocket at scale.</p>
+    <p><strong>Connection state management:</strong> Each server must track which users are on which connections. If a server crashes, all its connections die. Clients must implement reconnection with exponential backoff. The server must reconcile reconnecting clients with any messages they missed (message queue + cursor/offset).</p>
+    <p style="margin-bottom:0"><strong>Proxy/firewall traversal:</strong> Some corporate proxies don't pass through WebSocket Upgrade requests. The workaround: always use <code>wss://</code> (WebSocket over TLS on port 443) — TLS traffic is opaque to proxies, so the Upgrade succeeds inside the encrypted tunnel.</p>
+  </div>
+</section>
+
+<!-- S8: COMPARISON MATRIX -->
+<section class="section" id="s8">
+  <h2><span class="num">07</span>Comparison Matrix</h2>
+  <table>
+    <thead>
+      <tr><th>Dimension</th><th>Short Polling</th><th>Long Polling</th><th>SSE</th><th>WebSocket</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Direction</strong></td><td>Client → Server</td><td>Client → Server</td><td>Server → Client</td><td>Bidirectional</td></tr>
+      <tr><td><strong>Connection</strong></td><td>New per request</td><td>Held open</td><td>Persistent HTTP</td><td>Persistent TCP</td></tr>
+      <tr><td><strong>Latency</strong></td><td>½ interval avg</td><td>Near-instant</td><td>Near-instant</td><td>Near-instant</td></tr>
+      <tr><td><strong>Overhead/msg</strong></td><td>~500B headers</td><td>~500B headers</td><td>~50B event framing</td><td>2–14B frame</td></tr>
+      <tr><td><strong>Binary support</strong></td><td>Yes (body)</td><td>Yes (body)</td><td>No (UTF-8 only)</td><td>Yes (native)</td></tr>
+      <tr><td><strong>Browser reconnect</strong></td><td>Manual</td><td>Manual</td><td>Automatic</td><td>Manual</td></tr>
+      <tr><td><strong>Max connections</strong></td><td>N/A</td><td>~6/domain (H1)</td><td>~6/domain (H1)</td><td>No HTTP limit</td></tr>
+      <tr><td><strong>Proxy-friendly</strong></td><td>Yes</td><td>Mostly</td><td>Mostly</td><td>Over TLS: yes</td></tr>
+      <tr><td><strong>Complexity</strong></td><td>Trivial</td><td>Low</td><td>Low</td><td>Medium–High</td></tr>
+      <tr><td><strong>Best for</strong></td><td>Dashboards, batch</td><td>Moderate realtime</td><td>Live feeds, LLMs</td><td>Chat, games, collab</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- S9: ARCHITECTURE DIAGRAMS -->
+<section class="section" id="s9">
+  <h2><span class="num">08</span>Architecture Diagrams</h2>
+
+  <h3>Polling vs. Streaming: Data Flow</h3>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart TD
+    subgraph P1["Short polling"]
+        C1["Client"]
+        S1["Server"]
+        N1["poll timer waits 3s"]
+        C1 -->|"GET /messages"| S1
+        S1 -->|"200 []"| C1
+        C1 -.-> N1
+        N1 -.->|"GET /messages"| S1
+        S1 -->|"200 [msg]"| C1
+    end
+
+    subgraph P2["Long polling"]
+        C2["Client"]
+        S2["Server"]
+        L2["request held open"]
+        L3["event arrives"]
+        C2 -->|"GET /subscribe"| S2
+        S2 -.-> L2 -.-> L3
+        S2 -->|"200 [msg] when ready"| C2
+        C2 -.->|"immediate reconnect"| S2
+    end
+
+    subgraph P3["Server-Sent Events"]
+        C3["Client"]
+        S3["Server"]
+        E1["single HTTP stream stays open"]
+        C3 -->|"GET /stream"| S3
+        S3 -.-> E1
+        S3 -->|"data msg1"| C3
+        S3 -->|"data msg2"| C3
+        S3 -->|"data msg3 ..."| C3
+    end
+
+    subgraph P4["WebSocket"]
+        C4["Client"]
+        S4["Server"]
+        W1["persistent bidirectional channel"]
+        C4 -->|"Upgrade -> 101"| S4
+        S4 -.-> W1
+        C4 -->|"frame"| S4
+        S4 -->|"frame"| C4
+        C4 -->|"frame"| S4
+    end
+
+    classDef client fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef server fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class C1,C2,C3,C4 client;
+    class S1,S2,S3,S4 server;
+    class N1,L2,L3,E1,W1 note;
+    </pre>
+    <div class="diagram-caption">The arrow pattern is the main difference: polling creates repeated request-response cycles, long polling turns each request into a waiting slot, SSE keeps one server-to-client stream open, and WebSocket upgrades into a channel where either side can speak at any time.</div>
+  </div>
+
+  <h3>WebSocket at Scale: Pub/Sub Backplane</h3>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    CA["Clients A / B / C"]
+    CB["Clients D / E / F"]
+    S1["WS Gateway 1<br/>holds A / B / C sockets"]
+    S2["WS Gateway 2<br/>holds D / E / F sockets"]
+    P["Pub / Sub backplane<br/>Redis · NATS · Kafka"]
+    DB["Message store / replay log"]
+    N1["each gateway only knows its own live sockets"]
+    N2["cross-gateway fan-out needs a shared bus"]
+
+    CA -->|"open WebSocket"| S1
+    CB -->|"open WebSocket"| S2
+    S1 -->|"persist inbound message"| DB
+    S1 -->|"publish room / channel event"| P
+    P -->|"fan-out event to remote subscribers"| S2
+    S1 -->|"push to local subscribers"| CA
+    S2 -->|"push to remote subscribers"| CB
+    DB -.->|"replay after reconnect"| S1
+    DB -.->|"replay after reconnect"| S2
+    S1 -.-> N1
+    P -.-> N2
+
+    classDef user fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef ws fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef bus fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class CA,CB user;
+    class S1,S2 ws;
+    class P bus;
+    class DB data;
+    class N1,N2 note;
+    </pre>
+    <div class="diagram-caption">The gateway that receives a message can only reach the sockets it owns locally. Persistence and replay belong to the durable store, while cross-gateway delivery belongs to the shared pub-sub backplane.</div>
+  </div>
+</section>
+
+<!-- S10: MEMORY MAP -->
+<section class="section" id="s10">
+  <h2><span class="num">09</span>Memory Map: Per-Connection Cost</h2>
+  <p>Understanding the memory footprint of each approach explains why WebSocket servers can hold far more concurrent connections than traditional HTTP servers processing polls.</p>
+  <svg viewBox="0 0 860 430" xmlns="http://www.w3.org/2000/svg" style="width:100%;margin:24px 0">
+    <rect x="20" y="18" width="840" height="272" rx="16" fill="#14171e" stroke="#2a3040"/>
+    <text x="48" y="42" fill="#8891a8" font-family="IBM Plex Mono" font-size="11">PER LIVE CONNECTION</text>
+
+    <!-- Short Poll -->
+    <text x="120" y="74" fill="#fbbf24" font-family="IBM Plex Mono" font-size="12" text-anchor="middle" font-weight="600">SHORT POLL</text>
+    <rect x="35" y="92" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="120" y="114" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">TCP + TLS setup: ~10KB</text>
+    <rect x="35" y="134" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="120" y="156" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">HTTP parse buffer: ~8KB</text>
+    <rect x="35" y="176" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="120" y="198" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Thread stack: ~1MB*</text>
+    <rect x="35" y="222" width="170" height="38" rx="8" fill="#f8717120" stroke="#f87171"/>
+    <text x="120" y="246" fill="#f87171" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">~1MB per request*</text>
+    <text x="120" y="276" fill="#5c6580" font-family="IBM Plex Mono" font-size="8.5" text-anchor="middle">
+      <tspan x="120" dy="0">*thread-per-request model;</tspan>
+      <tspan x="120" dy="12">freed after response</tspan>
+    </text>
+
+    <!-- Long Poll -->
+    <text x="320" y="74" fill="#fbbf24" font-family="IBM Plex Mono" font-size="12" text-anchor="middle" font-weight="600">LONG POLL</text>
+    <rect x="235" y="92" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="320" y="114" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">TCP + TLS: ~10KB</text>
+    <rect x="235" y="134" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="320" y="156" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Parked request: ~8KB</text>
+    <rect x="235" y="176" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="320" y="198" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Thread / goroutine: varies</text>
+    <rect x="235" y="222" width="170" height="38" rx="8" fill="#fb923c20" stroke="#fb923c"/>
+    <text x="320" y="246" fill="#fb923c" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">~20KB to 1MB held</text>
+    <text x="320" y="272" fill="#5c6580" font-family="IBM Plex Mono" font-size="8.5" text-anchor="middle">
+      <tspan x="320" dy="0">held for the full wait;</tspan>
+      <tspan x="320" dy="12">async runtimes are closer to ~20KB</tspan>
+    </text>
+
+    <!-- SSE -->
+    <text x="520" y="74" fill="#fbbf24" font-family="IBM Plex Mono" font-size="12" text-anchor="middle" font-weight="600">SSE</text>
+    <rect x="435" y="92" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="520" y="114" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">TCP + TLS: ~10KB</text>
+    <rect x="435" y="134" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="520" y="156" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">HTTP response buffer: ~4KB</text>
+    <rect x="435" y="176" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="520" y="198" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Event queue reference: ~1KB</text>
+    <rect x="435" y="222" width="170" height="38" rx="8" fill="#60a5fa20" stroke="#60a5fa"/>
+    <text x="520" y="246" fill="#60a5fa" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">~15KB persistent</text>
+    <text x="520" y="272" fill="#5c6580" font-family="IBM Plex Mono" font-size="8.5" text-anchor="middle">
+      <tspan x="520" dy="0">cheap one-way stream;</tspan>
+      <tspan x="520" dy="12">no bidirectional app state</tspan>
+    </text>
+
+    <!-- WebSocket -->
+    <text x="720" y="74" fill="#fbbf24" font-family="IBM Plex Mono" font-size="12" text-anchor="middle" font-weight="600">WEBSOCKET</text>
+    <rect x="635" y="92" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="720" y="114" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">TCP + TLS: ~10KB</text>
+    <rect x="635" y="134" width="170" height="34" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="720" y="156" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Frame buffer: ~4KB</text>
+    <rect x="635" y="176" width="170" height="42" rx="6" fill="#222734" stroke="#3d4663"/>
+    <text x="720" y="194" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="9.5" text-anchor="middle">
+      <tspan x="720" dy="0">App state for user / room:</tspan>
+      <tspan x="720" dy="12">~2KB</tspan>
+    </text>
+    <rect x="635" y="222" width="170" height="38" rx="8" fill="#6ee7b720" stroke="#6ee7b7"/>
+    <text x="720" y="246" fill="#6ee7b7" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">~16KB persistent</text>
+    <text x="720" y="272" fill="#5c6580" font-family="IBM Plex Mono" font-size="8.5" text-anchor="middle">
+      <tspan x="720" dy="0">slightly more state than SSE,</tspan>
+      <tspan x="720" dy="12">but still compact</tspan>
+    </text>
+
+    <!-- Fleet impact -->
+    <rect x="20" y="314" width="840" height="92" rx="16" fill="#14171e" stroke="#2a3040"/>
+    <text x="48" y="338" fill="#8891a8" font-family="IBM Plex Mono" font-size="11">AT 100K CONCURRENT USERS ON A 16GB SERVER</text>
+
+    <rect x="35" y="352" width="170" height="36" rx="8" fill="#f8717120" stroke="#f87171"/>
+    <text x="120" y="375" fill="#f87171" font-family="IBM Plex Mono" font-size="11" text-anchor="middle">100K requests burst</text>
+
+    <rect x="235" y="352" width="170" height="44" rx="8" fill="#fb923c20" stroke="#fb923c"/>
+    <text x="320" y="370" fill="#fb923c" font-family="IBM Plex Mono" font-size="10.5" text-anchor="middle">
+      <tspan x="320" dy="0">~2GB held in</tspan>
+      <tspan x="320" dy="12">async runtime</tspan>
+    </text>
+
+    <rect x="435" y="352" width="170" height="36" rx="8" fill="#60a5fa20" stroke="#60a5fa"/>
+    <text x="520" y="375" fill="#60a5fa" font-family="IBM Plex Mono" font-size="11" text-anchor="middle">~1.5GB persistent</text>
+
+    <rect x="635" y="352" width="170" height="36" rx="8" fill="#6ee7b720" stroke="#6ee7b7"/>
+    <text x="720" y="375" fill="#6ee7b7" font-family="IBM Plex Mono" font-size="11" text-anchor="middle">~1.6GB persistent</text>
+  </svg>
+</section>
+
+<!-- S11: TERMINAL DEMOS -->
+<section class="section" id="s11">
+  <h2><span class="num">10</span>Hands-On: Terminal Demos</h2>
+
+  <h3>Demo 1: Observe HTTP Polling Overhead with curl</h3>
+  <p>This simulates what a browser does during short polling — repeated requests at intervals. Watch the headers fly by even when there's nothing new.</p>
+  <pre><span style="color:var(--accent)"># Terminal 1: Start a simple server that returns a timestamp</span>
+<span style="color:var(--yellow)">$ python3 -c "</span>
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json, time
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type','application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({'time':time.time(),'data':[]}).encode())
+    def log_message(self,*a): pass
+HTTPServer(('',8080),H).serve_forever()
+<span style="color:var(--yellow)">"</span>
+
+<span style="color:var(--accent)"># Terminal 2: Simulate polling every 2s and measure overhead</span>
+<span style="color:var(--yellow)">$ for i in $(seq 1 5); do
+  echo "--- Poll $i ---"
+  curl -s -w "Bytes received: %{size_download}, Time: %{time_total}s\n" \
+    -o /dev/null http://localhost:8080/messages
+  sleep 2
+done</span>
+
+<span style="color:var(--text-dim)"># Expected output:</span>
+--- Poll 1 ---
+Bytes received: 42, Time: 0.003s
+--- Poll 2 ---
+Bytes received: 42, Time: 0.002s
+--- Poll 3 ---
+Bytes received: 42, Time: 0.002s
+--- Poll 4 ---
+Bytes received: 42, Time: 0.003s
+--- Poll 5 ---
+Bytes received: 42, Time: 0.002s</pre>
+  <p>5 polls × ~500 bytes of headers (not shown in size_download which only counts body) = ~2.5KB of header overhead for 210 bytes of useful data. At scale this ratio gets devastating.</p>
+
+  <h3>Demo 2: SSE Stream with curl</h3>
+  <pre><span style="color:var(--accent)"># Terminal 1: SSE server in Python</span>
+<span style="color:var(--yellow)">$ python3 -c "</span>
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import time
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type','text/event-stream')
+        self.send_header('Cache-Control','no-cache')
+        self.end_headers()
+        for i in range(10):
+            self.wfile.write(f'id: {i}\ndata: tick {i} at {time.time():.0f}\n\n'.encode())
+            self.wfile.flush()
+            time.sleep(1)
+    def log_message(self,*a): pass
+HTTPServer(('',8081),H).serve_forever()
+<span style="color:var(--yellow)">"</span>
+
+<span style="color:var(--accent)"># Terminal 2: Consume the SSE stream</span>
+<span style="color:var(--yellow)">$ curl -N http://localhost:8081/stream</span>
+
+<span style="color:var(--text-dim)"># Expected output (events arrive 1/second):</span>
+id: 0
+data: tick 0 at 1712189400
+
+id: 1
+data: tick 1 at 1712189401
+
+id: 2
+data: tick 2 at 1712189402
+...</pre>
+  <p>Notice: <strong>one TCP connection</strong>, headers sent once, then pure data streaming. The <code>-N</code> flag disables curl's output buffering so you see events as they arrive.</p>
+
+  <h3>Demo 3: WebSocket with websocat</h3>
+  <pre><span style="color:var(--accent)"># Install websocat (Rust-based WebSocket CLI)</span>
+<span style="color:var(--yellow)"># macOS:</span>  brew install websocat
+<span style="color:var(--yellow)"># Linux:</span>  cargo install websocat  <span style="color:var(--text-muted)"># or download binary from GitHub</span>
+
+<span style="color:var(--accent)"># Terminal 1: Echo WebSocket server</span>
+<span style="color:var(--yellow)">$ websocat -s 8082</span>
+
+<span style="color:var(--accent)"># Terminal 2: Connect and send messages</span>
+<span style="color:var(--yellow)">$ websocat ws://127.0.0.1:8082</span>
+hello from client      <span style="color:var(--text-dim)">← you type this</span>
+hello from client      <span style="color:var(--text-dim)">← echoed back from server</span>
+ping?
+ping?                  <span style="color:var(--text-dim)">← echoed</span></pre>
+  <p>The handshake happens once, then you have a persistent bidirectional pipe. Compare this experience with repeatedly curling — night and day.</p>
+</section>
+
+<!-- S12: MINI-PROJECT -->
+<section class="section" id="s12">
+  <h2><span class="num">11</span>Mini-Project: Chat Room (Poll vs. Stream)</h2>
+  <p>Build a tiny chat system that supports both modes to feel the difference firsthand. One server, two client modes.</p>
+
+  <h3>Simple Mini-Project: Polling vs SSE Side-by-Side</h3>
+  <div class="card card-accent">
+    <p><strong>Goal:</strong> Run a server with an in-memory message store. One client polls every 2s. Another client uses SSE. Send messages via curl POST. Observe the latency difference.</p>
+  </div>
+
+  <pre><span style="color:var(--accent)"># Save as chat_server.py</span>
+import json, time, threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+messages = []
+lock = threading.Lock()
+sse_clients = []
+
+class ChatHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get('Content-Length', 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+        msg = {'id': len(messages), 'user': body.get('user','anon'),
+               'text': body.get('text',''), 'ts': time.time()}
+        with lock:
+            messages.append(msg)
+            # Notify SSE clients
+            dead = []
+            for client_wfile in sse_clients:
+                try:
+                    client_wfile.write(
+                        f"id: {msg['id']}\ndata: {json.dumps(msg)}\n\n".encode())
+                    client_wfile.flush()
+                except: dead.append(client_wfile)
+            for d in dead: sse_clients.remove(d)
+        self.send_response(201)
+        self.end_headers()
+        self.wfile.write(json.dumps(msg).encode())
+
+    def do_GET(self):
+        if self.path.startswith('/poll'):
+            # Return messages after ?after=ID
+            after = int(self.path.split('after=')[-1]) if 'after=' in self.path else -1
+            with lock:
+                new = [m for m in messages if m['id'] > after]
+            self.send_response(200)
+            self.send_header('Content-Type','application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(new).encode())
+
+        elif self.path.startswith('/stream'):
+            self.send_response(200)
+            self.send_header('Content-Type','text/event-stream')
+            self.send_header('Cache-Control','no-cache')
+            self.end_headers()
+            # Send existing messages
+            with lock:
+                for m in messages:
+                    self.wfile.write(
+                        f"id: {m['id']}\ndata: {json.dumps(m)}\n\n".encode())
+                self.wfile.flush()
+                sse_clients.append(self.wfile)
+            # Keep connection open
+            try:
+                while True: time.sleep(1)
+            except: pass
+
+    def log_message(self, *a): pass
+
+print("Chat server on :8080  |  POST /send  |  GET /poll?after=ID  |  GET /stream")
+HTTPServer(('', 8080), ChatHandler).serve_forever()</pre>
+
+  <pre><span style="color:var(--accent)"># Terminal 1: Start server</span>
+<span style="color:var(--yellow)">$ python3 chat_server.py</span>
+
+<span style="color:var(--accent)"># Terminal 2: Polling client (checks every 2s)</span>
+<span style="color:var(--yellow)">$ LAST=-1; while true; do
+  RESP=$(curl -s "http://localhost:8080/poll?after=$LAST")
+  echo "[POLL $(date +%H:%M:%S)] $RESP"
+  # Update cursor to latest message ID
+  NEW_LAST=$(echo "$RESP" | python3 -c "
+import sys,json
+msgs=json.load(sys.stdin)
+print(msgs[-1]['id'] if msgs else $LAST)" 2>/dev/null)
+  LAST=${NEW_LAST:-$LAST}
+  sleep 2
+done</span>
+
+<span style="color:var(--accent)"># Terminal 3: SSE client (instant delivery)</span>
+<span style="color:var(--yellow)">$ curl -N http://localhost:8080/stream</span>
+
+<span style="color:var(--accent)"># Terminal 4: Send messages</span>
+<span style="color:var(--yellow)">$ curl -X POST http://localhost:8080/send \
+  -H "Content-Type: application/json" \
+  -d '{"user":"alice","text":"hello!"}'</span></pre>
+
+  <div class="card card-yellow">
+    <p style="margin-bottom:0"><strong>What to observe:</strong> The SSE client (Terminal 3) shows the message instantly. The polling client (Terminal 2) shows it on the next poll cycle — up to 2 seconds later. Send several messages rapidly and note how the polling client batches them while the SSE client shows them one by one in real time.</p>
+  </div>
+
+  <h3>Advanced Mini-Project: WebSocket Chat with Rooms</h3>
+  <p>Extend the above to use the <code>websockets</code> Python library with room-based routing and presence tracking. Install with <code>pip install websockets</code>, then build: (1) a WS server that maintains a dict of room → set of connections, (2) join/leave/message JSON protocol, (3) a broadcast function that sends to all connections in a room except the sender, (4) presence events (user joined, user left) when connections open/close. This maps directly to how Discord's gateway works at a conceptual level.</p>
+</section>
+
+<!-- S13: PRODUCTION EXAMPLES -->
+<section class="section" id="s13">
+  <h2><span class="num">12</span>Production Examples</h2>
+
+  <h3>Slack: The Long Polling → WebSocket Migration</h3>
+  <div class="card">
+    <p>Slack's original real-time messaging system (RTM API) used WebSockets, but their public API initially exposed long polling for bot integrations. The challenge: at peak, Slack was maintaining millions of concurrent WebSocket connections across their fleet. Each WebSocket server tracked which channels each user was in, creating a massive in-memory state map.</p>
+    <p><strong>Scaling pattern:</strong> Each WS server subscribes to a Redis Pub/Sub channel per Slack workspace. When a user sends a message, the API server writes it to the database, then publishes to the workspace's Redis channel. Every WS server subscribed to that workspace receives the message and fans it out to all connected users in the relevant channel. The Redis Pub/Sub layer is the glue that lets WS servers scale horizontally.</p>
+    <p style="margin-bottom:0"><strong>Lesson:</strong> The hardest part of WebSocket at scale isn't the protocol — it's the state management and cross-server message routing. Slack eventually built a custom message bus to replace Redis Pub/Sub at their scale.</p>
+  </div>
+
+  <h3>OpenAI / ChatGPT: SSE for Token Streaming</h3>
+  <div class="card">
+    <p>When you see ChatGPT "typing" a response word by word, that's SSE. The API endpoint returns <code>Content-Type: text/event-stream</code> and emits each token (or small batch of tokens) as a separate SSE event as the model generates them. The final event is <code>data: [DONE]</code>.</p>
+    <p><strong>Why SSE, not WebSockets?</strong> The data flow is strictly unidirectional during generation (server → client). The client's only action is to send the initial prompt (a regular POST), then receive the stream. WebSockets would add connection management complexity (heartbeats, reconnection, protocol state) for zero benefit. SSE's built-in <code>EventSource</code> auto-reconnection and <code>Last-Event-ID</code> header are bonuses that come for free.</p>
+    <p style="margin-bottom:0"><strong>Infrastructure advantage:</strong> SSE works through every HTTP proxy and CDN without special configuration. WebSocket Upgrade requests can be blocked by enterprise proxies, WAFs, and certain CDNs. For a public API serving millions of developers across every network environment, this matters enormously.</p>
+  </div>
+
+  <h3>Figma: WebSocket for Collaborative Editing</h3>
+  <div class="card">
+    <p>Figma's multiplayer design tool uses WebSockets for real-time cursor tracking, layer updates, and conflict-free collaborative editing. Multiple users editing the same design file need sub-100ms update propagation — SSE can't handle the bidirectional nature (each user is both producing and consuming changes), and polling would add unacceptable latency.</p>
+    <p style="margin-bottom:0"><strong>CRDT integration:</strong> Changes are encoded as CRDT (Conflict-free Replicated Data Type) operations and broadcast over WebSocket. Each client applies operations locally for instant feedback, then the server resolves conflicts and broadcasts the canonical state. The WebSocket channel carries both the outbound edits and the inbound conflict resolutions.</p>
+  </div>
+</section>
+
+<!-- S14: EDGE CASES & WAR STORIES -->
+<section class="section" id="s14">
+  <h2><span class="num">13</span>Edge Cases &amp; War Stories</h2>
+
+  <div class="card card-red">
+    <p><strong>The Thundering Herd on Reconnect:</strong> Your WebSocket server crashes. 50,000 clients all try to reconnect at the exact same instant. The replacement server gets hammered with 50K concurrent TCP handshakes + TLS negotiations + WebSocket upgrades. Fix: clients must use <strong>jittered exponential backoff</strong> — start at 1s, double each attempt, add random jitter of ±30%. Without jitter, wave after wave of synchronized retries keeps the server overloaded.</p>
+  </div>
+
+  <div class="card card-red">
+    <p><strong>Mobile Network Switching:</strong> A user walks from WiFi to cellular. The TCP connection silently dies — neither the phone's TCP stack nor the server is notified immediately (TCP keepalive defaults to 2 hours!). The user sees stale data until the client's heartbeat timer fires and detects the dead connection. Discord's mobile app sends application-level heartbeats every 41.25 seconds; if two consecutive heartbeats get no response, it triggers reconnection.</p>
+  </div>
+
+  <div class="card card-red">
+    <p><strong>The Long-Poll Gap:</strong> Client A's long-poll response returns at time T. Between T and T+δ (when A's next long-poll request arrives), a message is sent. A misses it entirely because no request was open. Fix: every long-poll request includes the last seen sequence number. The server replays anything > that sequence, whether it happened during the gap or not. This is essentially reinventing message queues at the application layer — one reason to prefer SSE or WebSocket when possible.</p>
+  </div>
+
+  <div class="card card-red">
+    <p><strong>SSE and HTTP/1.1 Connection Exhaustion:</strong> A user opens 7 tabs of your dashboard, each with an SSE connection to the same domain. Tab #7's SSE fails to connect because browsers enforce a 6-connections-per-domain limit for HTTP/1.1. All other HTTP requests to your domain from that browser are also blocked. The fix: serve your API over HTTP/2 (multiplexes all streams over a single TCP connection, default 100 stream limit), or use a different subdomain for the SSE endpoint.</p>
+  </div>
+
+  <div class="card card-red">
+    <p style="margin-bottom:0"><strong>Load Balancer Idle Timeout:</strong> AWS ALB's default idle timeout is 60 seconds. If your WebSocket connection has no traffic for 60s (e.g., a quiet chat room at 3 AM), ALB silently drops the connection. Neither client nor server gets a FIN — the connection just vanishes. Fix: implement server-side ping frames every 30s to keep the connection alive through the LB. Configure ALB idle timeout to 300s+ for WebSocket target groups.</p>
+  </div>
+</section>
+
+<!-- S15: INTERVIEW Q&A -->
+<section class="section" id="s15">
+  <h2><span class="num">14</span>Interview Q&amp;A</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: You're designing a live sports score update system. Would you use polling, SSE, or WebSockets? Why?</div>
+    <div class="qa-a">
+      <p><strong>SSE</strong> is the ideal choice here. The data flow is purely unidirectional (server → millions of viewers). Viewers don't send data back — they just consume score updates. SSE gives you: automatic reconnection with <code>Last-Event-ID</code>, works through every CDN and proxy, and each connection is a plain HTTP response (easy to cache at the edge with short TTLs). WebSocket would work but adds unnecessary bidirectional complexity and doesn't cache through CDNs. Polling would work for low-frequency updates (scores change every few minutes) but SSE is cleaner.</p>
+      <p><strong>Deep follow-up — scale:</strong> With millions of concurrent viewers, you don't terminate SSE connections at the origin. You use a CDN or edge proxy layer (e.g., Fastly, CloudFlare Workers) that maintains one upstream SSE connection per PoP and fans out to thousands of downstream viewers. This is HTTP multicast — one origin connection serves an entire geographic region.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: How do WebSocket connections survive rolling deployments?</div>
+    <div class="qa-a">
+      <p>They don't — and that's by design. During a rolling deploy, you drain connections from old instances. The process: (1) stop accepting new WS connections on the old instance, (2) send a custom "please reconnect" control message to all connected clients, (3) wait a grace period (e.g., 30s) for clients to reconnect to new instances, (4) forcibly close any remaining connections. Clients must handle this gracefully with reconnection + message replay from their last cursor position.</p>
+      <p><strong>Follow-up nuance:</strong> Some systems (e.g., Kubernetes with <code>preStop</code> hooks + graceful shutdown periods) coordinate this with the load balancer. The pod enters "draining" state: the LB stops routing new connections to it, existing connections get a close frame, and after the grace period, the pod terminates. The key invariant: clients should never trust that a connection is permanent. Reconnection logic isn't a fallback — it's the primary path.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: When would you choose long polling over WebSockets for a chat application?</div>
+    <div class="qa-a">
+      <p>Rarely, but here are legitimate reasons: (1) <strong>Enterprise firewalls</strong> that strip WebSocket Upgrade headers — common in healthcare and financial institutions. Long polling uses standard HTTP requests and works everywhere. (2) <strong>Serverless backends</strong> (AWS Lambda, Cloud Functions) where you can't hold persistent connections — each Lambda invocation is stateless and short-lived. Long polling fits naturally: each poll is an independent invocation. (3) <strong>Very low traffic</strong> where the operational overhead of a WebSocket server (heartbeats, connection state, pub/sub backplane) isn't justified for 50 concurrent users.</p>
+      <p><strong>The gotcha:</strong> If an interviewer suggests "just use long polling" for anything at scale, push back on thread/connection exhaustion. You need an async runtime (Node.js, Go, Netty) to make long polling viable beyond a few thousand concurrent users.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: A WebSocket server is handling 100K connections. Users report messages being delivered to the wrong chat rooms. What's the most likely cause?</div>
+    <div class="qa-a">
+      <p>The most likely cause is a <strong>connection-to-room mapping bug after reconnection</strong>. When a client reconnects (e.g., after a network blip), it gets a new connection ID but the server may not have cleaned up the old mapping. Scenario: User A was in Room X. Connection drops. Server still has old connection → Room X mapping. User A reconnects and joins Room Y. If the cleanup of the old mapping races with the new subscription, the user briefly exists in both rooms — messages from Room X leak to A's new connection, or A's messages are broadcast to Room X instead of Room Y.</p>
+      <p><strong>Fix:</strong> Each reconnection must (1) atomically remove all old subscriptions for that user, then (2) re-subscribe based on the client's declared room. Use a <code>user_id → set(room_ids)</code> mapping, not <code>connection_id → room_id</code>, so the identity survives across connection cycles. Guard the update with a lock or use a serialized update queue per user.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: How does SSE handle network failures differently from WebSocket?</div>
+    <div class="qa-a">
+      <p>SSE has <strong>built-in automatic reconnection</strong> in the browser's EventSource API — the browser will retry after a configurable delay (default: ~3 seconds, server can override with <code>retry:</code> field). On reconnection, it sends the <code>Last-Event-ID</code> header so the server can resume from where the client left off. This is all free — zero client code needed.</p>
+      <p>WebSocket reconnection is entirely your responsibility. The browser's <code>WebSocket</code> API has no auto-reconnect, no cursor tracking, no retry logic. You must implement: (1) detecting the close event, (2) exponential backoff with jitter, (3) tracking the last received message sequence, (4) requesting replay of missed messages on reconnect, (5) handling the case where the replay window has expired. Libraries like Socket.io abstract this, but it's hundreds of lines of code you get for free with SSE.</p>
+      <p><strong>Interview takeaway:</strong> If you don't need bidirectional communication, SSE's built-in resilience is a massive operational advantage over WebSocket.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: You need to push 50,000 events/second to connected clients. Discuss the tradeoffs between SSE and WebSocket for this workload.</div>
+    <div class="qa-a">
+      <p>At 50K events/sec, the key differentiator is <strong>per-message overhead</strong>. Each SSE event carries ~50 bytes of framing (<code>id: ...\ndata: ...\n\n</code>) plus the HTTP chunked transfer encoding overhead. A WebSocket frame carries 2–14 bytes. At 50K events/sec, that's ~2.5 MB/s of framing overhead for SSE vs ~700 KB/s for WebSocket. Over millions of connections, this adds up to significant bandwidth savings.</p>
+      <p>However, SSE over HTTP/2 multiplexes streams on a single TCP connection — so you avoid per-event TCP overhead. And SSE's text-only constraint means you can't send binary data efficiently; if your events are small JSON objects, this doesn't matter, but if they include compressed data or binary payloads, WebSocket's native binary frame support wins.</p>
+      <p><strong>The nuance:</strong> At this volume, you're almost certainly fan-out broadcasting (one source → many subscribers), not peer-to-peer messaging. SSE + HTTP/2 + edge CDN caching can handle this with less infrastructure than WebSocket, because you don't need a pub/sub backplane — the CDN acts as your fan-out layer.</p>
+    </div>
+  </div>
+</section>
+
+<!-- S16: ACTUAL SYSTEM DESIGN INTERVIEW -->
+<section class="section" id="s16">
+  <h2><span class="num">15</span>Actual System Design Interview</h2>
+  <div class="card card-accent">
+    <p style="margin-bottom:0"><strong>Scenario:</strong> Design the real-time notification system for a social media platform (like Instagram). Users should see notifications (likes, comments, follows, DMs) within 1–2 seconds of the event occurring. The system serves 500M daily active users with peak concurrency of ~50M simultaneous connections.</p>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">The Prompt</div>
+    <p>"Design a notification delivery path that keeps user-facing latency under two seconds, works across web and mobile, and survives gateway restarts without dropping unread events."</p>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Production Case Study Lens</div>
+    <p>Think like an Instagram or Slack edge team: the hard parts are not the SSE frames themselves, but fan-out shape, replay after reconnect, and the handoff between a live foreground stream and a push-notification fallback when the app backgrounds.</p>
+  </div>
+
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    E["User actions<br/>likes · comments · follows"]
+    W["Notification writer<br/>append event"]
+    Q["Per-user queue<br/>Kafka / Redis Streams"]
+    C["Celebrity path<br/>fan-out on read"]
+    G["SSE gateway fleet<br/>HTTP/2 streams"]
+    D["User devices<br/>phone · tablet · web"]
+    P["Presence router<br/>foreground vs background"]
+    N["Push pipeline<br/>APNs / FCM"]
+    R["Replay on reconnect<br/>Last-Event-ID"]
+
+    E --> W --> Q --> G --> D
+    W -. hot account .-> C -. merge on read .-> G
+    Q -. replay missed events .-> R -. resume stream .-> G
+    D -. app backgrounded .-> P --> N --> D
+
+    classDef event fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef core fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef infra fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class E event;
+    class W core;
+    class Q,N data;
+    class G,D,P infra;
+    class C,R note;
+    </pre>
+    <div class="diagram-caption">Notification delivery at scale: the live stream handles the foreground path, a durable per-user queue handles replay, and push notifications cover the mobile background path.</div>
+  </div>
+
+  <h3>Round 1: Requirements &amp; Protocol Choice</h3>
+  <p><strong>Interviewer:</strong> "Walk me through your high-level approach."</p>
+  <div class="card">
+    <p>The notification flow is predominantly unidirectional — events originate from other users' actions and need to reach the recipient's device. The recipient occasionally marks notifications as read (a simple POST), but the core data flow is server → client.</p>
+    <p>For the persistent connection layer, <strong>SSE over HTTP/2</strong> is my first choice. Justification: (1) unidirectional push fits SSE perfectly, (2) auto-reconnect with <code>Last-Event-ID</code> eliminates an entire class of bugs, (3) works through every proxy/CDN without special config, (4) HTTP/2 multiplexing means multiple SSE streams per TCP connection. WebSocket would also work but adds bidirectional complexity we don't need.</p>
+    <p style="margin-bottom:0">For mobile clients on flaky connections, we'd add a <strong>push notification fallback</strong> (APNs/FCM) — if the SSE connection has been dead for >30s and there's a pending notification, fire a mobile push to wake the app.</p>
+  </div>
+
+  <h3>Round 2: Architecture Deep-Dive</h3>
+  <p><strong>Interviewer:</strong> "50M concurrent connections is a lot. How do you handle the fan-out from an event like a celebrity posting a photo that triggers notifications for 10M followers?"</p>
+  <div class="card">
+    <p><strong>Two-tier fan-out:</strong></p>
+    <p>For normal users (< 10K followers): when Alice likes Bob's post, the notification service writes to a <strong>per-user notification queue</strong> (e.g., a Kafka topic partitioned by user_id, or a Redis Sorted Set per user). Bob's SSE connection server reads from Bob's queue and pushes the event.</p>
+    <p>For celebrities (> 100K followers): we <em>don't</em> write 10M individual notification records at write time. Instead, we write a single "celebrity event" record. When each follower's SSE connection checks for new notifications, the gateway merges the follower's personal notification queue with a "celebrity timeline" — this is the fan-out-on-read pattern from DDIA (Kleppmann, Chapter 11: "pulling rather than pushing for accounts with many followers"). This avoids a 10M write amplification storm.</p>
+    <p style="margin-bottom:0"><strong>Connection layer architecture:</strong> A fleet of stateless SSE gateway servers. Each gateway holds open SSE connections and subscribes to a message bus (NATS or Redis Streams) for the user IDs it serves. A consistent hash ring maps user_id → gateway partition, so the upstream notification writer knows which gateway to notify. On gateway crash, clients reconnect with <code>Last-Event-ID</code> and get routed to a new gateway that replays from the per-user queue.</p>
+  </div>
+
+  <h3>Round 3: Edge Cases</h3>
+  <p><strong>Interviewer:</strong> "What happens when a user opens the app on two devices simultaneously?"</p>
+  <div class="card">
+    <p>Both devices maintain independent SSE connections, possibly to different gateway servers. Both must receive the same notifications. The per-user notification queue is the source of truth — both gateways subscribe to it. When Alice receives a notification, both her phone and tablet show it. When she marks it as read on one device, that action is written to the queue as a "read receipt" event, which propagates to the other device's SSE stream, updating the UI to show the notification as read.</p>
+    <p style="margin-bottom:0"><strong>Deduplication:</strong> Each notification has a unique ID. Clients maintain a local set of seen IDs and skip duplicates. This is essential because after a reconnection with replay, some already-displayed notifications will be re-sent.</p>
+  </div>
+
+  <p><strong>Interviewer:</strong> "How do you handle the transition from SSE to push notifications on mobile when the app backgrounds?"</p>
+  <div class="card">
+    <p style="margin-bottom:0">When the mobile client detects it's entering the background (iOS <code>applicationDidEnterBackground</code>, Android <code>onPause</code>), it closes the SSE connection and registers with a "device presence service" that the SSE connection is gone. New notifications for that user are now routed to a <strong>push notification pipeline</strong> (APNs/FCM). When the app returns to foreground, it re-opens the SSE stream with the last seen ID, replays anything missed during background, and deregisters from the push path. The presence service acts as a router: if SSE is alive, use it; if not, use mobile push.</p>
+  </div>
+</section>
+
+<!-- S17: WHAT IF? INTERACTIVE -->
+<section class="section" id="s17">
+  <h2><span class="num">16</span>What If? Interactive</h2>
+  <p>Vary the <strong>polling interval</strong> and observe how it affects server load, bandwidth waste, and data freshness. This builds cause-and-effect intuition for choosing between polling and persistent connections.</p>
+
+  <div class="slider-group">
+    <div class="slider-label">Concurrent Users <span id="v-users">10,000</span></div>
+    <input type="range" class="slider-input" id="sl-users" min="1000" max="1000000" step="1000" value="10000">
+  </div>
+  <div class="slider-group">
+    <div class="slider-label">Polling Interval (seconds) <span id="v-interval">3</span>s</div>
+    <input type="range" class="slider-input" id="sl-interval" min="1" max="60" step="1" value="3">
+  </div>
+  <div class="slider-group">
+    <div class="slider-label">Avg Events Per Minute (per user) <span id="v-events">2</span></div>
+    <input type="range" class="slider-input" id="sl-events" min="0" max="60" step="1" value="2">
+  </div>
+
+  <div class="tradeoff-cards">
+    <div class="card card-orange" id="tc-poll">
+      <p style="font-family:var(--mono);font-size:12px;color:var(--orange);margin-bottom:8px">SHORT POLLING</p>
+      <p style="font-size:14px"><strong>Requests/sec:</strong> <span id="r-rps">3,333</span></p>
+      <p style="font-size:14px"><strong>Empty responses:</strong> <span id="r-empty">90%</span></p>
+      <p style="font-size:14px"><strong>Bandwidth wasted:</strong> <span id="r-bw">1.6 MB/s</span></p>
+      <p style="font-size:14px;margin-bottom:0"><strong>Avg latency to new data:</strong> <span id="r-lat">1.5s</span></p>
+    </div>
+    <div class="card card-accent" id="tc-ws">
+      <p style="font-family:var(--mono);font-size:12px;color:var(--accent);margin-bottom:8px">WEBSOCKET / SSE</p>
+      <p style="font-size:14px"><strong>Open connections:</strong> <span id="r-conn">10,000</span></p>
+      <p style="font-size:14px"><strong>Messages/sec (actual data):</strong> <span id="r-mps">333</span></p>
+      <p style="font-size:14px"><strong>Bandwidth (useful):</strong> <span id="r-bw2">33 KB/s</span></p>
+      <p style="font-size:14px;margin-bottom:0"><strong>Avg latency to new data:</strong> <span id="r-lat2">&lt;50ms</span></p>
+    </div>
+  </div>
+
+  <div id="tc-verdict" class="card card-purple">
+    <p style="margin-bottom:0;font-size:14px" id="r-verdict">With these settings, polling generates <strong>3,333 req/s</strong> but only <strong>333 events/s</strong> contain useful data — <strong>90% of server work is wasted</strong>. A persistent connection approach would handle the same load with 10× less server overhead.</p>
+  </div>
+</section>
+
+<!-- S18: MENTAL MODEL -->
+<section class="section" id="s18">
+  <h2><span class="num">17</span>Mental Model</h2>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart TD
+    A["Need real-time updates?"]
+    B["REST / batch is enough"]
+    C["How frequent are updates?"]
+    D["Short polling"]
+    E["What direction does data flow?"]
+    F["SSE"]
+    G["Can you hold a long-lived connection?"]
+    H["Long polling"]
+    I["WebSocket"]
+    N1["Polling burns bandwidth when most requests are empty"]
+    N2["SSE is clean for one-way push, but HTTP/1.1 tab limits still matter"]
+    N3["Long polling needs cursors because the reconnect gap can lose events"]
+    N4["WebSocket wins for bidirectional traffic, but connection state and fan-out get harder"]
+
+    A -- "No" --> B
+    A -- "Yes" --> C
+    C -- "< 1/min" --> D
+    C -- ">= 1/min" --> E
+    E -- "Server -> client only" --> F
+    E -- "Both ways" --> G
+    G -- "No: serverless, hostile proxies, short-lived workers" --> H
+    G -- "Yes" --> I
+
+    D -.-> N1
+    F -.-> N2
+    H -.-> N3
+    I -.-> N4
+
+    classDef decision fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
+    classDef answer fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef answer2 fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef answer3 fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class A,C,E,G decision;
+    class B,D answer;
+    class F answer2;
+    class H,I answer3;
+    class N1,N2,N3,N4 note;
+    </pre>
+    <div class="diagram-caption">Pick the smallest real-time mechanism that satisfies your latency target, traffic direction, and infrastructure constraints. The operational cost rises sharply once the connection becomes long-lived and stateful.</div>
+  </div>
+</section>
+
+<!-- S19: REFERENCES -->
+<section class="section" id="s19">
+  <h2><span class="num">18</span>References &amp; Further Reading</h2>
+  <p>Use these sources to learn the protocol mechanics, connection lifecycle rules, and failure modes behind real-time delivery. The useful part is not the headline that "WebSockets are realtime," but the specific wire behavior, reconnect contract, and infrastructure breakpoints each source explains.</p>
+
+  <div class="ref">
+    <div class="ref-title">[1] RFC 6455 — The WebSocket Protocol (2011)</div>
+    <p><strong>I. Fette, A. Melnikov.</strong> IETF, December 2011.<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc6455" target="_blank">https://datatracker.ietf.org/doc/html/rfc6455</a></p>
+    <p>• Defines the WebSocket handshake: HTTP GET with <code>Upgrade: websocket</code> + <code>Sec-WebSocket-Key</code> nonce → server responds <code>101 Switching Protocols</code> with SHA-1-hashed accept header proving protocol comprehension.</p>
+    <p>• Frame format: 2-byte minimum header with FIN bit, 4-bit opcode (text/binary/close/ping/pong), 1-bit mask flag, 7+ bit payload length. Client-to-server frames must be XOR-masked with a 4-byte random key to prevent cache poisoning on intermediary proxies.</p>
+    <p>• Defines six frame types (text, binary, close, ping, pong, continuation) and reserves ten for future extensions. The close handshake is bidirectional — either side can initiate, the other must respond with a close frame before the TCP connection is torn down.</p>
+    <p>• Connection can be extended via <code>Sec-WebSocket-Extensions</code> header (e.g., RFC 7692 permessage-deflate for compression) and subprotocols via <code>Sec-WebSocket-Protocol</code>.</p>
+    <p>• Designed explicitly for compatibility with HTTP infrastructure: uses port 80/443, survives through HTTP proxies when encrypted (wss://), and the upgrade mechanism reuses the initial HTTP connection's TCP socket.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[2] RFC 6202 — Known Issues and Best Practices for Long Polling and Streaming in Bidirectional HTTP (2011)</div>
+    <p><strong>S. Loreto, P. Saint-Andre, S. Salsano, G. Wilkins.</strong> IETF, April 2011.<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc6202" target="_blank">https://datatracker.ietf.org/doc/html/rfc6202</a></p>
+    <p>• Separates two very different HTTP realtime patterns: <strong>long polling</strong>, where one request blocks until data is ready and then closes, and <strong>streaming</strong>, where one response stays open and carries multiple events. That distinction matters because timeout handling, retry logic, and intermediary behavior differ.</p>
+    <p>• Explains the resource failure mode that made async runtimes necessary: in a synchronous server, every parked long-poll request consumes a thread or process slot, so concurrency is capped by idle waiters rather than useful work.</p>
+    <p>• Calls out intermediary breakpoints such as shared reverse-proxy connection pools and buffering behavior. In practice that is why a "working" long-poll prototype can fall apart once nginx, Apache, or a load balancer is inserted in front of it.</p>
+    <p>• Recommends sequence numbers or cursors on long-poll responses so clients can replay what arrived during the reconnect gap. That is the core correctness fix, not an implementation detail.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[3] HTML Living Standard — Server-Sent Events (WHATWG)</div>
+    <p><strong>WHATWG.</strong> Ongoing.<br>
+    <a href="https://html.spec.whatwg.org/multipage/server-sent-events.html" target="_blank">https://html.spec.whatwg.org/multipage/server-sent-events.html</a></p>
+    <p>• Defines the on-wire SSE contract: a response with <code>text/event-stream</code> stays open, and the payload is framed as blocks of <code>field: value</code> lines terminated by a blank line. The important fields are <code>data</code>, <code>event</code>, <code>id</code>, and <code>retry</code>.</p>
+    <p>• The critical delivery mechanism is the <code>id</code> field. Once the server emits it, the browser stores that cursor and sends it back as <code>Last-Event-ID</code> on reconnect, which is what makes replay and gap recovery possible.</p>
+    <p>• The API exposes a narrow state machine through <code>readyState</code> and automatic reconnect behavior. That is why SSE is operationally attractive for one-way streams: the browser already owns reconnect timing and stream resumption semantics.</p>
+    <p>• The real infrastructure constraint is transport-level concurrency. Under HTTP/1.1, SSE consumes one of the browser's per-origin connection slots; under HTTP/2, the stream becomes one logical channel on a multiplexed connection, which changes whether multi-tab usage is viable.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[4] Designing Data-Intensive Applications — Chapter 11: Stream Processing (Kleppmann, 2017)</div>
+    <p><strong>Martin Kleppmann.</strong> O'Reilly, 2017.<br>
+    <a href="https://dataintensive.net" target="_blank">https://dataintensive.net</a></p>
+    <p>• Gives the right abstraction boundary for this topic: a live connection is only the delivery channel. The durable part of the system is still an event log or per-user queue that lets gateways replay after disconnects and failover.</p>
+    <p>• Breaks down fan-out-on-write versus fan-out-on-read, which is exactly the trade-off in large notification systems. Small accounts can afford eager writes to each follower queue; celebrity-scale accounts usually need a read-time merge path.</p>
+    <p>• Uses log-based brokers to show why reconnect safety depends on ordered offsets. If the client or gateway can name "the last event I applied," then replay becomes a bounded catch-up problem instead of guesswork.</p>
+    <p>• Frames delivery semantics honestly: most realtime systems are <strong>at least once</strong> after reconnect or retry, so duplicate suppression belongs in the client or consumer contract.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[5] RFC 8441 — Bootstrapping WebSockets with HTTP/2 (2018)</div>
+    <p><strong>M. Thomson, C. Benfield.</strong> IETF, September 2018.<br>
+    <a href="https://datatracker.ietf.org/doc/html/rfc8441" target="_blank">https://datatracker.ietf.org/doc/html/rfc8441</a></p>
+    <p>• Explains the protocol mismatch directly: HTTP/1.1 WebSockets rely on <code>Upgrade</code>, but HTTP/2 has no equivalent hop-by-hop upgrade path because everything is already framed as multiplexed streams.</p>
+    <p>• Introduces the exact replacement mechanism: the server advertises <code>SETTINGS_ENABLE_CONNECT_PROTOCOL</code>, and the client then uses extended <code>CONNECT</code> to open a WebSocket stream inside the H2 session.</p>
+    <p>• This RFC is useful because it separates transport efficiency from application behavior. H2 reduces connection sprawl, but it does not remove the need for heartbeats, reconnect, replay, draining, or cross-gateway routing.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals &middot; Topic 16 &middot; built for deep understanding
+</footer>
+
+</div>
+
+<script>
+// What If? Calculator
+function updateCalc(){
+  const users=+document.getElementById('sl-users').value;
+  const interval=+document.getElementById('sl-interval').value;
+  const eventsPerMin=+document.getElementById('sl-events').value;
+
+  document.getElementById('v-users').textContent=users.toLocaleString();
+  document.getElementById('v-interval').textContent=interval;
+  document.getElementById('v-events').textContent=eventsPerMin;
+
+  // Polling metrics
+  const rps=Math.round(users/interval);
+  const actualEventsPerSec=Math.round(users*eventsPerMin/60);
+  const emptyPct=rps>0?Math.max(0,Math.round((1-actualEventsPerSec/rps)*100)):0;
+  const bwWastedBytes=rps*500; // 500 bytes headers per empty request
+  const bwWasted=bwWastedBytes>1048576?(bwWastedBytes/1048576).toFixed(1)+' MB/s':Math.round(bwWastedBytes/1024)+' KB/s';
+  const avgLat=(interval/2).toFixed(1);
+
+  document.getElementById('r-rps').textContent=rps.toLocaleString();
+  document.getElementById('r-empty').textContent=emptyPct+'%';
+  document.getElementById('r-bw').textContent=bwWasted;
+  document.getElementById('r-lat').textContent=avgLat+'s';
+
+  // WS/SSE metrics
+  const msgBytes=actualEventsPerSec*100; // ~100 bytes per msg
+  const bwUseful=msgBytes>1048576?(msgBytes/1048576).toFixed(1)+' MB/s':Math.round(msgBytes/1024)+' KB/s';
+
+  document.getElementById('r-conn').textContent=users.toLocaleString();
+  document.getElementById('r-mps').textContent=actualEventsPerSec.toLocaleString();
+  document.getElementById('r-bw2').textContent=bwUseful;
+  document.getElementById('r-lat2').textContent='<50ms';
+
+  // Verdict
+  const wasteRatio=rps>0?Math.round(rps/Math.max(1,actualEventsPerSec)):0;
+  document.getElementById('r-verdict').innerHTML=
+    `With these settings, polling generates <strong>${rps.toLocaleString()} req/s</strong> but only <strong>${actualEventsPerSec.toLocaleString()} events/s</strong> contain useful data — <strong>${emptyPct}% of server work is wasted</strong>. A persistent connection approach would handle the same load with ~${wasteRatio}× less server overhead.`;
+}
+['sl-users','sl-interval','sl-events'].forEach(id=>{
+  document.getElementById(id).addEventListener('input',updateCalc);
+});
+updateCalc();
+</script>
+<script src="../../assets/js/topic.js"></script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+</body>
+</html>
