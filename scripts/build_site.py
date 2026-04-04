@@ -150,6 +150,14 @@ GRAPH_LAYOUT = {
         "deps": ["client-server-model", "network-protocols", "latency-and-throughput"],
         "orbit_rotation": -24,
     },
+    "config": {
+        "x": 560,
+        "y": 980,
+        "cluster": "Foundations",
+        "tone": "foundation",
+        "deps": ["client-server-model", "storage", "leader-election"],
+        "orbit_rotation": -12,
+    },
 }
 
 
