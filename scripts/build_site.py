@@ -158,6 +158,22 @@ GRAPH_LAYOUT = {
         "deps": ["client-server-model", "storage", "leader-election"],
         "orbit_rotation": -12,
     },
+    "rate-limiting": {
+        "x": 1120,
+        "y": 980,
+        "cluster": "Reliability",
+        "tone": "reliability",
+        "deps": ["load-balancer", "latency-and-throughput", "key-value-stores", "availability"],
+        "orbit_rotation": 18,
+    },
+    "logging": {
+        "x": 850,
+        "y": 980,
+        "cluster": "Reliability",
+        "tone": "reliability",
+        "deps": ["availability", "latency-and-throughput", "sockets", "config"],
+        "orbit_rotation": 6,
+    },
 }
 
 

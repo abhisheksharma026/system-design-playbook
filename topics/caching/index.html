@@ -395,7 +395,7 @@ $ <span class="fn">curl</span> -s localhost:7070/withcache/home
 <span class="cm"># → Second request: ~0.1ms (cache hit! 2000× faster)</span>
 <span class="cm"># → Every subsequent request: ~0.1ms</span>
 
-<span class="cm"># ⚠️ Notice the staleness: the "Generated at" timestamp never changes</span>
+<span class="cm"># Notice the staleness: the "Generated at" timestamp never changes</span>
 <span class="cm"># on the cached route. That's the tradeoff — speed vs freshness.</span>
 <span class="cm"># Kill the server (Ctrl+C), restart → cache is gone (volatile RAM).</span></pre>
   </div>
@@ -925,9 +925,9 @@ flowchart LR
     utilEl.style.color=dbUtil>100?'#f87171':dbUtil>80?'#fb923c':'#6ee7b7';
     document.getElementById('c-avg-lat').textContent=`Avg latency: ${avgLat.toFixed(1)}ms`;
     const vEl=document.getElementById('c-verdict');
-    if(dbUtil>100){vEl.textContent='⛔ DATABASE OVERLOADED';vEl.style.color='#f87171';}
-    else if(dbUtil>80){vEl.textContent='⚠️ DANGER ZONE (>80%)';vEl.style.color='#fb923c';}
-    else{vEl.textContent='✅ System healthy';vEl.style.color='#6ee7b7';}
+    if(dbUtil>100){vEl.textContent='Database overloaded';vEl.style.color='#f87171';}
+    else if(dbUtil>80){vEl.textContent='Danger zone (>80%)';vEl.style.color='#fb923c';}
+    else{vEl.textContent='System healthy';vEl.style.color='#6ee7b7';}
   }
   rHit.addEventListener('input',calc);rRps.addEventListener('input',calc);rDb.addEventListener('input',calc);
   calc();

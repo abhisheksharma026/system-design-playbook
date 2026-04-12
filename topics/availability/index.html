@@ -474,9 +474,9 @@ stats = defaultdict(<span class="kw">lambda</span>: {<span class="str">"checks"<
     stats[name][<span class="str">"last_status"</span>] = <span class="str">"UP"</span> <span class="kw">if</span> ok <span class="kw">else</span> <span class="str">"DOWN"</span>
     <span class="cm"># Detect state transitions</span>
     <span class="kw">if</span> prev == <span class="str">"UP"</span> <span class="kw">and not</span> ok:
-        print(f<span class="str">"  🔴 OUTAGE DETECTED: {name} is DOWN!"</span>)
+        print(f<span class="str">"  OUTAGE DETECTED: {name} is DOWN!"</span>)
     <span class="kw">elif</span> prev == <span class="str">"DOWN"</span> <span class="kw">and</span> ok:
-        print(f<span class="str">"  🟢 RECOVERED: {name} is back UP"</span>)
+        print(f<span class="str">"  RECOVERED: {name} is back UP"</span>)
     <span class="kw">return</span> ok
 
 <span class="kw">def</span> <span class="fn">report</span>():
@@ -485,7 +485,7 @@ stats = defaultdict(<span class="kw">lambda</span>: {<span class="str">"checks"<
     print(f<span class="str">"{'='*60}"</span>)
     <span class="kw">for</span> name, s <span class="kw">in</span> stats.items():
         avail = (s[<span class="str">"successes"</span>] / s[<span class="str">"checks"</span>] * <span class="num">100</span>) <span class="kw">if</span> s[<span class="str">"checks"</span>] <span class="kw">else</span> <span class="num">0</span>
-        status = <span class="str">"🟢"</span> <span class="kw">if</span> s[<span class="str">"last_status"</span>] == <span class="str">"UP"</span> <span class="kw">else</span> <span class="str">"🔴"</span>
+        status = <span class="str">"UP"</span> <span class="kw">if</span> s[<span class="str">"last_status"</span>] == <span class="str">"UP"</span> <span class="kw">else</span> <span class="str">"DOWN"</span>
         nines = <span class="str">"5+ nines"</span> <span class="kw">if</span> avail >= <span class="num">99.999</span> <span class="kw">else</span> <span class="str">"four 9s"</span> <span class="kw">if</span> avail >= <span class="num">99.99</span> \
                 <span class="kw">else</span> <span class="str">"three 9s"</span> <span class="kw">if</span> avail >= <span class="num">99.9</span> <span class="kw">else</span> <span class="str">"two 9s"</span> <span class="kw">if</span> avail >= <span class="num">99</span> <span class="kw">else</span> <span class="str">"< two 9s"</span>
         print(f<span class="str">"  {status} {name:&lt;15} {avail:7.3f}% ({nines}) [{s['checks']} checks]"</span>)
