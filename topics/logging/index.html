@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Logging &amp; Monitoring</title>
+<meta name="description" content="A system design guide to logging, metrics, tracing, alerting, observability pipelines, and production monitoring patterns at scale.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+<style>
+:root{--bg:#0c0e13;--surface:#14171e;--surface-2:#1a1e28;--surface-3:#222734;--border:#2a3040;--border-accent:#3d4663;--text:#e2e6f0;--text-dim:#8891a8;--text-muted:#5c6580;--accent:#6ee7b7;--accent-dim:#34d399;--accent-bg:rgba(110,231,183,0.08);--orange:#fb923c;--orange-bg:rgba(251,146,60,0.1);--blue:#60a5fa;--blue-bg:rgba(96,165,250,0.08);--red:#f87171;--red-bg:rgba(248,113,113,0.08);--purple:#a78bfa;--purple-bg:rgba(167,139,250,0.08);--yellow:#fbbf24;--yellow-bg:rgba(251,191,36,0.08);--mono:'IBM Plex Mono',monospace;--serif:'Source Serif 4',Georgia,serif;--sans:'DM Sans',system-ui,sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased}.container{max-width:920px;margin:0 auto;padding:0 28px}
+.hero{padding:80px 0 60px;border-bottom:1px solid var(--border)}.hero-label{font-family:var(--mono);font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--accent);margin-bottom:16px}.hero h1{font-family:var(--serif);font-size:clamp(36px,5vw,56px);font-weight:700;line-height:1.15;color:var(--text);margin-bottom:20px}.hero h1 span{color:var(--accent)}.hero-sub{font-size:18px;color:var(--text-dim);line-height:1.7}
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;margin:48px 0}.toc-title{font-family:var(--mono);font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:20px}.toc ol{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:8px 32px}.toc li::before{content:none}.toc a{color:var(--text-dim);text-decoration:none;font-size:15px;transition:color .2s}.toc a:hover{color:var(--accent)}
+section{padding:56px 0;border-bottom:1px solid var(--border)}section:last-of-type{border-bottom:none}
+h2{font-family:var(--serif);font-size:clamp(24px,3.5vw,36px);font-weight:700;margin-bottom:24px;color:var(--text)}h2 .num{color:var(--accent);font-family:var(--mono);font-size:0.6em;margin-right:8px}
+h3{font-family:var(--sans);font-size:20px;font-weight:600;margin:32px 0 16px;color:var(--text)}
+p{margin-bottom:16px;color:var(--text-dim)}
+strong{color:var(--text);font-weight:600}
+code{font-family:var(--mono);font-size:0.9em;background:var(--surface-2);padding:2px 7px;border-radius:4px;color:var(--accent)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;overflow-x:auto;margin:20px 0;font-family:var(--mono);font-size:13.5px;line-height:1.7;color:var(--text-dim)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px 28px;margin:20px 0}.card-accent{border-left:3px solid var(--accent);background:var(--accent-bg)}.card-orange{border-left:3px solid var(--orange);background:var(--orange-bg)}.card-blue{border-left:3px solid var(--blue);background:var(--blue-bg)}.card-red{border-left:3px solid var(--red);background:var(--red-bg)}.card-purple{border-left:3px solid var(--purple);background:var(--purple-bg)}.card-yellow{border-left:3px solid var(--yellow);background:var(--yellow-bg)}
+.term{margin-bottom:24px}.term-name{font-family:var(--mono);font-weight:600;color:var(--accent);font-size:17px;margin-bottom:6px;display:flex;align-items:center;gap:8px}.term-name::before{content:'';width:3px;height:18px;background:var(--accent);border-radius:2px;flex-shrink:0}.term-def{color:var(--text-dim);padding-left:11px}
+table{width:100%;border-collapse:collapse;margin:20px 0;font-size:14.5px}th{font-family:var(--mono);font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--accent);text-align:left;padding:12px 16px;border-bottom:2px solid var(--border);background:var(--surface)}td{padding:12px 16px;border-bottom:1px solid var(--border);color:var(--text-dim)}tr:hover td{background:var(--surface)}
+.qa{margin:20px 0;border:1px solid var(--border);border-radius:10px;overflow:hidden}.qa-q{padding:16px 20px;background:var(--surface);cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:15px;color:var(--text);user-select:none;transition:background .15s;width:100%;border:0;text-align:left;font-family:inherit}.qa-q:hover{background:var(--surface-2)}.qa-q::after{content:'+';font-family:var(--mono);font-size:18px;color:var(--accent);transition:transform .2s;min-width:20px;text-align:right}.qa.open .qa-q::after{content:'−'}.qa-a{display:none;padding:18px 20px;background:var(--surface-2);color:var(--text-dim);font-size:14.5px;line-height:1.75;border-top:1px solid var(--border)}.qa.open .qa-a{display:block}.qa-a p{margin-bottom:10px}.qa-a p:last-child{margin-bottom:0}
+.ref{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px 28px;margin:16px 0}.ref-title{font-family:var(--mono);font-size:13px;color:var(--accent);margin-bottom:8px}.ref p{font-size:14px;margin-bottom:6px}.ref a{color:var(--purple);text-decoration:none}.ref a:hover{text-decoration:underline}
+.slider-group{margin:20px 0}.slider-label{font-family:var(--mono);font-size:13px;color:var(--text-dim);margin-bottom:8px;display:flex;justify-content:space-between}.slider-label span{color:var(--accent)}.slider-input{width:100%;-webkit-appearance:none;appearance:none;height:6px;background:var(--surface-3);border-radius:3px;outline:none}.slider-input::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--accent);cursor:pointer}
+.tradeoff-cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+.sim-output{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px 20px;font-family:var(--mono);font-size:13px;color:var(--text-dim);min-height:100px;margin:16px 0;white-space:pre-wrap}
+@media(max-width:700px){.toc ol{grid-template-columns:1fr}.tradeoff-cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 19</div>
+  <h1>Logging <span>&amp; Monitoring</span></h1>
+  <p class="hero-sub">The three pillars of observability — logs, metrics, and traces — and how they combine to give you eyes into systems where "works on my machine" means nothing.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Key Terms</a></li>
+    <li><a href="#s2">The Three Pillars</a></li>
+    <li><a href="#s3">Logging Deep Dive</a></li>
+    <li><a href="#s4">Metrics Deep Dive</a></li>
+    <li><a href="#s5">Distributed Tracing</a></li>
+    <li><a href="#s6">Alerting</a></li>
+    <li><a href="#s7">Architecture Diagrams</a></li>
+    <li><a href="#s8">Memory Map</a></li>
+    <li><a href="#s9">Terminal Demos</a></li>
+    <li><a href="#s10">Mini-Projects</a></li>
+    <li><a href="#s11">Production Examples</a></li>
+    <li><a href="#s12">Edge Cases &amp; War Stories</a></li>
+    <li><a href="#s13">Interview Q&amp;A</a></li>
+    <li><a href="#s14">Actual System Design Interview</a></li>
+    <li><a href="#s15">What If? Interactive</a></li>
+    <li><a href="#s16">Mental Model</a></li>
+    <li><a href="#s17">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- S1: KEY TERMS -->
+<section class="section" id="s0">
+  <h2><span class="num">01</span>Key Terms</h2>
+  <div class="term"><div class="term-name">Logging</div><div class="term-def">Recording discrete, timestamped events produced by application code — errors, requests, state transitions, debug info. Each log entry is an immutable record of something that happened. Logs are text (unstructured) or JSON (structured). At scale, a single service can emit 10,000+ log lines per second. Logs answer "what happened?" — the forensic record you grep through at 3 AM during an incident. ELK Stack (Elasticsearch + Logstash + Kibana), Loki (Grafana), and Datadog Logs are the dominant platforms.</div></div>
+  <div class="term"><div class="term-name">Monitoring</div><div class="term-def">Continuously collecting, aggregating, and visualizing system health metrics over time — CPU usage, request latency, error rates, queue depth. Unlike logs (discrete events), metrics are numerical time series sampled at regular intervals. Monitoring answers "how is the system performing right now?" and "is this metric trending toward a threshold?" Prometheus, Datadog, New Relic, and CloudWatch are the major monitoring platforms.</div></div>
+  <div class="term"><div class="term-name">Observability</div><div class="term-def">The ability to understand a system's internal state from its external outputs. Coined in control theory, adopted by software engineering. Observability = Logs + Metrics + Traces (the "three pillars"). A truly observable system lets you ask arbitrary questions about its behavior after the fact, without having predicted those questions in advance. The difference between monitoring and observability: monitoring tells you <em>when</em> something is wrong; observability helps you understand <em>why</em>.</div></div>
+  <div class="term"><div class="term-name">Metric</div><div class="term-def">A numerical measurement sampled over time, typically stored as a time series: <code>(metric_name, labels, timestamp, value)</code>. Four types: <strong>Counter</strong> (monotonically increasing, e.g., total_requests), <strong>Gauge</strong> (goes up and down, e.g., current_memory_usage), <strong>Histogram</strong> (distribution of values in buckets, e.g., request_latency), <strong>Summary</strong> (like histogram but calculates quantiles client-side). Prometheus uses this taxonomy. A single Kubernetes cluster typically exposes 500K+ individual time series.</div></div>
+  <div class="term"><div class="term-name">Distributed Trace</div><div class="term-def">A record of a single request's journey through a distributed system, represented as a tree of spans. Each span captures one unit of work (an RPC, a database query, a queue dequeue) with a start time, duration, status, and metadata. Spans are linked via a shared trace ID and parent span IDs. Google's Dapper paper (2010) defined this model; it's now standardized as OpenTelemetry. Jaeger, Zipkin, and Datadog APM implement it. Traces answer "where did this specific request spend its time?"</div></div>
+  <div class="term"><div class="term-name">Alerting</div><div class="term-def">Automatically notifying humans or triggering automated actions when a metric crosses a threshold or a condition is met. An alert has three states: OK, PENDING (condition met but waiting for duration), and FIRING (confirmed, notification sent). Good alerts are actionable (receiving it means you need to do something), deduplicated (don't page 50 times for the same issue), and routed (on-call engineer, not everyone). Prometheus Alertmanager, PagerDuty, and OpsGenie handle alert routing, grouping, silencing, and escalation.</div></div>
+  <div class="term"><div class="term-name">Time Series Database (TSDB)</div><div class="term-def">A database optimized for append-heavy, time-stamped data with efficient range queries. Key optimizations: delta-of-delta timestamp compression (consecutive timestamps differ by ~constant intervals), XOR compression for float values (consecutive metric values are usually similar), and time-partitioned storage (recent data in memory, older data on disk). Facebook's Gorilla paper (VLDB 2015) pioneered this; Prometheus TSDB uses the same compression scheme, achieving ~1.37 bytes per sample (vs. 16 bytes raw).</div></div>
+</section>
+
+<!-- S2: THREE PILLARS -->
+<section class="section" id="s2">
+  <h2><span class="num">02</span>The Three Pillars of Observability</h2>
+  <table>
+    <thead><tr><th>Pillar</th><th>What</th><th>Shape</th><th>Answers</th><th>Volume</th><th>Tools</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Logs</strong></td><td>Discrete events</td><td>Text / JSON lines</td><td>What happened?</td><td>GB–TB/day</td><td>ELK, Loki, Splunk</td></tr>
+      <tr><td><strong>Metrics</strong></td><td>Numeric time series</td><td>(name, labels, ts, val)</td><td>How much? How fast?</td><td>MB–GB/day</td><td>Prometheus, Datadog</td></tr>
+      <tr><td><strong>Traces</strong></td><td>Request-scoped spans</td><td>Tree of (span_id, parent, timing)</td><td>Where was time spent?</td><td>GB–TB/day (sampled)</td><td>Jaeger, Zipkin, Tempo</td></tr>
+    </tbody>
+  </table>
+  <div class="card card-accent">
+    <p><strong>How they complement each other:</strong> An alert fires because the <strong>metric</strong> <code>http_request_duration_p99 > 2s</code>. You look at a <strong>trace</strong> for a slow request and see that the <code>payment-service</code> span took 1.8s. You inspect the <strong>logs</strong> from payment-service at that timestamp and find a database connection timeout. Metrics told you <em>something</em> is slow, traces told you <em>where</em>, logs told you <em>why</em>.</p>
+    <p style="margin-bottom:0"><strong>The OpenTelemetry convergence:</strong> Historically, logs, metrics, and traces were collected by separate agents (Fluentd for logs, Prometheus for metrics, Jaeger agent for traces). OpenTelemetry (OTel) is a CNCF project that unifies all three into a single SDK and collector, using a common data model and wire protocol (OTLP). This reduces agent sprawl and enables correlation between pillars via shared context (trace ID in log lines, exemplars in metrics).</p>
+  </div>
+</section>
+
+<!-- S3: LOGGING -->
+<section class="section" id="s3">
+  <h2><span class="num">03</span>Logging Deep Dive</h2>
+  <h3>Structured vs. Unstructured</h3>
+  <pre><span style="color:var(--red)">// BAD: Unstructured — good luck parsing this at scale</span>
+2024-04-06 14:30:15 INFO User alice logged in from 203.0.113.42 in 45ms
+
+<span style="color:var(--accent)">// GOOD: Structured JSON — every field is queryable</span>
+{"ts":"2024-04-06T14:30:15.123Z","level":"info","msg":"user_login",
+ "user":"alice","ip":"203.0.113.42","latency_ms":45,"trace_id":"abc123"}</pre>
+  <p>Structured logs are essential for large-scale systems. With structured logs, you can query "show me all logins slower than 100ms from IP range 203.0.113.0/24 in the last hour" without regex gymnastics. Every modern logging platform (ELK, Loki, Datadog) indexes JSON fields automatically.</p>
+
+  <h3>Log Levels</h3>
+  <table>
+    <thead><tr><th>Level</th><th>When to Use</th><th>Production Volume</th></tr></thead>
+    <tbody>
+      <tr><td><code>TRACE</code></td><td>Extremely fine-grained: variable values, loop iterations</td><td>Never in prod (local dev only)</td></tr>
+      <tr><td><code>DEBUG</code></td><td>Diagnostic info for developers: SQL queries, cache hits/misses</td><td>Off by default, enable per-service for debugging</td></tr>
+      <tr><td><code>INFO</code></td><td>Normal operations: request served, job completed, server started</td><td>Primary production level</td></tr>
+      <tr><td><code>WARN</code></td><td>Unexpected but recoverable: retry succeeded, deprecated API used</td><td>Always on — these are early warning signals</td></tr>
+      <tr><td><code>ERROR</code></td><td>Operation failed: unhandled exception, external service down, data corruption</td><td>Always on — these trigger investigation</td></tr>
+      <tr><td><code>FATAL</code></td><td>Process cannot continue: out of memory, missing critical config</td><td>Always on — followed by process exit</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Log Aggregation Pipeline</h3>
+  <p>In a distributed system with 500 services across 10,000 containers, logs are useless if they stay on individual hosts. The standard pipeline: <strong>Collect</strong> (Fluentd, Filebeat, Vector) → <strong>Buffer/Transform</strong> (Kafka, Logstash) → <strong>Store</strong> (Elasticsearch, Loki, S3) → <strong>Query/Visualize</strong> (Kibana, Grafana).</p>
+  <div class="card card-orange">
+    <p><strong>The cost problem:</strong> At 100GB of logs per day, Elasticsearch storage costs ~$300/month (managed). At 10TB/day (common for large organizations), costs explode to $30K+/month. Solutions: (1) sample or drop DEBUG/INFO logs in production, (2) use cheaper storage tiers (S3 for logs older than 7 days), (3) use Loki which indexes only labels, not full log content (10–100× cheaper than Elasticsearch), (4) set retention policies aggressively — do you really need 6-month-old DEBUG logs?</p>
+    <p style="margin-bottom:0"><strong>Cardinality explosion:</strong> If you log the full request URL including query parameters, every unique URL becomes a unique label value. With 1M unique URLs, your log index explodes. Rule: never use high-cardinality values (user IDs, request IDs, full URLs) as log labels/tags. Put them in the log body instead.</p>
+  </div>
+</section>
+
+<!-- S4: METRICS -->
+<section class="section" id="s4">
+  <h2><span class="num">04</span>Metrics Deep Dive</h2>
+  <h3>The Four Metric Types (Prometheus Model)</h3>
+  <pre><span style="color:var(--accent)"># Counter — only goes up (resets on restart)</span>
+http_requests_total{method="GET", status="200", endpoint="/api/users"} 1547832
+
+<span style="color:var(--accent)"># Gauge — goes up and down</span>
+node_memory_available_bytes{instance="server-01"} 4294967296
+
+<span style="color:var(--accent)"># Histogram — counts values in configurable buckets</span>
+http_request_duration_seconds_bucket{le="0.1"} 24054   <span style="color:var(--text-muted)"># ≤100ms</span>
+http_request_duration_seconds_bucket{le="0.5"} 33259   <span style="color:var(--text-muted)"># ≤500ms</span>
+http_request_duration_seconds_bucket{le="1.0"} 34122   <span style="color:var(--text-muted)"># ≤1s</span>
+http_request_duration_seconds_bucket{le="+Inf"} 34219  <span style="color:var(--text-muted)"># all</span>
+
+<span style="color:var(--accent)"># Summary — pre-calculated quantiles</span>
+rpc_duration_seconds{quantile="0.5"} 0.042
+rpc_duration_seconds{quantile="0.99"} 0.87</pre>
+
+  <h3>The RED Method (Request-focused)</h3>
+  <div class="card card-blue">
+    <p><strong>R</strong>ate — requests per second. <strong>E</strong>rrors — failed requests per second. <strong>D</strong>uration — latency distribution (p50, p95, p99). Coined by Tom Wilkie (Grafana). Apply RED to every service. If you can only have three metrics per service, make them these.</p>
+  </div>
+
+  <h3>The USE Method (Resource-focused)</h3>
+  <div class="card card-purple">
+    <p style="margin-bottom:0"><strong>U</strong>tilization — % of resource capacity used (CPU 73%, disk 85%). <strong>S</strong>aturation — work waiting to be processed (queue depth, thread pool backlog). <strong>E</strong>rrors — error count per resource (disk I/O errors, network packet drops). Coined by Brendan Gregg (Netflix). Apply USE to every infrastructure resource: CPU, memory, disk, network, GPU.</p>
+  </div>
+
+  <h3>Time Series Compression</h3>
+  <p>Prometheus stores metrics using Gorilla-style compression (from Facebook's Gorilla paper, VLDB 2015). The insight: consecutive metric samples are nearly identical. Timestamps are separated by almost exactly the scrape interval (e.g., 15s), so the delta-of-delta is often 0 (encoded in 1 bit). Values change slowly (e.g., CPU goes from 73.2% to 73.4%), so XOR of consecutive values has mostly zero bits. Result: 16 bytes per sample (8-byte timestamp + 8-byte float) compresses to an average of ~1.37 bytes — a <strong>12× reduction</strong>.</p>
+</section>
+
+<!-- S5: DISTRIBUTED TRACING -->
+<section class="section" id="s5">
+  <h2><span class="num">05</span>Distributed Tracing</h2>
+  <p>When a user request touches 15 microservices, a log line from one service tells you almost nothing. You need to see the entire request's journey — which services were called, in what order, how long each took, and where the bottleneck was. This is distributed tracing.</p>
+
+  <h3>The Span Model (Dapper/OpenTelemetry)</h3>
+  <pre>Trace ID: 7f3e4a2b1c9d8f6e
+├── Span: api-gateway        [0ms ─────────── 250ms]  trace_id=7f3e..  span_id=001  parent=none
+│   ├── Span: auth-service   [10ms ── 30ms]           trace_id=7f3e..  span_id=002  parent=001
+│   ├── Span: user-service   [35ms ──── 80ms]         trace_id=7f3e..  span_id=003  parent=001
+│   │   └── Span: postgres   [40ms ─ 75ms]            trace_id=7f3e..  span_id=004  parent=003
+│   └── Span: payment-svc    [85ms ────────── 240ms]  trace_id=7f3e..  span_id=005  parent=001
+│       ├── Span: stripe-api  [90ms ─────── 200ms]    trace_id=7f3e..  span_id=006  parent=005
+│       └── Span: redis-cache [205ms ─ 230ms]         trace_id=7f3e..  span_id=007  parent=005</pre>
+
+  <h3>Context Propagation</h3>
+  <p>For tracing to work across services, the trace context (trace_id, parent_span_id, sampling decision) must be propagated with every inter-service call. The standard: W3C Trace Context (<code>traceparent</code> HTTP header). Each service extracts the context from the incoming request, creates a child span, and injects the context into outgoing requests. OpenTelemetry SDKs handle this automatically for HTTP, gRPC, and message queue clients.</p>
+
+  <h3>Sampling</h3>
+  <div class="card card-yellow">
+    <p><strong>Head-based sampling:</strong> Decide at the start of the trace (at the entry point) whether to sample. If the decision is "don't sample," no spans are recorded for the entire trace. Cheap but misses interesting outliers — a request that randomly skips sampling might be the one with a 30-second database deadlock.</p>
+    <p style="margin-bottom:0"><strong>Tail-based sampling:</strong> Collect all spans, but only store traces that meet a criterion (e.g., latency > p99, or contains an error). Captures all interesting traces but requires buffering all trace data temporarily (the "tail") before the decision is made. Google's Dapper uses 1/1000 head-based sampling. Honeycomb advocates tail-based sampling for precisely capturing rare failures.</p>
+  </div>
+</section>
+
+<!-- S6: ALERTING -->
+<section class="section" id="s6">
+  <h2><span class="num">06</span>Alerting</h2>
+  <h3>Anatomy of a Good Alert</h3>
+  <pre><span style="color:var(--accent)"># Prometheus alerting rule</span>
+groups:
+  - name: api_alerts
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(http_requests_total[5m])) > 0.05
+        for: 2m                         <span style="color:var(--text-muted)"># must persist for 2 min</span>
+        labels:
+          severity: critical
+          team: payments
+        annotations:
+          summary: "Error rate > 5% for 2+ minutes"
+          runbook: "https://wiki.internal/runbooks/high-error-rate"</pre>
+
+  <h3>Alert Anti-Patterns</h3>
+  <div class="card card-red">
+    <p><strong>Alert fatigue:</strong> If every service has 50 alerts and 90% fire weekly for non-issues, on-call engineers learn to ignore all of them. The result: real incidents get missed. Google SRE mandates that every alert must be actionable — if receiving it doesn't change what you do, delete it.</p>
+    <p><strong>Alerting on symptoms vs. causes:</strong> Alert on what the user experiences (high latency, errors), not on internal metrics (CPU usage, thread count). High CPU is fine if latency is normal. Conversely, latency can spike with normal CPU if the issue is lock contention or network latency.</p>
+    <p style="margin-bottom:0"><strong>Missing "for" duration:</strong> Without a <code>for: 2m</code> clause, a single spike of 5.1% errors lasting 3 seconds triggers a page. With the clause, the condition must persist for 2 minutes before firing — filtering out transient blips.</p>
+  </div>
+
+  <h3>Alert Routing &amp; Escalation</h3>
+  <p><strong>Alertmanager</strong> (Prometheus) or <strong>PagerDuty</strong> handles: <strong>Grouping</strong> (50 alerts from the same incident → 1 notification), <strong>Silencing</strong> (suppress during maintenance), <strong>Inhibition</strong> (if the cluster is down, suppress per-service alerts), and <strong>Routing</strong> (critical → PagerDuty page, warning → Slack channel, info → email digest).</p>
+</section>
+
+<!-- S7: ARCHITECTURE DIAGRAMS -->
+<section class="section" id="s7">
+  <h2><span class="num">07</span>Architecture Diagrams</h2>
+  <h3>Observability Pipeline</h3>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    App["Application"]
+    Logs["Logs: stdout / JSON"]
+    Metrics["Metrics: /metrics"]
+    Traces["Traces: OTLP"]
+    LogAgent["Vector / Fluent Bit"]
+    Prom["Prometheus scrape"]
+    OTel["OTel Collector"]
+    Kafka["Kafka buffer"]
+    Loki["Loki / Elasticsearch"]
+    TSDB["Prometheus TSDB"]
+    Tempo["Tempo / Jaeger"]
+    Grafana["Grafana"]
+    Alert["Alertmanager"]
+    N1["trace_id joins logs and traces"]
+    N2["Exemplars link metrics to traces"]
+
+    App --> Logs
+    App --> Metrics
+    App --> Traces
+    Logs --> LogAgent --> Kafka --> Loki --> Grafana
+    Metrics --> Prom --> TSDB --> Grafana
+    Traces --> OTel --> Tempo --> Grafana
+    TSDB --> Alert
+    Logs -.-> N1
+    TSDB -.-> N2
+
+    classDef app fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef log fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef metric fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef trace fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef infra fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class App app;
+    class Logs,LogAgent,Kafka,Loki log;
+    class Metrics,Prom,TSDB metric;
+    class Traces,OTel,Tempo trace;
+    class Grafana,Alert infra;
+    class N1,N2 note;
+    </pre>
+    <div class="diagram-caption">Observability pipeline: logs, metrics, and traces leave the same application through different collection paths, then converge again at Grafana for dashboards, traces, and alert-driven investigation.</div>
+  </div>
+</section>
+
+<!-- S8: MEMORY MAP -->
+<section class="section" id="s8">
+  <h2><span class="num">08</span>Memory Map: Observability Data Volumes</h2>
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 860 160" xmlns="http://www.w3.org/2000/svg" style="width:100%;margin:24px 0">
+      <text x="145" y="20" fill="#f87171" font-family="IBM Plex Mono" font-size="12" text-anchor="middle" font-weight="600">LOGS</text>
+      <rect x="30" y="30" width="230" height="55" rx="6" fill="#222734" stroke="#f87171"/>
+      <text x="145" y="50" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">~500 bytes/line × 10K lines/sec</text>
+      <text x="145" y="68" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">= ~5 MB/sec = ~430 GB/day</text>
+      <text x="145" y="105" fill="#f87171" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Retention: 7-30 days</text>
+      <text x="145" y="120" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Hot: Elasticsearch | Cold: S3</text>
+
+      <text x="430" y="20" fill="#60a5fa" font-family="IBM Plex Mono" font-size="12" text-anchor="middle" font-weight="600">METRICS</text>
+      <rect x="310" y="30" width="240" height="55" rx="6" fill="#222734" stroke="#60a5fa"/>
+      <text x="430" y="50" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">~1.37 bytes/sample × 500K series</text>
+      <text x="430" y="68" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">× 1 sample/15s = ~3 GB/day</text>
+      <text x="430" y="105" fill="#60a5fa" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Retention: 15-90 days (local)</text>
+      <text x="430" y="120" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Long-term: Thanos / Cortex → S3</text>
+
+      <text x="725" y="20" fill="#a78bfa" font-family="IBM Plex Mono" font-size="12" text-anchor="middle" font-weight="600">TRACES</text>
+      <rect x="600" y="30" width="250" height="55" rx="6" fill="#222734" stroke="#a78bfa"/>
+      <text x="725" y="50" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">~2 KB/span × 10 spans/trace</text>
+      <text x="725" y="68" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">× 1% sampling = ~200 GB/day</text>
+      <text x="725" y="105" fill="#a78bfa" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Retention: 3-7 days</text>
+      <text x="725" y="120" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Tempo (columnar) or Jaeger + Cassandra</text>
+    </svg>
+    <div class="diagram-caption">Typical observability volumes are not symmetric: metrics are tiny but high-cardinality, logs dominate hot storage, and traces are only affordable when sampling or tail-filtering is deliberate.</div>
+  </div>
+</section>
+
+<!-- S9: TERMINAL DEMOS -->
+<section class="section" id="s9">
+  <h2><span class="num">09</span>Hands-On: Terminal Demos</h2>
+  <h3>Demo 1: Structured Logging in Python</h3>
+  <pre><span style="color:var(--yellow)">$ python3 -c "</span>
+import json, time, random, sys
+
+def log(level, msg, **kwargs):
+    entry = {'ts': time.strftime('%Y-%m-%dT%H:%M:%S'), 'level': level, 'msg': msg}
+    entry.update(kwargs)
+    print(json.dumps(entry))
+
+log('info', 'server_start', port=8080, version='1.2.3')
+for i in range(5):
+    latency = random.randint(10, 500)
+    status = 200 if latency < 400 else 500
+    lvl = 'info' if status == 200 else 'error'
+    log(lvl, 'request_handled', method='GET', path='/api/users',
+        status=status, latency_ms=latency, trace_id=f'tr-{random.randint(1000,9999)}')
+log('warn', 'high_memory', used_mb=7800, total_mb=8192, pct=95.2)
+<span style="color:var(--yellow)">"</span>
+
+<span style="color:var(--text-dim)"># Output — every line is valid JSON, parseable by jq/Loki/ELK:</span>
+{"ts":"2024-04-06T14:30:01","level":"info","msg":"server_start","port":8080,"version":"1.2.3"}
+{"ts":"2024-04-06T14:30:01","level":"info","msg":"request_handled","method":"GET","path":"/api/users","status":200,"latency_ms":45,"trace_id":"tr-3847"}
+...
+
+<span style="color:var(--accent)"># Filter errors with jq:</span>
+<span style="color:var(--yellow)">$ python3 log_demo.py | jq 'select(.level == "error")'</span></pre>
+
+  <h3>Demo 2: Prometheus-style Metrics Endpoint</h3>
+  <pre><span style="color:var(--yellow)">$ python3 -c "</span>
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import time, random, threading
+
+counters = {'http_requests_total': 0, 'http_errors_total': 0}
+gauges = {'memory_used_bytes': 4_000_000_000}
+
+def simulate():
+    while True:
+        counters['http_requests_total'] += random.randint(50, 200)
+        counters['http_errors_total'] += random.randint(0, 5)
+        gauges['memory_used_bytes'] = random.randint(3_500_000_000, 7_500_000_000)
+        time.sleep(1)
+
+threading.Thread(target=simulate, daemon=True).start()
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain')
+        self.end_headers()
+        body = ''
+        for k, v in counters.items():
+            body += f'# TYPE {k} counter\n{k} {v}\n'
+        for k, v in gauges.items():
+            body += f'# TYPE {k} gauge\n{k} {v}\n'
+        self.wfile.write(body.encode())
+    def log_message(self, *a): pass
+
+print('Metrics on :9090/metrics (Prometheus-compatible)')
+HTTPServer(('', 9090), Handler).serve_forever()
+<span style="color:var(--yellow)">"</span>
+
+<span style="color:var(--accent)"># In another terminal — scrape like Prometheus would:</span>
+<span style="color:var(--yellow)">$ curl http://localhost:9090/metrics</span>
+# TYPE http_requests_total counter
+http_requests_total 1247
+# TYPE http_errors_total counter
+http_errors_total 12
+# TYPE memory_used_bytes gauge
+memory_used_bytes 5234567890</pre>
+</section>
+
+<!-- S10: MINI-PROJECTS -->
+<section class="section" id="s10">
+  <h2><span class="num">10</span>Mini-Projects</h2>
+  <h3>Simple: Log Analyzer</h3>
+  <div class="card card-accent"><p style="margin-bottom:0"><strong>Goal:</strong> Write a Python script that reads structured JSON logs from stdin, computes per-minute error rates and p99 latency, and prints a summary dashboard. Pipe the output of Demo 1 (scaled to 10,000 lines) through it. This simulates what Grafana does when querying log data for a dashboard panel.</p></div>
+
+  <h3>Advanced: Mini Observability Stack</h3>
+  <p>Build a three-service system (API gateway → auth service → data service). Instrument with: (1) structured JSON logging with a shared <code>trace_id</code> propagated via HTTP headers, (2) a <code>/metrics</code> endpoint per service exposing request count, error count, and latency histogram, (3) a correlation script that, given a trace_id, finds all logs across all three services and reconstructs the request timeline. This is a minimal hand-built version of what OpenTelemetry + Grafana provide.</p>
+</section>
+
+<!-- S11: PRODUCTION EXAMPLES -->
+<section class="section" id="s11">
+  <h2><span class="num">11</span>Production Examples</h2>
+  <div class="card">
+    <h3 style="margin-top:0">Google: Dapper → Cloud Trace</h3>
+    <p>Google's Dapper (2010) was the first production-scale distributed tracing system. It instrumented ~1,500 lines of C++ in Google's core RPC library, making tracing transparent to application developers. Dapper uses 1/1000 head-based sampling and writes spans to BigTable with a median ingestion latency of 15 seconds. It generates ~1TB of sampled trace data per day. The Dapper model (trace → tree of spans) was adopted by Zipkin (Twitter), Jaeger (Uber), and is now the OpenTelemetry standard.</p>
+    <p style="margin-bottom:0"><strong>Impact:</strong> Google's Ads Review team used Dapper to identify unnecessary serial RPCs on the critical path of ad-serving requests, improving latency by two orders of magnitude. The insight was only visible in trace data — individual service metrics looked fine, but the trace revealed a sequential chain of 12 RPCs that could have been parallelized.</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Netflix: Atlas + Edgar</h3>
+    <p>Netflix operates two complementary monitoring systems. <strong>Atlas</strong> is their in-memory time series database, handling ~2 billion time series with sub-second query latency. Atlas uses a dimensional data model (metrics with key-value tags) and supports complex queries across dimensions. <strong>Edgar</strong> is their distributed tracing system, which samples ~100% of requests (no head-based sampling) using tail-based filtering to retain only interesting traces (errors, high latency, specific user segments).</p>
+    <p style="margin-bottom:0"><strong>Lesson:</strong> Netflix's approach shows that sampling strategy depends on business context. For a streaming platform where any user's experience matters, 100% trace collection (with aggressive tail-based filtering) is justified. For an internal tool with 100 users, 1% sampling suffices.</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Uber: Jaeger</h3>
+    <p style="margin-bottom:0">Uber built Jaeger (open-sourced 2017, CNCF graduated project) to trace requests across their ~4,000 microservices. Jaeger implements the OpenTracing API (now merged into OpenTelemetry) and stores traces in Cassandra or Elasticsearch. Uber's unique contribution: adaptive sampling — each service dynamically adjusts its sampling rate based on observed traffic volume, ensuring that low-traffic services still generate enough traces for debugging while high-traffic services don't overwhelm storage.</p>
+  </div>
+</section>
+
+<!-- S12: EDGE CASES -->
+<section class="section" id="s12">
+  <h2><span class="num">12</span>Edge Cases &amp; War Stories</h2>
+  <div class="card card-red"><p><strong>Logging the Logging System:</strong> Your log pipeline uses Kafka. Kafka has a problem. Kafka emits error logs. Those logs go to... Kafka. Recursive loop. The log pipeline crashes, taking all observability down at the moment you need it most. <strong>Fix:</strong> Infrastructure-level logging (Kafka, Elasticsearch, Prometheus itself) must use a separate, simpler pipeline — direct to local disk or a dedicated syslog server. Never route your monitoring system's own telemetry through the system being monitored.</p></div>
+  <div class="card card-red"><p><strong>Cardinality Bomb:</strong> A developer adds a label <code>user_id</code> to a Prometheus metric. With 10M users, this creates 10M time series. Prometheus's memory usage explodes. Queries slow to a crawl. The TSDB compaction can't keep up. The monitoring system is now the thing that's broken. <strong>Fix:</strong> Never use unbounded-cardinality values (user IDs, request IDs, email addresses) as metric labels. If you need per-user metrics, aggregate them (count, sum, histogram) and use log + trace for per-user debugging.</p></div>
+  <div class="card card-red"><p><strong>Missing Trace Context:</strong> Service A calls Service B via HTTP with trace context. Service B enqueues a message to Kafka. The Kafka consumer (Service C) processes the message — but the trace context wasn't propagated through Kafka. The trace shows A → B, then a separate disconnected trace for C. The end-to-end request is invisible. <strong>Fix:</strong> Propagate trace context as message headers in Kafka/RabbitMQ/SQS. OpenTelemetry's Kafka instrumentation does this automatically, but custom queue consumers need manual context extraction.</p></div>
+  <div class="card card-red"><p><strong>Alert Storm After Deploy:</strong> You deploy a new version. It has a bug that causes 100% error rate. Your alerting system fires alerts for every single microservice that calls the broken one — 50 alerts in 2 minutes. The on-call engineer's phone explodes. They can't distinguish the root cause from the symptoms. <strong>Fix:</strong> Alertmanager's grouping (group by cluster/namespace), inhibition (if service X is down, suppress alerts for services that depend on X), and deduplication. Also: alert on the symptom (user-facing error rate), not on every intermediate service.</p></div>
+  <div class="card card-red"><p style="margin-bottom:0"><strong>Log Injection Attack:</strong> A user submits the username <code>admin\n{"level":"error","msg":"system_compromised"}</code>. If logged naively, this injects a fake error log line. Log analysis tools parse it as a real error, potentially triggering alerts or corrupting dashboards. <strong>Fix:</strong> Use structured logging libraries that JSON-encode values — the newline becomes <code>\n</code> inside the JSON string, not a new log line. Never concatenate user input into log strings.</p></div>
+</section>
+
+<!-- S13: INTERVIEW Q&A -->
+<section class="section" id="s13">
+  <h2><span class="num">13</span>Interview Q&amp;A</h2>
+  <div class="qa"><button type="button" class="qa-q" onclick="event.stopImmediatePropagation(); this.parentElement.classList.toggle('open')">Q1: Explain the difference between logging, monitoring, and tracing. When do you use each?</button><div class="qa-a"><p><strong>Logs</strong> are discrete events — use them for forensic investigation ("what SQL query caused this error?"). <strong>Metrics</strong> are aggregated time series — use them for dashboards and alerts ("is error rate increasing?"). <strong>Traces</strong> are request-scoped — use them for debugging distributed latency ("why was this specific request slow?").</p><p>In an incident: (1) alert fires from a <strong>metric</strong> (error rate &gt; 5%), (2) you look at a <strong>dashboard</strong> to see which service is affected, (3) you grab a <strong>trace</strong> for a failing request to see the call graph, (4) you read the <strong>logs</strong> for the failing span to see the specific error message and stack trace. Each pillar answers different questions; together they give full observability.</p></div></div>
+
+  <div class="qa"><button type="button" class="qa-q" onclick="event.stopImmediatePropagation(); this.parentElement.classList.toggle('open')">Q2: How would you design a logging pipeline for 10TB of logs per day?</button><div class="qa-a"><p><strong>Collection:</strong> Fluentd or Vector as a DaemonSet on every Kubernetes node, tailing container stdout. <strong>Buffer:</strong> Kafka with 3-day retention as a decoupling layer — protects the storage backend from burst traffic and allows replay if the storage backend is temporarily down.</p><p><strong>Storage tiering:</strong> Hot tier (0–7 days): Elasticsearch or Loki for interactive queries. Warm tier (7–30 days): compressed in S3 with a query engine like Athena for occasional access. Cold tier (30–365 days): S3 Glacier for compliance/audit, rarely accessed.</p><p><strong>Cost optimization:</strong> Drop DEBUG logs in production. Sample INFO logs at 10% for high-volume endpoints. Always keep 100% of WARN/ERROR. Compress before storage (gzip gets ~10:1 on JSON logs). Set aggressive TTL per log level (DEBUG: 1 day, INFO: 7 days, ERROR: 90 days).</p><p><strong>Nuance:</strong> At 10TB/day, Elasticsearch costs ~$100K+/year managed. Grafana Loki at the same volume is ~$10K/year because it only indexes labels, not full log content. The tradeoff: Loki full-text search is slower (grep over chunks), but label-based filtering is instant.</p></div></div>
+
+  <div class="qa"><button type="button" class="qa-q" onclick="event.stopImmediatePropagation(); this.parentElement.classList.toggle('open')">Q3: What is the cardinality problem in metrics, and how do you solve it?</button><div class="qa-a"><p><strong>Cardinality</strong> = number of unique time series. Each unique combination of metric name + label values = one time series. <code>http_requests_total{method="GET", status="200", endpoint="/api/users"}</code> is one series. If you add a <code>user_id</code> label with 10M unique users, you create 10M series per endpoint — Prometheus can't handle this.</p><p><strong>Why it matters:</strong> Prometheus indexes every series in memory. Each series consumes ~3–4KB of memory. 10M series = ~40GB of RAM just for the index. Queries over high-cardinality labels are slow because they must scan millions of series.</p><p><strong>Fix:</strong> (1) Never use unbounded-cardinality values as labels (user_id, trace_id, IP address). (2) Use aggregation: instead of per-user latency, track the histogram of all users' latency and use traces for per-user debugging. (3) Drop unused labels with relabeling rules before ingestion. (4) If you truly need high-cardinality metrics, use a purpose-built system like ClickHouse or Tempo that's designed for it.</p></div></div>
+
+  <div class="qa"><button type="button" class="qa-q" onclick="event.stopImmediatePropagation(); this.parentElement.classList.toggle('open')">Q4: You're debugging a slow API response. Walk through how you'd use metrics, traces, and logs together.</button><div class="qa-a"><p><strong>Step 1 — Metrics:</strong> Check the p99 latency dashboard. It shows that <code>GET /api/orders</code> p99 jumped from 200ms to 2s at 14:23. Other endpoints are fine — this is endpoint-specific.</p><p><strong>Step 2 — Traces:</strong> Find a trace for a slow <code>GET /api/orders</code> request. The trace shows: api-gateway (5ms) → order-service (10ms) → inventory-service (1800ms) → postgres (1750ms). The bottleneck is a database query in inventory-service.</p><p><strong>Step 3 — Logs:</strong> Filter logs from inventory-service with the trace_id from the slow trace. Find: <code>{"msg":"slow_query","query":"SELECT * FROM inventory WHERE product_id IN (...5000 items...)","duration_ms":1750}</code>. The query is doing an IN clause with 5000 items — a recent code change introduced a bulk lookup without pagination.</p><p><strong>Step 4 — Resolution:</strong> Add pagination (batch the IN clause into groups of 100), deploy, watch the p99 latency drop back to 200ms on the metrics dashboard.</p></div></div>
+
+  <div class="qa"><button type="button" class="qa-q" onclick="event.stopImmediatePropagation(); this.parentElement.classList.toggle('open')">Q5: Should you sample traces at 1% or 100%? What are the tradeoffs?</button><div class="qa-a"><p><strong>1% sampling (head-based):</strong> Low overhead, low storage cost. Sufficient for high-traffic services (at 10K req/s, 1% = 100 traces/s — plenty for analysis). But you'll miss rare events: if a specific edge case causes an error once per 1000 requests, you might only capture it once per 100,000 requests. Debugging user-reported issues is hard because the specific user's trace was likely not sampled.</p><p><strong>100% collection with tail-based filtering:</strong> Collect everything, but only store "interesting" traces (errors, p99+ latency, specific user flags). Captures all anomalies. But: requires buffering all trace data temporarily (memory/cost), and the decision logic for "interesting" must be fast and reliable.</p><p><strong>Pragmatic approach:</strong> 100% sampling for critical paths (checkout, payment, authentication), 1–10% for everything else. Always sample 100% of error traces. Use adaptive sampling that increases rate for low-traffic services and decreases for high-traffic ones. This is what Uber's Jaeger does.</p></div></div>
+
+  <div class="qa"><button type="button" class="qa-q" onclick="event.stopImmediatePropagation(); this.parentElement.classList.toggle('open')">Q6: How do you correlate logs, metrics, and traces together?</button><div class="qa-a"><p><strong>The glue is the trace_id.</strong> When a request enters the system, a trace_id is generated. This trace_id is: (1) propagated as an HTTP header (<code>traceparent</code>) to all downstream services, (2) included in every structured log line (<code>"trace_id":"abc123"</code>), (3) attached to metric exemplars (Prometheus exemplars link a specific metric sample to a trace_id).</p><p>In Grafana, you can: click a spike on a metrics dashboard → see exemplar trace_ids → click to open the trace in Tempo → click a span to see correlated logs in Loki filtered by that trace_id. This "single pane of glass" flow from metric → trace → log is the goal of unified observability, and it only works if the trace_id is consistently propagated across all three pillars.</p><p><strong>Technical implementation:</strong> OpenTelemetry SDK generates the trace_id and injects it into (1) the tracing SDK (spans), (2) log context (via MDC in Java, structlog in Python, context in Go), (3) the HTTP client for propagation. This is done once in a middleware; application code doesn't need to think about it.</p></div></div>
+</section>
+
+<!-- S14: SYSTEM DESIGN INTERVIEW -->
+<section class="section" id="s14">
+  <h2><span class="num">14</span>Actual System Design Interview</h2>
+  <div class="card card-accent"><p style="margin-bottom:0"><strong>Scenario:</strong> Design a centralized observability platform for a company with 300 microservices, 5,000 Kubernetes pods, and 50,000 requests per second. The platform must collect logs, metrics, and traces; support real-time dashboards; and provide alerting with &lt;1 minute detection time.</p></div>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart LR
+    Pods["Kubernetes pods"]
+    Scrape["Prometheus shards"]
+    Thanos["Thanos query + object store"]
+    Agent["Vector / Fluent Bit"]
+    Kafka["Kafka"]
+    Loki["Loki"]
+    OTel["OTel Collectors"]
+    Tempo["Tempo"]
+    Grafana["Grafana"]
+    Alert["Alertmanager"]
+    Pager["PagerDuty / Slack"]
+    N1["Metrics page fast, logs retain longer"]
+    N2["Tail sampling keeps errors and p99 traces"]
+
+    Pods --> Scrape --> Thanos --> Grafana
+    Pods --> Agent --> Kafka --> Loki --> Grafana
+    Pods --> OTel --> Tempo --> Grafana
+    Scrape --> Alert --> Pager
+    OTel -.-> N2
+    Loki -.-> N1
+
+    classDef app fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef pipe fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef infra fill:#222734,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class Pods app;
+    class Scrape,Agent,OTel,Kafka pipe;
+    class Thanos,Loki,Tempo data;
+    class Grafana,Alert,Pager infra;
+    class N1,N2 note;
+    </pre>
+    <div class="diagram-caption">Whiteboard answer: split the platform into three ingestion paths, keep metrics local enough for alert speed, and push logs and traces into cheaper backends with more selective retention.</div>
+  </div>
+
+  <h3>Round 1: Architecture</h3>
+  <div class="card"><p><strong>Metrics:</strong> Each pod exposes a <code>/metrics</code> endpoint (Prometheus format). A Prometheus server scrapes all endpoints every 15 seconds. PromQL powers dashboards and alert rules. For long-term storage (>15 days), use Thanos Sidecar which uploads TSDB blocks to S3 and provides a global query layer across multiple Prometheus instances.</p><p><strong>Logs:</strong> Pods write to stdout (12-factor). A Fluentd DaemonSet tails the container log files, parses JSON, enriches with Kubernetes metadata (pod name, namespace, labels), and forwards to Kafka. A consumer writes to Loki (indexed by namespace, service, level) with S3 backend for chunks. Retention: 7 days hot (Loki), 90 days cold (S3 + Athena).</p><p style="margin-bottom:0"><strong>Traces:</strong> OpenTelemetry SDK auto-instruments HTTP and gRPC clients. Spans are sent to an OTel Collector (deployed as a DaemonSet) which batches, tail-samples (keep errors + p99), and exports to Grafana Tempo (backed by S3). Sampling: 100% for payment/auth services, 5% for everything else. Retention: 7 days.</p></div>
+
+  <h3>Round 2: Alerting</h3>
+  <div class="card"><p>Prometheus evaluates alerting rules every 15 seconds. Critical alerts (error rate > 5% for 2+ minutes, p99 latency > 2s for 5+ minutes) route to PagerDuty and page the on-call engineer. Warning alerts route to a Slack channel. Alertmanager groups alerts by service to prevent storm.</p><p style="margin-bottom:0"><strong>Detection latency:</strong> Prometheus scrapes every 15s + rule evaluation every 15s + "for" duration of 2 minutes = worst case ~2.5 minutes from symptom to page. To get &lt;1 minute: reduce scrape interval to 5s, reduce "for" to 30s, accept higher false-positive rate. Tradeoff: faster detection means more noise. Google SRE recommends optimizing for "time to meaningful page" not "time to any page."</p></div>
+
+  <h3>Round 3: Scale Challenges</h3>
+  <p><strong>Interviewer:</strong> "With 300 services and 500K time series, a single Prometheus instance hits limits. How do you scale?"</p>
+  <div class="card"><p><strong>Horizontal sharding:</strong> Run multiple Prometheus instances, each scraping a subset of targets (shard by namespace or by target hash). Use Thanos Query to federate queries across all Prometheus instances — the user queries one endpoint that fans out to all shards.</p><p style="margin-bottom:0"><strong>The cardinality guard:</strong> A pre-processor on the OTel Collector drops metrics with labels that exceed a cardinality threshold (e.g., >10K unique values for a single label). This prevents cardinality bombs from reaching Prometheus. Alert the owning team when their service exceeds the cardinality budget.</p></div>
+</section>
+
+<!-- S15: WHAT IF? INTERACTIVE -->
+<section class="section" id="s15">
+  <h2><span class="num">15</span>What If? Interactive</h2>
+  <p>Vary <strong>log volume</strong> and <strong>trace sampling rate</strong> to see how storage costs and debuggability change.</p>
+  <div class="slider-group"><div class="slider-label">Services <span id="v-svc">100</span></div><input type="range" class="slider-input" id="sl-svc" min="10" max="1000" step="10" value="100"></div>
+  <div class="slider-group"><div class="slider-label">Requests/sec (total) <span id="v-rps">50000</span></div><input type="range" class="slider-input" id="sl-rps" min="1000" max="500000" step="1000" value="50000"></div>
+  <div class="slider-group"><div class="slider-label">Trace Sampling % <span id="v-sample">1</span>%</div><input type="range" class="slider-input" id="sl-sample" min="0" max="100" step="1" value="1"></div>
+  <div class="tradeoff-cards">
+    <div class="card card-orange"><p style="font-family:var(--mono);font-size:12px;color:var(--orange);margin-bottom:8px">DAILY STORAGE</p><p style="font-size:14px"><strong>Logs:</strong> <span id="r-logs">430 GB</span></p><p style="font-size:14px"><strong>Metrics:</strong> <span id="r-metrics">3 GB</span></p><p style="font-size:14px;margin-bottom:0"><strong>Traces:</strong> <span id="r-traces">86 GB</span></p></div>
+    <div class="card card-accent"><p style="font-family:var(--mono);font-size:12px;color:var(--accent);margin-bottom:8px">DEBUGGABILITY</p><p style="font-size:14px"><strong>Traces/sec stored:</strong> <span id="r-tps">500</span></p><p style="font-size:14px"><strong>Chance of capturing a 1-in-1000 error:</strong> <span id="r-chance">~50%</span></p><p style="font-size:14px;margin-bottom:0"><strong>Monthly storage cost (est.):</strong> <span id="r-cost">~$5,000</span></p></div>
+  </div>
+  <div class="card card-purple"><p style="margin-bottom:0;font-size:14px" id="r-verdict4">At 1% sampling, you store 500 traces/sec — enough for aggregate analysis but you'll miss ~99% of individual errors. Consider tail-based sampling to capture 100% of error traces.</p></div>
+</section>
+
+<!-- S16: MENTAL MODEL -->
+<section class="section" id="s16">
+  <h2><span class="num">16</span>Mental Model</h2>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart TD
+    Alert["Alert fires"]
+    Dash["Metrics dashboard"]
+    Trace["Trace for one bad request"]
+    Logs["Logs filtered by trace_id"]
+    Root["Root cause and fix"]
+    N1["Which service?\nSince when?"]
+    N2["Where is the bottleneck?"]
+    N3["What exactly failed?"]
+
+    Alert --> Dash --> Trace --> Logs --> Root
+    Dash -.-> N1
+    Trace -.-> N2
+    Logs -.-> N3
+
+    classDef red fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
+    classDef blue fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:3px;
+    classDef purple fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
+    classDef green fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+
+    class Alert,Logs red;
+    class Dash blue;
+    class Trace purple;
+    class Root green;
+    class N1,N2,N3 note;
+    </pre>
+    <div class="diagram-caption">Investigation order matters: metrics narrow the blast radius, traces isolate the expensive hop, and logs explain the exact failure for that trace.</div>
+  </div>
+</section>
+
+<!-- S17: REFERENCES -->
+<section class="section" id="s17">
+  <h2><span class="num">17</span>References &amp; Further Reading</h2>
+  <div class="ref"><div class="ref-title">[1] Dapper, a Large-Scale Distributed Systems Tracing Infrastructure (Sigelman et al., 2010)</div><p><strong>Benjamin H. Sigelman, Luiz André Barroso, Mike Burrows, et al.</strong> Google Technical Report, 2010.<br><a href="https://research.google.com/archive/papers/dapper-2010-1.pdf" target="_blank">https://research.google.com/archive/papers/dapper-2010-1.pdf</a></p><p>• Defines the trace/span model: a trace is a tree, each node is a span corresponding to one RPC on one machine. Spans store a unique span_id, parent span_id, and a globally unique trace_id (probabilistically unique 64-bit integers). This model is now the industry standard via OpenTelemetry.</p><p>• Achieves application-level transparency by instrumenting ~1,500 lines of C++ in Google's core RPC library. Nearly every Google production process supports tracing without application code changes. Only a handful of services using raw TCP sockets (not instrumented RPC) are invisible to Dapper.</p><p>• Uses head-based sampling at 1/1000 for latency-sensitive web services. The insight: meaningful performance patterns recur, so sampling captures them statistically. At Google's scale (~billions of RPCs/day), 1/1000 still yields millions of traces per day.</p><p>• Spans are written to local log files, collected by daemons, and stored in BigTable (one row per trace, one column per span). Median ingestion latency from span creation to BigTable availability: 15 seconds. The out-of-band collection model was chosen over in-band (attaching trace data to RPC responses) because in-band data near the root of a deep trace tree would dwarf the actual application response payload.</p><p>• Impact case study: Google's Ads Review team used Dapper to identify unnecessary sequential RPCs along critical ad-serving paths, reducing latency by two orders of magnitude. The bottleneck was invisible in individual service metrics — only the end-to-end trace revealed the serial dependency chain.</p></div>
+
+  <div class="ref"><div class="ref-title">[2] Gorilla: A Fast, Scalable, In-Memory Time Series Database (Pelkonen et al., 2015)</div><p><strong>Tuomas Pelkonen, Scott Franklin, Justin Teller, et al.</strong> VLDB 2015.<br><a href="https://www.vldb.org/pvldb/vol8/p1816-teller.pdf" target="_blank">https://www.vldb.org/pvldb/vol8/p1816-teller.pdf</a></p><p>• Facebook's in-memory TSDB that replaced an HBase-backed system. The key insight: monitoring users care more about aggregate analysis of recent data than individual historical data points. Gorilla optimizes for write availability and read latency over long-term durability.</p><p>• Compression: delta-of-delta for timestamps (96% of timestamps compress to a single bit because the interval is constant), XOR for float64 values (51% of values are identical to their predecessor and compress to 1 bit). Overall: 16 bytes/sample → 1.37 bytes/sample average, a 12× reduction.</p><p>• In-memory storage with dual-region replication (writes synchronously to two hosts in different regions). GlusterFS for durable backup. Accepts potential data loss of a few seconds during simultaneous dual-region failure — an explicit tradeoff for write availability.</p><p>• Reduced Facebook's production monitoring query latency by 73× and improved query throughput by 14× compared to the HBase-backed TSDB. Prometheus TSDB adopted the same compression scheme and cites this paper directly.</p><p>• Data model: each data point is a 3-tuple (string key, 64-bit timestamp, double-precision float value). The in-memory data structure (TSmap) allows constant-time lookup for individual series and fast sequential scans for range queries.</p></div>
+
+  <div class="ref"><div class="ref-title">[3] Google SRE Book — Chapter 6: Monitoring Distributed Systems (2016)</div><p><strong>Betsy Beyer, Chris Jones, Jennifer Petoff, Niall Richard Murphy.</strong> O'Reilly, 2016.<br><a href="https://sre.google/sre-book/monitoring-distributed-systems/" target="_blank">https://sre.google/sre-book/monitoring-distributed-systems/</a></p><p>• Introduces the "Four Golden Signals" for monitoring any user-facing system: latency (distinguish successful vs. failed request latency), traffic (requests per second), errors (rate of failed requests), and saturation (how "full" the service is — resource utilization approaching limits).</p><p>• Defines alert philosophy: "Pages should be about a novel problem or an event that hasn't been seen before. Every page should be actionable. Every page response should require intelligence — if a page only merits a robotic response, it shouldn't be a page." This principle eliminates alert fatigue.</p><p>• Discusses symptoms vs. causes: alert on symptoms (high user-facing latency), not causes (high CPU). High CPU with normal latency doesn't need a page. Normal CPU with high latency does. Symptom-based alerting decouples alerts from internal implementation details.</p><p>• Recommends "black-box monitoring" (probing the system from the outside, as a user would) over "white-box monitoring" (inspecting internal state) for alerting. White-box is better for debugging. Both are needed, but only black-box should page.</p><p>• The chapter warns against monitoring for the sake of monitoring: "The volume of nonactionable alerts going to a human is a problem, even if those alerts aren't causing someone to get out of bed." Every dashboard and alert should have a clear owner and purpose.</p></div>
+
+  <div class="ref"><div class="ref-title">[4] OpenTelemetry Specification (CNCF, ongoing)</div><p><strong>CNCF OpenTelemetry Project.</strong> Ongoing.<br><a href="https://opentelemetry.io/docs/specs/otel/" target="_blank">https://opentelemetry.io/docs/specs/otel/</a></p><p>• Unifies traces, metrics, and logs into a single SDK and collector (OTLP wire protocol). Formed by merging OpenTracing (trace API standard) and OpenCensus (Google's open-source Dapper client) in 2019. Now the second most active CNCF project after Kubernetes.</p><p>• Defines the data model: a Span has trace_id (128-bit), span_id (64-bit), parent_span_id, name, start/end timestamps, status, attributes (key-value pairs), events (timestamped annotations within the span), and links (to related traces). Metrics use the Counter/Gauge/Histogram taxonomy. Logs carry trace_id and span_id for correlation.</p><p>• Context propagation standardized via W3C Trace Context: the <code>traceparent</code> HTTP header carries <code>version-trace_id-parent_span_id-trace_flags</code> in a single header. Supported by all major HTTP frameworks, gRPC, and message queues.</p><p>• The OTel Collector is a vendor-agnostic proxy that receives telemetry data, processes it (batching, sampling, enrichment, filtering), and exports to any backend (Prometheus, Jaeger, Datadog, Loki, Tempo). This decouples instrumentation from the observability backend — you can switch from Jaeger to Tempo without changing application code.</p><p>• Auto-instrumentation: OTel provides zero-code instrumentation for popular frameworks (Express, Spring, Flask, .NET) that automatically creates spans for HTTP requests, database queries, and message queue operations. Manual instrumentation is only needed for business-logic-level tracing.</p></div>
+
+  <div class="ref"><div class="ref-title">[5] Designing Data-Intensive Applications — Chapter 4 & 10 (Kleppmann, 2017)</div><p><strong>Martin Kleppmann.</strong> O'Reilly, 2017.<br><a href="https://dataintensive.net" target="_blank">https://dataintensive.net</a></p><p>• Chapter 4 discusses encoding formats relevant to log pipelines: JSON (human-readable but verbose), Protocol Buffers/Thrift (binary, compact, schema-enforced), and Avro (schema evolution without field tags). OTLP uses Protocol Buffers; Kafka log pipelines often use Avro with Schema Registry for evolution.</p><p>• Chapter 10 on batch processing describes the log-structured approach: immutable, append-only records that flow through processing stages. This is exactly how log aggregation pipelines work (append logs → Kafka → transform → store). The insight: treating logs as an immutable stream enables replay, reprocessing, and derived views (different indexes over the same log data).</p><p>• The concept of "derived data systems" (Chapter 10–11) applies directly to observability: metrics, dashboards, and alerts are all derived views of the raw telemetry stream. The raw data (logs, spans) is the source of truth; metrics are a compressed, aggregated projection optimized for specific queries.</p><p>• Chapter 8's discussion of clock synchronization (NTP accuracy of 100ms–1s) is directly relevant to distributed tracing, where spans from different hosts must be ordered correctly. Dapper addresses this by recording clock skew between RPC client and server timestamps within each span.</p></div>
+</section>
+
+<footer class="site-footer">System Design Fundamentals · Topic 19 · built for deep understanding</footer>
+</div>
+
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+<script src="../../assets/js/topic.js"></script>
+<script>
+document.querySelectorAll('.qa').forEach((item) => {
+  const trigger = item.querySelector('.qa-q');
+  if (!trigger || trigger.dataset.boundAccordion === 'true') {
+    return;
+  }
+  trigger.dataset.boundAccordion = 'true';
+  trigger.addEventListener('click', () => {
+    item.classList.toggle('open');
+  });
+});
+
+function updateCalc4(){
+  const svc=+document.getElementById('sl-svc').value;
+  const rps=+document.getElementById('sl-rps').value;
+  const sample=+document.getElementById('sl-sample').value;
+  document.getElementById('v-svc').textContent=svc;
+  document.getElementById('v-rps').textContent=rps.toLocaleString();
+  document.getElementById('v-sample').textContent=sample;
+
+  // Logs: ~500 bytes per log line, ~2 log lines per request
+  const logGB=((rps*2*500*86400)/(1024**3)).toFixed(0);
+  // Metrics: ~1.37 bytes/sample, ~5000 series per service, 1 sample/15s
+  const metricsGB=((svc*5000*1.37*(86400/15))/(1024**3)).toFixed(1);
+  // Traces: ~2KB/span * ~5 spans/trace * sample%
+  const tracesGB=((rps*(sample/100)*5*2000*86400)/(1024**3)).toFixed(0);
+
+  document.getElementById('r-logs').textContent=logGB+' GB';
+  document.getElementById('r-metrics').textContent=metricsGB+' GB';
+  document.getElementById('r-traces').textContent=tracesGB+' GB';
+
+  const tps=Math.round(rps*sample/100);
+  document.getElementById('r-tps').textContent=tps.toLocaleString();
+
+  // Chance of capturing 1-in-1000 error
+  const chance=sample>=100?'100%':sample>=10?'~'+Math.min(99,Math.round(sample*10))+'%':sample>=1?'~'+Math.round(sample*10)+'%':'<1%';
+  document.getElementById('r-chance').textContent=chance;
+
+  // Rough cost: $0.023/GB S3 + $0.10/GB Loki + $0.05/GB Tempo
+  const totalGB=parseFloat(logGB)+parseFloat(metricsGB)+parseFloat(tracesGB);
+  const monthlyCost=Math.round(totalGB*30*0.05);
+  document.getElementById('r-cost').textContent='~$'+monthlyCost.toLocaleString();
+
+  let verdict='';
+  if(sample<1)verdict=`At ${sample}% sampling, you'll miss almost all individual errors. Only aggregate patterns are visible. Consider at least 1% or tail-based sampling.`;
+  else if(sample<=5)verdict=`At ${sample}% sampling, you store ${tps.toLocaleString()} traces/sec — enough for aggregate analysis but you'll miss ~${100-sample}% of individual errors. Consider tail-based sampling to capture 100% of error traces.`;
+  else if(sample<=50)verdict=`At ${sample}% sampling, you have good trace coverage. Storage cost is ${tracesGB} GB/day for traces alone. Balance cost vs. debuggability based on your budget.`;
+  else verdict=`At ${sample}% sampling, you have excellent trace coverage but storage costs are high (${tracesGB} GB/day). Consider tail-based sampling to reduce storage while keeping error coverage at 100%.`;
+  document.getElementById('r-verdict4').textContent=verdict;
+}
+['sl-svc','sl-rps','sl-sample'].forEach(id=>{document.getElementById(id).addEventListener('input',updateCalc4)});
+updateCalc4();
+</script>
+</body>
+</html>
