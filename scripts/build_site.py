@@ -174,6 +174,14 @@ GRAPH_LAYOUT = {
         "deps": ["availability", "latency-and-throughput", "sockets", "config"],
         "orbit_rotation": 6,
     },
+    "pub-sub": {
+        "x": 1290,
+        "y": 620,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["sockets", "storage", "key-value-stores", "replication-sharding"],
+        "orbit_rotation": 28,
+    },
 }
 
 
