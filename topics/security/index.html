@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Security &amp; HTTPS</title>
+<meta name="description" content="A system design guide to HTTPS, TLS handshakes, certificate authorities, encryption, forward secrecy, and production certificate management.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+<style>
+:root{--bg:#0c0e13;--surface:#14171e;--surface-2:#1a1e28;--surface-3:#222734;--border:#2a3040;--border-accent:#3d4663;--text:#e2e6f0;--text-dim:#8891a8;--text-muted:#5c6580;--accent:#6ee7b7;--accent-dim:#34d399;--accent-bg:rgba(110,231,183,0.08);--orange:#fb923c;--orange-bg:rgba(251,146,60,0.1);--blue:#60a5fa;--blue-bg:rgba(96,165,250,0.08);--red:#f87171;--red-bg:rgba(248,113,113,0.08);--purple:#a78bfa;--purple-bg:rgba(167,139,250,0.08);--yellow:#fbbf24;--yellow-bg:rgba(251,191,36,0.08);--mono:'IBM Plex Mono',monospace;--serif:'Source Serif 4',Georgia,serif;--sans:'DM Sans',system-ui,sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased}.container{max-width:920px;margin:0 auto;padding:0 28px}
+.hero{padding:80px 0 60px;border-bottom:1px solid var(--border)}.hero-label{font-family:var(--mono);font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--accent);margin-bottom:16px}.hero h1{font-family:var(--serif);font-size:clamp(36px,5vw,56px);font-weight:700;line-height:1.15;color:var(--text);margin-bottom:20px}.hero h1 span{color:var(--accent)}.hero-sub{font-size:18px;color:var(--text-dim);max-width:640px;line-height:1.7}
+.toc{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;margin:48px 0}.toc h2{font-family:var(--mono);font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:20px}.toc ol{list-style:none;counter-reset:toc;display:grid;grid-template-columns:1fr 1fr;gap:8px 32px}.toc li{counter-increment:toc}.toc li::before{content:none}.toc a{color:var(--text-dim);text-decoration:none;font-size:15px;transition:color .2s}.toc a:hover{color:var(--accent)}
+section{padding:56px 0;border-bottom:1px solid var(--border)}section:last-of-type{border-bottom:none}
+h2{font-family:var(--serif);font-size:clamp(24px,3.5vw,36px);font-weight:700;margin-bottom:24px;color:var(--text)}h2 .num{color:var(--accent);font-family:var(--mono);font-size:0.6em;margin-right:8px}
+h3{font-family:var(--sans);font-size:20px;font-weight:600;margin:32px 0 16px;color:var(--text)}
+p{margin-bottom:16px;color:var(--text-dim)}strong{color:var(--text);font-weight:600}
+code{font-family:var(--mono);font-size:0.9em;background:var(--surface-2);padding:2px 7px;border-radius:4px;color:var(--accent)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;overflow-x:auto;margin:20px 0;font-family:var(--mono);font-size:13.5px;line-height:1.7;color:var(--text-dim)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px 28px;margin:20px 0}.card-accent{border-left:3px solid var(--accent);background:var(--accent-bg)}.card-orange{border-left:3px solid var(--orange);background:var(--orange-bg)}.card-blue{border-left:3px solid var(--blue);background:var(--blue-bg)}.card-red{border-left:3px solid var(--red);background:var(--red-bg)}.card-purple{border-left:3px solid var(--purple);background:var(--purple-bg)}.card-yellow{border-left:3px solid var(--yellow);background:var(--yellow-bg)}
+.term{margin-bottom:24px}.term-name{font-family:var(--mono);font-weight:600;color:var(--accent);font-size:17px;margin-bottom:6px;display:flex;align-items:center;gap:8px}.term-name::before{content:'';width:3px;height:18px;background:var(--accent);border-radius:2px;flex-shrink:0}.term-def{color:var(--text-dim);padding-left:11px}
+table{width:100%;border-collapse:collapse;margin:20px 0;font-size:14.5px}th{font-family:var(--mono);font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--accent);text-align:left;padding:12px 16px;border-bottom:2px solid var(--border);background:var(--surface)}td{padding:12px 16px;border-bottom:1px solid var(--border);color:var(--text-dim)}tr:hover td{background:var(--surface)}
+.qa{margin:20px 0;border:1px solid var(--border);border-radius:10px;overflow:hidden}.qa-q{padding:16px 20px;background:var(--surface);cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:15px;color:var(--text);user-select:none;transition:background .15s;width:100%;border:0;text-align:left;font-family:inherit}.qa-q:hover{background:var(--surface-2)}.qa-q::after{content:'+';font-family:var(--mono);font-size:18px;color:var(--accent);transition:transform .2s;min-width:20px;text-align:right}.qa.open .qa-q::after{content:'−'}.qa-a{display:none;padding:18px 20px;background:var(--surface-2);color:var(--text-dim);font-size:14.5px;line-height:1.75;border-top:1px solid var(--border)}.qa.open .qa-a{display:block}.qa-a p{margin-bottom:10px}.qa-a p:last-child{margin-bottom:0}
+.ref{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px 28px;margin:16px 0}.ref-title{font-family:var(--mono);font-size:13px;color:var(--accent);margin-bottom:8px}.ref p{font-size:14px;margin-bottom:6px}.ref a{color:var(--purple);text-decoration:none}.ref a:hover{text-decoration:underline}
+.slider-group{margin:20px 0}.slider-label{font-family:var(--mono);font-size:13px;color:var(--text-dim);margin-bottom:8px;display:flex;justify-content:space-between}.slider-label span{color:var(--accent)}.slider-input{width:100%;-webkit-appearance:none;appearance:none;height:6px;background:var(--surface-3);border-radius:3px;outline:none}.slider-input::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--accent);cursor:pointer}
+.tradeoff-cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+@media(max-width:700px){.toc ol{grid-template-columns:1fr}.tradeoff-cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">Topic 24 of 25 — System Design Fundamentals</div>
+  <h1>Security <span>&amp; HTTPS</span></h1>
+  <p class="hero-sub">How encryption, certificates, and TLS handshakes protect bytes on the wire, from the math of key exchange to certificate operations at scale.</p>
+</header>
+
+<nav class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#s0">Key Terms</a></li>
+    <li><a href="#s2">Why HTTPS Everywhere?</a></li>
+    <li><a href="#s3">Encryption Fundamentals</a></li>
+    <li><a href="#s4">The TLS Handshake</a></li>
+    <li><a href="#s5">Certificates &amp; CAs</a></li>
+    <li><a href="#s6">TLS 1.3 vs 1.2</a></li>
+    <li><a href="#s7">Memory Map</a></li>
+    <li><a href="#s8">Terminal Demos</a></li>
+    <li><a href="#s9">Mini-Projects</a></li>
+    <li><a href="#s10">Production Examples</a></li>
+    <li><a href="#s11">Edge Cases &amp; War Stories</a></li>
+    <li><a href="#s12">Interview Q&amp;A</a></li>
+    <li><a href="#s13">System Design Interview</a></li>
+    <li><a href="#s14">What If? Interactive</a></li>
+    <li><a href="#s15">Mental Model</a></li>
+    <li><a href="#s16">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- S1 -->
+<section class="section" id="s0">
+  <h2><span class="num">01</span>Key Terms</h2>
+  <div class="term"><div class="term-name">Man-in-the-Middle Attack (MITM)</div><div class="term-def">An attack where an adversary secretly intercepts and potentially alters communication between two parties who believe they are communicating directly. On an unencrypted HTTP connection, an attacker on the same network (coffee shop WiFi, compromised router) can read passwords, session tokens, and all data in transit. HTTPS prevents MITM by encrypting the channel and authenticating the server's identity via certificates. Without HTTPS, ISPs can inject ads into pages, governments can surveil traffic, and attackers can steal credentials — all demonstrated in the wild.</div></div>
+  <div class="term"><div class="term-name">Symmetric Encryption</div><div class="term-def">Encryption where the same key is used to both encrypt and decrypt data. It is fast; AES-GCM and ChaCha20-Poly1305 are designed for bulk traffic, and hardware acceleration can push AES throughput into the gigabytes-per-second range. The challenge is key distribution: both parties need the same key before communication starts, but sending that key in plaintext gives it to the attacker too. TLS solves this by using a handshake to derive shared traffic keys without putting those keys directly on the wire.</div></div>
+  <div class="term"><div class="term-name">Asymmetric Encryption (Public-Key)</div><div class="term-def">Encryption using a mathematically linked key pair: a <strong>public key</strong> (shared openly) and a <strong>private key</strong> (kept secret). Data encrypted with the public key can only be decrypted with the private key, and a private-key signature can be verified with the matching public key. Public-key operations are much slower than symmetric encryption, so TLS uses them for authentication and key agreement, not bulk data transfer. Algorithms: RSA for signatures and legacy key transport, plus ECDSA/ECDH for smaller keys at comparable security levels.</div></div>
+  <div class="term"><div class="term-name">AES (Advanced Encryption Standard)</div><div class="term-def">The dominant symmetric encryption algorithm, standardized by NIST in 2001 after a 5-year international competition. Three key sizes: AES-128 (10 rounds), AES-192 (12 rounds), AES-256 (14 rounds). AES-256 is approved for protecting classified U.S. government information when used in approved systems. In TLS 1.3, AES is used in GCM (Galois/Counter Mode), an AEAD mode that provides both encryption and authentication. Modern CPUs often include AES acceleration, which makes bulk encryption fast enough that network and application work usually dominate.</div></div>
+  <div class="term"><div class="term-name">HTTPS</div><div class="term-def"><strong>H</strong>yper<strong>T</strong>ext <strong>T</strong>ransfer <strong>P</strong>rotocol <strong>S</strong>ecure — HTTP layered on top of TLS. The browser connects to port 443 (instead of HTTP's port 80), performs a TLS handshake, then sends and receives HTTP requests/responses through the encrypted channel. The URL begins with <code>https://</code>. Chrome has marked all HTTP pages as "Not secure" since Chrome 68, and Google's 2025 Chrome data puts HTTPS main-frame navigations in the 95-99% range. HTTPS provides confidentiality, integrity, and server authentication.</div></div>
+  <div class="term"><div class="term-name">TLS (Transport Layer Security)</div><div class="term-def">A cryptographic protocol that provides secure communication over a network. TLS sits between the application layer (HTTP) and the transport layer (TCP). Current version: TLS 1.3 (RFC 8446, August 2018). TLS 1.3 normally completes a full handshake in one round trip, down from the common two-round-trip TLS 1.2 ECDHE flow, and supports 0-RTT for session resumption with replay caveats. TLS 1.0 and 1.1 were deprecated in 2021 (RFC 8996). "SSL" (Secure Sockets Layer) was TLS's predecessor (SSL 3.0 was the last version, deprecated in 2015 due to the POODLE attack). The terms "SSL" and "TLS" are often used interchangeably in casual conversation, but technically SSL is obsolete.</div></div>
+  <div class="term"><div class="term-name">TLS Certificate</div><div class="term-def">A digital document that binds a public key to one or more DNS names, issued and signed by a <strong>Certificate Authority (CA)</strong>. The certificate contains the server's public key, subject alternative names (SANs), issuer, validity period, and signature metadata. When a browser connects to <code>https://example.com</code>, the server sends its certificate chain. The browser checks that the chain leads to a trusted root, the SAN covers the hostname, the certificate is currently valid, and browser-specific checks such as Certificate Transparency and revocation signals pass where applicable.</div></div>
+  <div class="term"><div class="term-name">Certificate Authority (CA)</div><div class="term-def">A trusted entity that issues and signs digital certificates. The browser/OS ships with a pre-installed trust store of root CAs. A CA verifies that the requester controls the domain, usually with an HTTP, DNS, or TLS-ALPN ACME challenge, before issuing a certificate. Major CAs include Let's Encrypt, DigiCert, Sectigo, and GlobalSign. The usual chain is root CA → intermediate CA → end-entity certificate. Browsers validate that chain during the TLS handshake.</div></div>
+  <div class="term"><div class="term-name">TLS Handshake</div><div class="term-def">The process by which a client and server establish a secure connection. In a typical TLS 1.3 full handshake: (1) Client sends <strong>ClientHello</strong> with supported cipher suites and a key share. (2) Server responds with <strong>ServerHello</strong> containing the chosen cipher suite, its key share, its certificate, and a signature proving it holds the private key. (3) Both sides derive the same traffic keys from the combined key shares. (4) Client sends <strong>Finished</strong>. This is normally one round trip. In a common TLS 1.2 ECDHE handshake, key exchange parameters were sent later, so the full handshake used two round trips.</div></div>
+</section>
+
+<!-- S2 -->
+<section class="section" id="s2">
+  <h2><span class="num">02</span>Why HTTPS Everywhere?</h2>
+  <div class="card card-accent">
+    <p><strong>Confidentiality:</strong> Without HTTPS, every byte — passwords, credit card numbers, session cookies, personal messages — travels across the network in plaintext. Any device between client and server (routers, switches, WiFi access points, ISP equipment) can read everything. HTTPS encrypts all HTTP traffic.</p>
+    <p><strong>Integrity:</strong> Without HTTPS, an attacker (or ISP) can modify the data in transit — injecting ads into web pages, altering form submissions, swapping download links with malware. TLS's AEAD encryption detects any tampering: if even one bit is changed, decryption fails.</p>
+    <p><strong>Authentication:</strong> Without HTTPS, you have no proof you're talking to the real server. A DNS hijack or BGP route leak could redirect your requests to an attacker's server. The TLS certificate proves the server's identity — the browser verifies it was signed by a trusted CA for the correct domain.</p>
+    <p style="margin-bottom:0"><strong>The modern web assumes HTTPS:</strong> major browsers negotiate HTTP/2 over TLS, and powerful APIs such as Service Workers and Geolocation are restricted to secure contexts. Google Search has used HTTPS as a lightweight ranking signal since 2014. Chrome marks HTTP pages as "Not secure" today and plans to warn before loading public HTTP sites by default in 2026.</p>
+  </div>
+</section>
+
+<!-- S3 -->
+<section class="section" id="s3">
+  <h2><span class="num">03</span>Encryption Fundamentals</h2>
+  <h3>Symmetric: Fast, Shared Secret</h3>
+  <pre>// Conceptual symmetric encryption
+key = "s3cr3t-256-bit-key"
+
+ciphertext = AES_ENCRYPT(key, "Hello, World!")    // → "9f1a3c7b..."
+plaintext  = AES_DECRYPT(key, "9f1a3c7b...")      // → "Hello, World!"
+
+// Same key encrypts and decrypts
+// Problem: how do client and server agree on the key securely?</pre>
+
+  <h3>Asymmetric: Slow, Key Pair</h3>
+  <pre>// Conceptual asymmetric encryption
+(public_key, private_key) = GENERATE_RSA_KEYPAIR(2048)
+
+// Encrypt with public key → only private key can decrypt
+ciphertext = RSA_ENCRYPT(public_key, "secret message")
+plaintext  = RSA_DECRYPT(private_key, ciphertext)  // → "secret message"
+
+// Digital signature: sign with private key → anyone with public key can verify
+signature = RSA_SIGN(private_key, "document hash")
+valid     = RSA_VERIFY(public_key, "document hash", signature)  // → true</pre>
+
+  <h3>The Hybrid Approach (What TLS Actually Does)</h3>
+  <div class="card card-blue">
+    <p>TLS combines public-key cryptography with symmetric encryption. The handshake authenticates the server and derives shared traffic keys. After that, the record layer uses fast symmetric AEAD ciphers for application data.</p>
+    <p style="margin-bottom:0"><strong>Specifically in TLS 1.3:</strong> a certificate-based handshake normally uses ephemeral (EC)DHE to derive a shared secret. Both sides generate temporary key material, exchange public shares, and compute the same secret independently. That secret feeds the TLS key schedule, which produces traffic keys for the negotiated AEAD cipher such as AES-GCM or ChaCha20-Poly1305. Because the key exchange is ephemeral, stealing the server's long-term signing key later does not reveal old traffic keys.</p>
+  </div>
+
+  <h3>Forward Secrecy</h3>
+  <p>Without forward secrecy, static RSA key exchange in older TLS deployments had a bad failure mode: if an attacker recorded traffic and later stole the server's private key, they could decrypt those old sessions. With ephemeral Diffie-Hellman, each session uses temporary key material that is discarded after the session ends. The server's long-term private key authenticates the handshake; it does not directly decrypt old traffic. TLS 1.3 removes static RSA key exchange, so normal certificate-based HTTPS uses ephemeral key exchange by design.</p>
+</section>
+
+<!-- S4 -->
+<section class="section" id="s4">
+  <h2><span class="num">04</span>The TLS 1.3 Handshake</h2>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Server
+    Note over C,S: TCP connection is already established
+    C->>S: ClientHello
+    Note right of C: TLS 1.3, random bytes, cipher suites, supported groups, client ECDHE key share
+    S-->>C: ServerHello
+    Note left of S: Chosen cipher suite and server ECDHE key share
+    Note over C,S: ECDHE shared secret is computed on both sides
+    Note over C,S: Handshake messages below are encrypted
+    S-->>C: EncryptedExtensions
+    S-->>C: Certificate chain
+    S-->>C: CertificateVerify
+    Note left of S: Signature proves the server has the private key
+    S-->>C: Finished
+    Note right of C: Client validates CA chain, SAN, expiry, CT/revocation signals, and transcript MAC
+    C->>S: Finished
+    Note over C,S: Handshake complete in one round trip
+    C->>S: HTTPS request encrypted with session keys
+    S-->>C: HTTPS response encrypted with session keys
+    </pre>
+    <div class="diagram-caption">TLS 1.3 sends the client key share immediately, so the server can complete key agreement and send the encrypted certificate flight in the same round trip.</div>
+  </div>
+  <div class="card card-accent">
+    <p style="margin-bottom:0"><strong>Key improvement over TLS 1.2:</strong> In a common TLS 1.2 ECDHE handshake, the client sends ClientHello first, waits for the server's parameters and certificate, then sends its key exchange message. TLS 1.3 moves the client's key share into ClientHello, so the server can compute the shared secret immediately and encrypt the rest of its handshake flight. <strong>Result: one fewer network round trip</strong> on a full handshake. On a 100 ms path, that is roughly 100 ms saved before application data can flow.</p>
+  </div>
+</section>
+
+<!-- S5 -->
+<section class="section" id="s5">
+  <h2><span class="num">05</span>Certificates &amp; Certificate Authorities</h2>
+  <h3>The Chain of Trust</h3>
+  <pre>Root CA (e.g., DigiCert Global Root G2)          ← pre-installed in browser/OS trust store
+  └── Intermediate CA (e.g., DigiCert SHA2 Secure Server CA)
+        └── End-Entity Certificate (e.g., *.example.com)   ← your server's certificate</pre>
+  <p>The browser verifies the chain: your server's certificate is signed by the intermediate CA, whose certificate is signed by the root CA, which is in the browser's trust store. If any link in the chain is invalid, the connection fails.</p>
+
+  <h3>Let's Encrypt &amp; ACME Protocol</h3>
+  <div class="card card-purple">
+    <p>Let's Encrypt launched public certificate issuance in 2015 and made domain-validated certificates free and automatable through ACME. A typical flow is: (1) run an ACME client such as <code>certbot</code>, (2) request a certificate, (3) satisfy an HTTP, DNS, or TLS-ALPN challenge, (4) let the CA verify domain control, and (5) install the issued certificate and renewal job. By late 2025, Let's Encrypt reported serving more than 700 million websites and issuing ten million certificates on some days.</p>
+    <p style="margin-bottom:0"><strong>Short validity:</strong> Let's Encrypt's common server certificates have used 90-day lifetimes, and the CA has announced a move toward 64-day and then 45-day default lifetimes by 2028. Shorter lifetimes reduce the exposure window after key compromise and force certificate renewal to be treated as automation, not calendar work.</p>
+  </div>
+
+  <h3>Certificate Transparency (CT)</h3>
+  <p>A public, append-only log system for TLS certificates, originally specified in RFC 6962. Chrome requires publicly trusted TLS certificates issued after April 30, 2018 to be CT-compliant. The exact SCT count depends on delivery method and certificate lifetime, but the important design point is simple: a CA cannot quietly issue a publicly trusted certificate without leaving evidence that domain owners, browsers, and monitors can inspect.</p>
+</section>
+
+<!-- S6 -->
+<section class="section" id="s6">
+  <h2><span class="num">06</span>TLS 1.3 vs TLS 1.2</h2>
+  <table>
+    <thead><tr><th>Feature</th><th>TLS 1.2 (RFC 5246, 2008)</th><th>TLS 1.3 (RFC 8446, 2018)</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Handshake RTTs</strong></td><td>2-RTT</td><td>1-RTT (0-RTT for resumption)</td></tr>
+      <tr><td><strong>Key exchange</strong></td><td>Static RSA, DHE, ECDHE, PSK variants</td><td>Ephemeral (EC)DHE and PSK modes; static RSA removed</td></tr>
+      <tr><td><strong>Cipher suites</strong></td><td>Many legacy combinations</td><td>5 AEAD cipher suites defined by RFC 8446</td></tr>
+      <tr><td><strong>Handshake encryption</strong></td><td>Certificate sent in cleartext</td><td>Certificate encrypted after ServerHello</td></tr>
+      <tr><td><strong>Removed legacy machinery</strong></td><td>—</td><td>Static RSA key transport, renegotiation, compression, CBC-style TLS 1.2 suites</td></tr>
+      <tr><td><strong>0-RTT resumption</strong></td><td>Session IDs/tickets with an abbreviated handshake</td><td>PSK-based early data, with replay caveats</td></tr>
+      <tr><td><strong>Formal analysis</strong></td><td>Less formalized</td><td>14 formal verification papers cited in RFC</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- S7 -->
+<section class="section" id="s7">
+  <h2><span class="num">07</span>Memory Map: TLS Session Cost</h2>
+  <svg viewBox="0 0 860 130" xmlns="http://www.w3.org/2000/svg" style="width:100%;margin:24px 0">
+    <text x="120" y="18" fill="#fbbf24" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">HANDSHAKE CPU</text>
+    <rect x="20" y="28" width="200" height="50" rx="6" fill="#222734" stroke="#fbbf24"/>
+    <text x="120" y="48" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">ECDHE: usually sub-ms</text>
+    <text x="120" y="65" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Cert signature: sub-ms</text>
+    <text x="120" y="100" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Varies by curve and chain</text>
+
+    <text x="360" y="18" fill="#6ee7b7" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">SESSION MEMORY</text>
+    <rect x="250" y="28" width="220" height="50" rx="6" fill="#222734" stroke="#6ee7b7"/>
+    <text x="360" y="48" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Traffic keys: small</text>
+    <text x="360" y="65" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Session state: KB-scale</text>
+    <text x="360" y="100" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">10K sessions: tens of MB</text>
+
+    <text x="620" y="18" fill="#60a5fa" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">THROUGHPUT OVERHEAD</text>
+    <rect x="500" y="28" width="240" height="50" rx="6" fill="#222734" stroke="#60a5fa"/>
+    <text x="620" y="48" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">AEAD bulk crypto is fast</text>
+    <text x="620" y="65" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">Record overhead: tens of bytes</text>
+    <text x="620" y="100" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">Usually low with HW acceleration</text>
+
+    <text x="800" y="18" fill="#f87171" font-family="IBM Plex Mono" font-size="11" text-anchor="middle" font-weight="600">LATENCY</text>
+    <rect x="745" y="28" width="110" height="50" rx="6" fill="#222734" stroke="#f87171"/>
+    <text x="800" y="48" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">1-RTT full</text>
+    <text x="800" y="65" fill="#e2e6f0" font-family="IBM Plex Mono" font-size="10" text-anchor="middle">0-RTT replay risk</text>
+    <text x="800" y="100" fill="#5c6580" font-family="IBM Plex Mono" font-size="9" text-anchor="middle">RTT dominates</text>
+  </svg>
+</section>
+
+<!-- S8 -->
+<section class="section" id="s8">
+  <h2><span class="num">08</span>Hands-On: Terminal Demos</h2>
+  <h3>Demo 1: Inspect a TLS Certificate</h3>
+  <pre><span style="color:var(--accent)"># View the full certificate chain for any HTTPS site</span>
+<span style="color:var(--yellow)">$ openssl s_client -connect google.com:443 -servername google.com &lt;/dev/null 2>/dev/null | \
+  openssl x509 -noout -subject -issuer -dates -fingerprint</span>
+
+<span style="color:var(--text-dim)">subject=CN = *.google.com
+issuer=C = US, O = Google Trust Services, CN = WR2
+notBefore=&lt;current certificate start&gt;
+notAfter=&lt;current certificate expiry&gt;
+SHA256 Fingerprint=AB:CD:12:34:...</span>
+
+<span style="color:var(--accent)"># View cipher suite and TLS version used</span>
+<span style="color:var(--yellow)">$ openssl s_client -connect google.com:443 &lt;/dev/null 2>/dev/null | \
+  grep -E "Protocol|Cipher"</span>
+
+<span style="color:var(--text-dim)">Protocol  : TLSv1.3
+Cipher    : TLS_AES_256_GCM_SHA384</span></pre>
+
+  <h3>Demo 2: Generate a Self-Signed Certificate</h3>
+  <pre><span style="color:var(--accent)"># Generate a private key + self-signed certificate in one command</span>
+<span style="color:var(--yellow)">$ openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \
+  -days 365 -nodes -subj "/CN=localhost"</span>
+
+<span style="color:var(--accent)"># Start an HTTPS server using the self-signed cert</span>
+<span style="color:var(--yellow)">$ python3 -c "
+import ssl, http.server
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain('cert.pem', 'key.pem')
+server = http.server.HTTPServer(('', 4443), http.server.SimpleHTTPRequestHandler)
+server.socket = ctx.wrap_socket(server.socket, server_side=True)
+print('HTTPS server on https://localhost:4443')
+server.serve_forever()
+"</span>
+
+<span style="color:var(--accent)"># In another terminal — connect (accept self-signed cert with -k)</span>
+<span style="color:var(--yellow)">$ curl -k https://localhost:4443/</span></pre>
+
+  <h3>Demo 3: Symmetric Encryption with OpenSSL</h3>
+  <pre><span style="color:var(--accent)"># Encrypt a file with AES-256-CBC</span>
+<span style="color:var(--yellow)">$ echo "secret data: password123" > plaintext.txt
+$ openssl enc -aes-256-cbc -salt -in plaintext.txt -out encrypted.bin -pass pass:mykey
+$ xxd encrypted.bin | head -3</span>
+<span style="color:var(--text-dim)">00000000: 5361 6c74 6564 5f5f ...  (binary gibberish)</span>
+
+<span style="color:var(--accent)"># Decrypt with correct key</span>
+<span style="color:var(--yellow)">$ openssl enc -aes-256-cbc -d -in encrypted.bin -pass pass:mykey</span>
+<span style="color:var(--text-dim)">secret data: password123</span>
+
+<span style="color:var(--accent)"># Try with wrong key — fails</span>
+<span style="color:var(--yellow)">$ openssl enc -aes-256-cbc -d -in encrypted.bin -pass pass:wrongkey</span>
+<span style="color:var(--text-dim)">bad decrypt</span></pre>
+</section>
+
+<!-- S9 -->
+<section class="section" id="s9">
+  <h2><span class="num">09</span>Mini-Projects</h2>
+  <h3>Simple: Certificate Inspector</h3>
+  <div class="card card-accent">
+    <p style="margin-bottom:0"><strong>Goal:</strong> Write a Python script that takes a hostname, connects via TLS, extracts the certificate, and prints: subject, issuer, validity dates, days until expiry, and the complete certificate chain. Use the <code>ssl</code> and <code>socket</code> standard libraries. Bonus: alert if the certificate expires within 30 days.</p>
+  </div>
+  <h3>Advanced: HTTPS Server with Let's Encrypt Simulation</h3>
+  <p>Build a Python HTTPS server that generates its own CA (root + intermediate), signs an end-entity certificate, serves HTTPS with the full chain, and has a client that verifies the chain against the custom CA. This simulates the Let's Encrypt flow without actually using the ACME protocol — you'll understand the chain of trust from the inside.</p>
+</section>
+
+<!-- S10 -->
+<section class="section" id="s10">
+  <h2><span class="num">10</span>Production Examples</h2>
+  <div class="card">
+    <h3 style="margin-top:0">Let's Encrypt: HTTPS for Everyone</h3>
+    <p>Before Let's Encrypt, many teams still treated certificates as annual manual work: generate a CSR, complete domain validation, install the certificate, and hope someone remembered renewal. Let's Encrypt made domain-validated TLS certificates free and automatable through ACME. By late 2025, it reported serving more than 700 million websites and issuing ten million certificates on some days. Its CA software, Boulder, is open source and written in Go.</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Cloudflare: TLS Termination at Edge</h3>
+    <p>Cloudflare terminates TLS at its global edge, so the browser usually handshakes with a nearby edge server instead of a distant origin. Cloudflare then maintains a separate TLS connection to the origin server. This can reduce handshake latency and lets the edge layer handle certificate management, cipher suite configuration, and TLS version negotiation centrally.</p>
+    <p style="margin-bottom:0"><strong>Keyless SSL:</strong> For financial institutions that can't store private keys outside their premises, Cloudflare offers Keyless SSL — the TLS handshake runs at Cloudflare's edge, but the private key operations (signing the handshake) are proxied to the customer's on-premises key server. The private key never leaves the customer's infrastructure.</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Google: HTTPS + Certificate Transparency</h3>
+    <p style="margin-bottom:0">Chrome requires CT compliance for publicly trusted TLS certificates issued after April 30, 2018. The number and source of Signed Certificate Timestamps depend on how the SCTs are delivered and on certificate lifetime; Chrome's policy checks both log state and log-operator diversity. The practical result is that public certificate issuance leaves evidence in logs that domain owners and monitors can inspect.</p>
+  </div>
+</section>
+
+<!-- S11 -->
+<section class="section" id="s11">
+  <h2><span class="num">11</span>Edge Cases &amp; War Stories</h2>
+  <div class="card card-red">
+    <p><strong>Heartbleed (2014):</strong> A buffer over-read bug in OpenSSL's implementation of the TLS Heartbeat extension. An attacker could send a malformed heartbeat request and read up to 64 KB of server memory, potentially exposing private keys, session tokens, and user data. Contemporary scans reported hundreds of thousands of affected TLS endpoints. The fix was not just patching OpenSSL; teams also had to consider certificate reissue, key rotation, and session invalidation. Lesson: TLS security depends on implementation quality as much as the protocol design.</p>
+  </div>
+  <div class="card card-red">
+    <p><strong>Certificate Expiry Outages:</strong> In 2020, Microsoft Teams had a multi-hour outage tied to an expired TLS certificate. Expiry is a common and preventable TLS incident: automate renewal, alert well before expiry, and test the renewal path before it matters. The fix is boring but important: production certificates should be managed by automation such as certbot, cert-manager, a cloud certificate manager, or a CA-integrated load balancer.</p>
+  </div>
+  <div class="card card-red">
+    <p><strong>Mixed Content:</strong> An HTTPS page loads a JavaScript file over HTTP. The browser may block the HTTP resource, or worse, a network attacker may modify the script before it reaches the browser. Fix the source URLs to use HTTPS and add <code>Content-Security-Policy: upgrade-insecure-requests</code> while cleaning up old links.</p>
+  </div>
+  <div class="card card-red">
+    <p><strong>TLS Termination Point Matters:</strong> Your load balancer terminates TLS and forwards plaintext HTTP to backend servers. If the internal network is compromised, an attacker can read all traffic between the LB and backends. Fix: use end-to-end TLS (re-encrypt between LB and backends) or mTLS (mutual TLS where backends also present certificates to the LB). In Kubernetes, service meshes like Istio/Linkerd handle this with automatic mTLS between all pods.</p>
+  </div>
+  <div class="card card-red">
+    <p style="margin-bottom:0"><strong>0-RTT Replay Attack:</strong> TLS 1.3's 0-RTT resumption lets a client send encrypted application data before the handshake completes. An attacker may be able to replay that early data, causing the server to process the request twice. For idempotent requests (GET), this is usually manageable. For non-idempotent requests (POST a payment), it is risky. Fix: disable early data for unsafe operations, or use replay protection with server-side tracking.</p>
+  </div>
+</section>
+
+<!-- S12 -->
+<section class="section" id="s12">
+  <h2><span class="num">12</span>Interview Q&amp;A</h2>
+
+  <div class="qa">
+    <div class="qa-q">Q1: Walk me through what happens when a browser connects to https://example.com.</div>
+    <div class="qa-a">
+      <p><strong>Step 1 — DNS:</strong> Browser resolves <code>example.com</code> to an IP address.</p>
+      <p><strong>Step 2 — TCP:</strong> Browser establishes a TCP connection to port 443 (SYN → SYN-ACK → ACK, 1 RTT).</p>
+      <p><strong>Step 3 — TLS Handshake:</strong> Client sends ClientHello (supported ciphers, ECDHE key share). Server responds with ServerHello (chosen cipher, its key share), then sends its certificate and a CertificateVerify signature — all encrypted after the key share exchange. Both sides derive symmetric session keys from the ECDHE shared secret.</p>
+      <p><strong>Step 4 — Certificate Verification:</strong> Browser checks that the certificate chains to a trusted root, the SAN covers the hostname, the certificate is within its validity window, and Chrome-specific CT requirements are satisfied for public certificates. Revocation handling varies by browser and deployment; OCSP stapling is one way to deliver revocation status.</p>
+      <p><strong>Step 5 — HTTP Request:</strong> Browser sends the HTTP GET request through the encrypted TLS tunnel. Request and response data, including headers and cookies, is protected with the negotiated AEAD cipher such as AES-GCM or ChaCha20-Poly1305.</p>
+      <p><strong>Total overhead:</strong> On an example path with a 50 ms RTT, TCP costs about one RTT and a full TLS 1.3 handshake adds one more RTT before application data. DNS may add more unless it is cached. With session resumption, repeat connections can reduce or avoid the TLS round trip, depending on whether early data is enabled.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q2: Why does TLS use both symmetric and asymmetric encryption?</div>
+    <div class="qa-a">
+      <p><strong>Performance:</strong> Public-key cryptography is expensive compared with symmetric AEAD ciphers. Using RSA or ECDSA-style operations for every byte of a response would be a poor design.</p>
+      <p><strong>Key agreement:</strong> Symmetric encryption requires both parties to end up with the same traffic keys. Classic RSA key transport encrypted a premaster secret to the server's public key, but modern TLS normally uses ephemeral Diffie-Hellman: both sides exchange public shares and compute the same secret without sending the secret itself.</p>
+      <p><strong>TLS's hybrid approach:</strong> Use public-key cryptography for authentication and key agreement. Feed the shared secret into the TLS key schedule. Use the resulting symmetric traffic keys for application data.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q3: What is forward secrecy and why did TLS 1.3 remove static RSA key exchange?</div>
+    <div class="qa-a">
+      <p><strong>Forward secrecy</strong> means that compromise of the server's long-term private key does not compromise past session keys. Even if an attacker records years of encrypted traffic and later steals the server's private key, they cannot decrypt the recorded sessions.</p>
+      <p><strong>How:</strong> In normal certificate-based HTTPS, TLS 1.3 uses ephemeral ECDHE: both client and server generate temporary key shares for the connection. The shared secret and derived traffic keys are unique to that session. After the session ends, the ephemeral keys are destroyed. The server's long-term private key is used for signing, not for direct key transport.</p>
+      <p><strong>Why TLS 1.3 changed the default:</strong> In TLS 1.2, static RSA key exchange was allowed: the client encrypted the premaster secret with the server's long-term RSA public key. If that RSA key was later compromised, recorded sessions using that key could be decrypted. TLS 1.3 removes static RSA key exchange and uses ephemeral key agreement for normal certificate-based HTTPS.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q4: How would you handle TLS certificate management for 500 microservices?</div>
+    <div class="qa-a">
+      <p><strong>External traffic (internet-facing):</strong> Use a reverse proxy (nginx, Envoy) or cloud load balancer as the TLS termination point. All external certificates are managed at this single point. Use Let's Encrypt + certbot for automated issuance and renewal. Store certificates in a secrets manager (Vault, AWS Secrets Manager). Monitor expiry with Prometheus + Alertmanager.</p>
+      <p><strong>Internal traffic (service-to-service):</strong> Use a service mesh such as Istio or Linkerd for automatic mTLS. The mesh control plane or workload identity system acts as an internal CA, issuing short-lived certificates to workloads and rotating them without application code changes. This is common in Kubernetes environments where service identity matters.</p>
+      <p><strong>Key principle:</strong> Production certificate work should be automated: generation, signing, installation, renewal, and revocation. Humans should own the policy and the break-glass runbook, not the normal renewal path.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q5: What is a man-in-the-middle attack and how does TLS prevent it?</div>
+    <div class="qa-a">
+      <p><strong>The attack:</strong> Attacker positions themselves between client and server (e.g., on the same WiFi network). For HTTP: the attacker reads all traffic in plaintext — passwords, sessions, data. They can also modify traffic — injecting malicious JavaScript, changing form submissions, redirecting to phishing pages.</p>
+      <p><strong>TLS prevention — encryption:</strong> Data is encrypted with the negotiated AEAD cipher using traffic keys that only the client and server can derive. The attacker sees ciphertext.</p>
+      <p><strong>TLS prevention — authentication:</strong> The server presents a certificate signed by a trusted CA. The attacker cannot forge a valid certificate for <code>example.com</code> because they don't have the CA's private key. If the attacker presents their own self-signed certificate, the browser shows a security warning ("Your connection is not private").</p>
+      <p><strong>TLS prevention — integrity:</strong> Every TLS record includes an authentication tag (AEAD). If the attacker modifies any encrypted data in transit, the tag verification fails and the record is rejected. Tampering is detected immediately.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Q6: What is the performance overhead of HTTPS compared to HTTP?</div>
+    <div class="qa-a">
+      <p><strong>Handshake latency:</strong> TLS 1.3 adds one network RTT to the first full connection after TCP. With 0-RTT resumption, a client may send early data immediately, but replay risk means servers should only accept it for safe operations. With HTTP/2 or HTTP/3, the handshake cost is amortized across many requests on the same connection.</p>
+      <p><strong>CPU overhead:</strong> Modern CPUs accelerate AES and carry ChaCha20 efficiently, so bulk encryption is rarely the bottleneck. Handshake cost depends on the curve, certificate chain, signature algorithm, hardware, and whether session resumption is used.</p>
+      <p><strong>Bandwidth overhead:</strong> TLS adds a small record header and authentication tag to each protected record. For normal web responses, this is usually tiny compared with payload size, images, JavaScript, and compression decisions.</p>
+      <p><strong>Practical conclusion:</strong> Large providers run HTTPS at full scale. The work is real, but with current hardware, session resumption, and connection reuse, HTTPS is usually an operational and configuration concern rather than a raw throughput blocker.</p>
+    </div>
+  </div>
+</section>
+
+<!-- S13 -->
+<section class="section" id="s13">
+  <h2><span class="num">13</span>Actual System Design Interview</h2>
+  <div class="card card-accent">
+    <p style="margin-bottom:0"><strong>Scenario:</strong> Design the TLS infrastructure for an e-commerce platform serving 50 million users across 3 regions (US, EU, APAC). The platform handles payment data (PCI-DSS compliant), serves 100K HTTPS requests/second, and runs 200 microservices in Kubernetes.</p>
+  </div>
+  <h3>Round 1: External TLS</h3>
+  <div class="card">
+    <p><strong>Edge layer:</strong> Use a CDN such as Cloudflare or AWS CloudFront for TLS termination near users. The CDN manages public certificates automatically, for example a wildcard certificate for <code>*.example.com</code> via an ACME-capable CA or a commercial CA. Keeping the handshake close to the user reduces the cost of full handshakes and makes certificate policy easier to enforce.</p>
+    <p><strong>TLS configuration:</strong> TLS 1.3 required (TLS 1.2 as fallback for older clients, no TLS 1.0/1.1). Cipher suites: TLS_AES_256_GCM_SHA384 and TLS_CHACHA20_POLY1305_SHA256 (for mobile). HSTS header with <code>max-age=31536000; includeSubDomains; preload</code> to prevent downgrade attacks. OCSP stapling enabled to avoid client-side revocation check latency.</p>
+    <p style="margin-bottom:0"><strong>PCI-DSS compliance:</strong> PCI DSS requires strong cryptography for cardholder data in transit and does not treat SSL or early TLS as strong cryptography. In practice, use TLS 1.2+ with approved cipher suites and prefer TLS 1.3 where clients support it. Store certificate private keys in managed key infrastructure or HSM-backed services when the risk profile requires it.</p>
+  </div>
+  <h3>Round 2: Internal TLS (mTLS)</h3>
+  <div class="card">
+    <p><strong>Service mesh:</strong> Deploy Istio or Linkerd across the Kubernetes clusters. The mesh identity system issues workload certificates and rotates them automatically. All service-to-service communication uses mTLS: both sides present and verify certificates before application traffic flows.</p>
+    <p style="margin-bottom:0"><strong>Zero-trust architecture:</strong> mTLS ensures that even if an attacker gains access to the internal network, they cannot eavesdrop on or impersonate services without a valid certificate. Combined with network policies (allow traffic only between specific services) and RBAC (restrict which services can call which endpoints), this implements defense in depth.</p>
+  </div>
+  <h3>Round 3: Edge Cases</h3>
+  <p><strong>Interviewer:</strong> "A certificate is about to expire in production. The renewal automation failed. What's your incident response?"</p>
+  <div class="card">
+    <p><strong>Immediate:</strong> (1) Manually renew the certificate (certbot renew or reissue from CA). (2) Deploy the new certificate to all edge servers (CDN API or load balancer update). (3) Verify with <code>openssl s_client</code> that the new certificate is being served.</p>
+    <p style="margin-bottom:0"><strong>Prevention:</strong> (1) Monitor certificate expiry with Prometheus, cloud certificate inventory, or cert-manager metrics. Alert at 30 days, 14 days, and 3 days before expiry. (2) Use cert-manager in Kubernetes for automated ACME certificate management. (3) Keep a tested backup path for emergency reissue and deployment. (4) Prefer short-lived certificates because they force renewal automation to stay healthy.</p>
+  </div>
+</section>
+
+<!-- S14 -->
+<section class="section" id="s14">
+  <h2><span class="num">14</span>What If? Interactive</h2>
+  <p>Vary <strong>TLS configuration parameters</strong> to see how they affect security and performance.</p>
+  <div class="slider-group">
+    <div class="slider-label">TLS Version <span id="v-tls">1.3</span></div>
+    <input type="range" class="slider-input" id="sl-tls" min="10" max="13" step="1" value="13">
+  </div>
+  <div class="slider-group">
+    <div class="slider-label">Key Exchange <span id="v-kex">ECDHE (forward secrecy)</span></div>
+    <input type="range" class="slider-input" id="sl-kex" min="0" max="2" step="1" value="2">
+  </div>
+  <div class="slider-group">
+    <div class="slider-label">Average RTT to Server (ms) <span id="v-rtt">50</span></div>
+    <input type="range" class="slider-input" id="sl-rtt" min="5" max="300" step="5" value="50">
+  </div>
+  <div class="tradeoff-cards">
+    <div class="card card-accent">
+      <p style="font-family:var(--mono);font-size:12px;color:var(--accent);margin-bottom:8px">SECURITY</p>
+      <p style="font-size:14px"><strong>Forward secrecy:</strong> <span id="r-fs">Yes</span></p>
+      <p style="font-size:14px"><strong>Handshake encryption:</strong> <span id="r-hsenc">Yes</span></p>
+      <p style="font-size:14px;margin-bottom:0"><strong>Known vulnerabilities:</strong> <span id="r-vulns">None</span></p>
+    </div>
+    <div class="card card-orange">
+      <p style="font-family:var(--mono);font-size:12px;color:var(--orange);margin-bottom:8px">PERFORMANCE</p>
+      <p style="font-size:14px"><strong>Handshake RTTs:</strong> <span id="r-rts">1-RTT</span></p>
+      <p style="font-size:14px"><strong>Handshake latency:</strong> <span id="r-hlat">50ms</span></p>
+      <p style="font-size:14px;margin-bottom:0"><strong>Total connection time:</strong> <span id="r-total">150ms</span></p>
+    </div>
+  </div>
+  <div class="card card-purple">
+    <p style="margin-bottom:0;font-size:14px" id="r-verdict7">TLS 1.3 with ECDHE is the strong default: forward secrecy, encrypted handshake messages after ServerHello, and a 1-RTT full handshake.</p>
+  </div>
+</section>
+
+<!-- S15 -->
+<section class="section" id="s15">
+  <h2><span class="num">15</span>Mental Model</h2>
+  <div class="diagram-wrap">
+    <pre class="mermaid">
+flowchart TD
+    HTTPS["HTTPS"]
+    HTTP["HTTP semantics"]
+    TLS["TLS secure transport"]
+    CONF["Confidentiality"]
+    INT["Integrity"]
+    AUTH["Authentication"]
+    FS["Forward secrecy"]
+    DATA["Application data is safe on the wire"]
+
+    HTTPS --> HTTP
+    HTTPS --> TLS
+    TLS --> CONF
+    TLS --> INT
+    TLS --> AUTH
+    TLS --> FS
+    CONF --> DATA
+    INT --> DATA
+    AUTH --> DATA
+    FS --> DATA
+
+    classDef core fill:#14171e,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
+    classDef property fill:#222734,stroke:#60a5fa,color:#e2e6f0,stroke-width:2px;
+    classDef outcome fill:#14171e,stroke:#fbbf24,color:#e2e6f0,stroke-width:3px;
+    class HTTPS,TLS core;
+    class HTTP,CONF,INT,AUTH,FS property;
+    class DATA outcome;
+    </pre>
+    <div class="diagram-caption">HTTPS is ordinary HTTP carried through TLS. The security properties come from TLS, not HTTP itself.</div>
+  </div>
+</section>
+
+<!-- S16 -->
+<section class="section" id="s16">
+  <h2><span class="num">16</span>References &amp; Further Reading</h2>
+
+  <div class="ref">
+    <div class="ref-title">[1] RFC 8446 — The Transport Layer Security (TLS) Protocol Version 1.3 (Rescorla, 2018)</div>
+    <p><strong>Eric Rescorla.</strong> IETF, August 2018.<br><a href="https://datatracker.ietf.org/doc/html/rfc8446" target="_blank">https://datatracker.ietf.org/doc/html/rfc8446</a></p>
+    <p>• Defines TLS 1.3 and its secure-channel goals: authentication, confidentiality, and integrity. A normal full handshake completes in one round trip after TCP because the client can include a key share in ClientHello.</p>
+    <p>• Removes static RSA key transport, renegotiation, compression, and legacy non-AEAD cipher suites. RFC 8446 defines five TLS 1.3 cipher suites: AES-GCM, ChaCha20-Poly1305, and AES-CCM variants.</p>
+    <p>• For normal certificate-based HTTPS, the long-term certificate key authenticates the handshake while ephemeral (EC)DHE key agreement produces the shared secret. PSK modes exist too, so avoid the shorthand that every TLS 1.3 mode is automatically forward-secret.</p>
+    <p>• 0-RTT early data can reduce latency on resumed sessions, but it has replay risk. Servers need to disable it for unsafe operations or add replay defenses.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[2] RFC 6962 — Certificate Transparency (Laurie, Langley &amp; Kasper, 2013)</div>
+    <p><strong>Ben Laurie, Adam Langley, Emilia Kasper.</strong> IETF, June 2013.<br><a href="https://datatracker.ietf.org/doc/html/rfc6962" target="_blank">https://datatracker.ietf.org/doc/html/rfc6962</a></p>
+    <p>• Defines Certificate Transparency logs, Signed Certificate Timestamps, and Merkle-tree proofs for auditing certificate issuance. CT does not replace CAs; it makes public certificate issuance observable.</p>
+    <p>• The log structure lets clients and monitors verify inclusion and detect inconsistent log views. Browser enforcement is a separate browser policy layered on top of the CT protocol.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[3] Chrome Certificate Transparency Policy</div>
+    <p><strong>Chrome Certificate Transparency Team.</strong><br><a href="https://googlechrome.github.io/CertificateTransparency/ct_policy.html" target="_blank">https://googlechrome.github.io/CertificateTransparency/ct_policy.html</a></p>
+    <p>• Chrome evaluates publicly trusted TLS certificates for CT compliance during validation, with enterprise-policy exceptions. SCT requirements depend on delivery method, certificate lifetime, log state, and log-operator diversity.</p>
+    <p>• This is the source for Chrome-specific wording. The page should say "CT-compliant" rather than hard-coding a fixed number of logs for every certificate.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[4] RFC 8996 — Deprecating TLS 1.0 and TLS 1.1</div>
+    <p><strong>K. Moriarty, S. Farrell.</strong> IETF, March 2021.<br><a href="https://datatracker.ietf.org/doc/html/rfc8996" target="_blank">https://datatracker.ietf.org/doc/html/rfc8996</a></p>
+    <p>• Deprecates TLS 1.0 and TLS 1.1 and updates older RFCs so new deployments do not negotiate those protocol versions.</p>
+    <p>• Good interview shorthand: support TLS 1.3 first, keep TLS 1.2 only when client compatibility requires it, and disable SSL, TLS 1.0, and TLS 1.1.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[5] Let's Encrypt — 2025 Scale and Certificate Lifetime Changes</div>
+    <p><strong>Let's Encrypt / ISRG.</strong><br><a href="https://letsencrypt.org/2025/12/29/eoy-letter-2025.html" target="_blank">2025 year-end letter</a> · <a href="https://letsencrypt.org/2025/12/02/from-90-to-45" target="_blank">certificate lifetime roadmap</a></p>
+    <p>• Let’s Encrypt reported serving more than 700 million websites and issuing ten million certificates on some days in late 2025.</p>
+    <p>• Its default certificate lifetime is moving from 90 days to 64 days in 2027 and 45 days in 2028, with an opt-in 45-day ACME profile in 2026. The operational lesson is clear: renewal must be automated.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[6] Google — HTTPS Adoption, Search, and Chrome Defaults</div>
+    <p><strong>Google Search Central / Google Online Security Blog.</strong><br><a href="https://developers.google.com/search/blog/2014/08/https-as-ranking-signal" target="_blank">HTTPS as a ranking signal</a> · <a href="https://blog.google/products-and-platforms/products/chrome/milestone-chrome-security-marking-http-not-secure/" target="_blank">Chrome 68 HTTP warning</a> · <a href="https://security.googleblog.com/2025/10/https-by-default.html" target="_blank">HTTPS by default in Chrome</a></p>
+    <p>• Google Search started using HTTPS as a lightweight ranking signal in 2014. It was explicitly described as a small signal, not a replacement for content relevance.</p>
+    <p>• Chrome 68 marked HTTP pages as "Not secure" in 2018. Chrome's 2025 HTTPS-by-default plan says Chrome 154 will enable "Always Use Secure Connections" by default in October 2026, and Google's Chrome data puts HTTPS main-frame page loads in the 95-99% range after 2020.</p>
+  </div>
+
+  <div class="ref">
+    <div class="ref-title">[7] NIST SP 800-52 Rev. 2 and PCI SSC TLS FAQ</div>
+    <p><strong>Kerry McKay, David Cooper.</strong> NIST, August 2019.<br><a href="https://csrc.nist.gov/publications/detail/sp/800-52/rev-2/final" target="_blank">https://csrc.nist.gov/publications/detail/sp/800-52/rev-2/final</a></p>
+    <p><strong>PCI Security Standards Council.</strong><br><a href="https://www.pcisecuritystandards.org/faq/articles/Frequently_Asked_Question/does-pci-dss-define-which-versions-of-tls-must-be-used/" target="_blank">PCI SSC TLS FAQ</a></p>
+    <p>• NIST gives concrete TLS configuration guidance, including TLS 1.2 as the floor for federal systems in Rev. 2 and TLS 1.3 support where available.</p>
+    <p>• PCI SSC does not define one mandatory TLS version in its FAQ, but it does say SSL and early TLS are not strong cryptography. Payment systems should use current TLS configurations and keep cryptographic standards under review.</p>
+  </div>
+</section>
+
+<footer style="padding:40px 0 60px;text-align:center;font-family:var(--mono);font-size:12px;color:var(--text-muted);">
+  System Design Fundamentals · Topic 24 of 25 · built for deep understanding
+</footer>
+
+</div>
+
+<script>
+// What If? Calculator
+function updateCalc7() {
+  var tlsVer = +document.getElementById('sl-tls').value;
+  var kex = +document.getElementById('sl-kex').value;
+  var rtt = +document.getElementById('sl-rtt').value;
+
+  var tlsLabel = {10: '1.0', 11: '1.1', 12: '1.2', 13: '1.3'}[tlsVer] || '1.3';
+  document.getElementById('v-tls').textContent = tlsLabel;
+  document.getElementById('v-rtt').textContent = rtt;
+
+  var kexLabels = ['Static RSA (no FS)', 'DHE (FS, slow)', 'ECDHE (FS, fast)'];
+  document.getElementById('v-kex').textContent = kexLabels[kex];
+
+  // Security
+  var fs = kex >= 1 ? 'Yes' : 'No';
+  var hsenc = tlsVer >= 13 ? 'Yes (after ServerHello)' : 'No (certificate in cleartext)';
+  var vulns = [];
+  if (tlsVer <= 11) vulns.push('POODLE, BEAST, deprecated');
+  if (tlsVer === 12 && kex === 0) vulns.push('No forward secrecy');
+  if (tlsVer === 12) vulns.push('CBC-mode attacks possible');
+  document.getElementById('r-fs').textContent = fs;
+  document.getElementById('r-hsenc').textContent = hsenc;
+  document.getElementById('r-vulns').textContent = vulns.length > 0 ? vulns.join(', ') : 'None';
+
+  // Performance
+  var handshakeRTTs = tlsVer >= 13 ? 1 : 2;
+  document.getElementById('r-rts').textContent = handshakeRTTs + '-RTT';
+  document.getElementById('r-hlat').textContent = (handshakeRTTs * rtt) + 'ms';
+  var tcpRTT = rtt; // TCP handshake
+  var total = tcpRTT + (handshakeRTTs * rtt);
+  document.getElementById('r-total').textContent = total + 'ms (TCP + TLS)';
+
+  // Verdict
+  var verdict = '';
+  if (tlsVer >= 13 && kex === 2) {
+    verdict = 'TLS ' + tlsLabel + ' with ECDHE is the strong default: forward secrecy, encrypted handshake messages after ServerHello, and a ' + handshakeRTTs + '-RTT full handshake.';
+  } else if (tlsVer >= 12 && kex >= 1) {
+    verdict = 'TLS ' + tlsLabel + ' with forward secrecy can work, but TLS 1.3 has a simpler handshake and usually saves one RTT on a full handshake.';
+  } else if (tlsVer <= 11) {
+    verdict = 'TLS ' + tlsLabel + ' is deprecated by RFC 8996. Move this service to TLS 1.3, with TLS 1.2 only where older clients still need it.';
+  } else {
+    verdict = 'Static RSA key exchange provides no forward secrecy. If the server key is compromised, all past sessions can be decrypted. Use ECDHE instead.';
+  }
+  document.getElementById('r-verdict7').textContent = verdict;
+}
+
+['sl-tls', 'sl-kex', 'sl-rtt'].forEach(function(id) {
+  document.getElementById(id).addEventListener('input', updateCalc7);
+});
+updateCalc7();
+</script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+<script src="../../assets/js/topic.js"></script>
+</body>
+</html>
