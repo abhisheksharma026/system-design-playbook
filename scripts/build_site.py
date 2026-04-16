@@ -174,6 +174,14 @@ GRAPH_LAYOUT = {
         "deps": ["availability", "latency-and-throughput", "sockets", "config"],
         "orbit_rotation": 6,
     },
+    "security": {
+        "x": 1110,
+        "y": 730,
+        "cluster": "Reliability",
+        "tone": "reliability",
+        "deps": ["client-server-model", "network-protocols", "proxies", "load-balancer"],
+        "orbit_rotation": 32,
+    },
     "pub-sub": {
         "x": 1290,
         "y": 620,
