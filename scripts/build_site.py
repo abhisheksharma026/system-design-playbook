@@ -182,6 +182,14 @@ GRAPH_LAYOUT = {
         "deps": ["client-server-model", "network-protocols", "proxies", "load-balancer"],
         "orbit_rotation": 32,
     },
+    "pub-sub": {
+        "x": 1290,
+        "y": 620,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["sockets", "storage", "key-value-stores", "replication-sharding"],
+        "orbit_rotation": 28,
+    },
 }
 
 

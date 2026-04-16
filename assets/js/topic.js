@@ -26,6 +26,84 @@ document.querySelectorAll(".qa").forEach((item) => {
   });
 });
 
+function ensureCopyButtonStyles() {
+  if (document.getElementById("copy-button-styles")) {
+    return;
+  }
+
+  const style = document.createElement("style");
+  style.id = "copy-button-styles";
+  style.textContent = `
+    .copy-wrap {
+      margin: 20px 0;
+    }
+
+    .copy-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 8px;
+    }
+
+    .copy-wrap > pre,
+    .copy-wrap > .memory-map {
+      margin: 0;
+    }
+
+    .copy-host {
+      position: relative;
+    }
+
+    .copy-host .copy-toolbar {
+      margin-bottom: 0;
+    }
+
+    .copy-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 6px 12px;
+      border: 1px solid var(--border-accent);
+      border-radius: 8px;
+      background: var(--surface-2);
+      color: var(--text-dim);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
+    }
+
+    .copy-button:hover {
+      background: var(--surface-3);
+      border-color: var(--accent-dim);
+      color: var(--text);
+    }
+
+    .copy-button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .copy-button[data-copied="true"] {
+      background: var(--accent-bg);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .copy-button svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
+
+    .copy-button .copy-label {
+      white-space: nowrap;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 const COPY_ICON = `
   <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
     <rect x="9" y="9" width="11" height="11" rx="2"></rect>
@@ -149,6 +227,10 @@ document.querySelectorAll("pre:not(.mermaid), .memory-map").forEach((target) => 
   target.dataset.copyReady = "true";
   copyTargets.add(target);
 });
+
+if (copyTargets.size > 0) {
+  ensureCopyButtonStyles();
+}
 
 copyTargets.forEach((target) => {
   attachCopyButton(target);
