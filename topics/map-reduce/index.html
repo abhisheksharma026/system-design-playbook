@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design - MapReduce</title>
+<meta name="description" content="A system design guide to MapReduce, map tasks, shuffle, reduce tasks, combiners, partitioning, fault tolerance, and batch data-processing tradeoffs.">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600;8..60,700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/css/topic.css">
+</head>
+<body>
+<div class="container">
+
+<header class="hero">
+  <div class="hero-label">System Design Fundamentals &middot; Topic 10</div>
+  <h1><span>MapReduce</span></h1>
+  <p class="hero-sub">MapReduce is the batch-processing pattern behind a lot of old-school data infrastructure: split the input, run the same map function across the splits, shuffle records by key, then reduce each key group independently. The user code is small. The hard parts are placement, retries, skew, and moving less data.</p>
+</header>
+
+<nav class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#s0">Prerequisites &amp; Key Terms</a></li>
+    <li><a href="#s1">Why MapReduce Exists</a></li>
+    <li><a href="#s2">The Core Model</a></li>
+    <li><a href="#s3">Anatomy of a Job</a></li>
+    <li><a href="#s4">Partition, Sort, and Group</a></li>
+    <li><a href="#s5">Fault Tolerance</a></li>
+    <li><a href="#s6">Combiners and Data Locality</a></li>
+    <li><a href="#s7">Hands-On: Terminal Demos</a></li>
+    <li><a href="#s8">Mini-Project: Toy MapReduce Engine</a></li>
+    <li><a href="#s9">Production Example 1: Google MapReduce and Hadoop</a></li>
+    <li><a href="#s10">Production Example 2: Spark and Beam</a></li>
+    <li><a href="#s11">Edge Cases &amp; Gotchas</a></li>
+    <li><a href="#s12">What If? Interactive Exploration</a></li>
+    <li><a href="#s13">Actual System Design Interview</a></li>
+    <li><a href="#s14">Interview Questions &amp; Answers</a></li>
+    <li><a href="#s15">Key Takeaways Cheat Sheet</a></li>
+    <li><a href="#mental">Mental Model</a></li>
+    <li><a href="#refs">References &amp; Further Reading</a></li>
+  </ol>
+</nav>
+
+<!-- ============ KEY TERMS ============ -->
+<section class="section" id="s0">
+  <div class="section-num">00</div>
+  <h2>Prerequisites &amp; Key Terms</h2>
+
+  <h3>MapReduce</h3>
+  <p>A programming model and runtime for processing very large datasets across many machines. A user writes a <strong>map</strong> function that turns input records into intermediate key-value pairs, and a <strong>reduce</strong> function that merges all values for the same key. The runtime splits input, schedules tasks, moves intermediate data, retries failed work, and writes output. The model fits offline batch jobs: counting, indexing, log analysis, ETL, joins, and large aggregations. <a href="#ref1" class="ref">[1]</a></p>
+
+  <h3>Mapper</h3>
+  <p>A task that reads one input split and emits zero or more intermediate key-value pairs. In a word-count job, the mapper reads lines of text and emits <code class="inline">(word, 1)</code> for every word it sees. Mappers should be deterministic and side-effect-light because the runtime may execute the same map task more than once after a machine failure or timeout.</p>
+
+  <h3>Shuffle</h3>
+  <p>The distributed data movement between map and reduce. Intermediate records are partitioned by key, written by map workers, fetched by reduce workers, sorted, and grouped so each reducer sees all values for a given key. This is usually the expensive phase because it uses network, disk, serialization, and memory at the same time. In batch processing, "the shuffle" is often where performance problems hide.</p>
+
+  <h3>Reducer</h3>
+  <p>A task that receives one key and an iterator or list of all values for that key, then emits final output records. A reducer can sum counts, merge posting lists, compute statistics, or write grouped data. Reducers run independently from one another, which is why the partitioning function matters: it decides which reducer owns each key.</p>
+
+  <h3>Combiner</h3>
+  <p>An optional local aggregation that runs near the mapper before shuffle. If the reduce operation is associative and commutative, a combiner can reduce repeated local records such as <code class="inline">(error, 1)</code>, <code class="inline">(error, 1)</code>, <code class="inline">(error, 1)</code> into <code class="inline">(error, 3)</code> before the network sees them. In Hadoop-style APIs, combiner input and output types must match the mapper's intermediate output types, because the combiner is allowed to run zero, one, or many times.</p>
+</section>
+
+<!-- ============ SECTION 1 ============ -->
+<section class="section" id="s1">
+  <div class="section-num">01</div>
+  <h2>Why MapReduce Exists</h2>
+
+  <p>Before MapReduce, processing terabytes of data meant writing a custom distributed system for every job: split the input, send work to machines, detect failures, retry tasks, exchange data over the network, and merge results. The actual business logic might be a few lines, but the operational scaffolding dominated the work.</p>
+
+  <p>MapReduce made a sharp trade: constrain the programming model so the runtime can automate the distributed execution. If the job can be expressed as "map records to key-value pairs, group by key, reduce each group," then the system can parallelize it across thousands of machines without the programmer manually coordinating every worker.</p>
+
+  <div class="callout green">
+    <div class="callout-label">Working Model</div>
+    <p>Imagine a warehouse full of paper receipts. You want total sales by store. Give one stack to each person; each person writes down <code class="inline">(store, amount)</code> pairs from their stack. Then everyone sorts their notes into piles by store. Finally, one person per store adds the amounts. The map phase extracts facts, the shuffle groups facts by key, and the reduce phase summarizes each group.</p>
+  </div>
+
+  <p>The model matters in system design because it separates <strong>embarrassingly parallel work</strong> from <strong>coordination-heavy work</strong>. The map side scales with input blocks. The reduce side scales with the number and distribution of keys. The shuffle is the price paid to turn independent local observations into grouped global answers.</p>
+</section>
+
+<!-- ============ SECTION 2 ============ -->
+<section class="section" id="s2">
+  <div class="section-num">02</div>
+  <h2>The Core Model</h2>
+
+  <p>Most MapReduce jobs have the same shape:</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>MapReduce in one screen</span></div>
+    <pre><span class="cm"># Input records are independent.</span>
+<span class="fn">map</span>(input_key, input_value) -&gt; list[(intermediate_key, intermediate_value)]
+
+<span class="cm"># Runtime groups by intermediate_key.</span>
+<span class="fn">shuffle</span>(list[(k, v)]) -&gt; dict[k, list[v]]
+
+<span class="cm"># Each key group is reduced independently.</span>
+<span class="fn">reduce</span>(intermediate_key, list[intermediate_value]) -&gt; list[(output_key, output_value)]
+</pre>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Phase</th><th>Input</th><th>Output</th><th>System Responsibility</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Input split</strong></td><td>Files, objects, table partitions</td><td>Independent chunks</td><td>Choose split boundaries and place work near data when possible</td></tr>
+        <tr><td><strong>Map</strong></td><td>One split</td><td>Intermediate key-value pairs</td><td>Schedule many identical tasks and retry failed attempts</td></tr>
+        <tr><td><strong>Partition</strong></td><td>Intermediate keys</td><td>Reducer assignment</td><td>Hash or range-partition records so all equal keys meet</td></tr>
+        <tr><td><strong>Shuffle</strong></td><td>Partitioned map outputs</td><td>Grouped values per key</td><td>Move, sort, spill, merge, and fetch data across workers</td></tr>
+        <tr><td><strong>Reduce</strong></td><td>One key and all values</td><td>Final output records</td><td>Run grouped computation and commit output atomically</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="diagram-wrap">
+    <div class="mermaid">
+flowchart LR
+  A["Split<br>A"] --> M1["Map<br>A"]
+  B["Split<br>B"] --> M2["Map<br>B"]
+  C["Split<br>C"] --> M3["Map<br>C"]
+  M1 --> S[Shuffle]
+  M2 --> S
+  M3 --> S
+  S --> R0["Reduce<br>0"]
+  S --> R1["Reduce<br>1"]
+  R0 --> O0["Out<br>0"]
+  R1 --> O1["Out<br>1"]
+    </div>
+    <div class="diagram-caption">MapReduce turns a large input into many independent map tasks, then uses shuffle to gather equal keys before reduce.</div>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">Routing Contract</div>
+    <p>Reducers can run in parallel because every record for the same intermediate key is routed to the same reducer. If <code class="inline">user_42</code> records are split across reducers, a count by user becomes wrong. If one key owns most of the records, the job becomes slow even though the logic is correct.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 3 ============ -->
+<section class="section" id="s3">
+  <div class="section-num">03</div>
+  <h2>Anatomy of a Job</h2>
+
+  <p>People often describe MapReduce as map, shuffle, and reduce. The runtime does more than that.</p>
+
+  <div class="diagram-wrap">
+    <div class="mermaid">
+flowchart TD
+  A[Submit] --> B[Plan]
+  B --> C[Splits]
+  B --> D[Reducers]
+  C --> E[Map]
+  E --> F[Fetch]
+  F --> G[Shuffle]
+  D --> H[Reduce]
+  G --> H
+  H --> I[Commit]
+    </div>
+    <div class="diagram-caption">A MapReduce job is a control loop around user map and reduce functions, with shuffle and commit in the middle.</div>
+  </div>
+
+  <h3>Word Count Example</h3>
+  <p>Word count is overused because it exposes the whole data path in the smallest possible program. The mapper expands text into a stream of facts. The shuffle groups facts by word. The reducer summarizes each group.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Word count data flow</span></div>
+    <pre><span class="h">Input split 1:</span>
+  <span class="str">"red blue red"</span>
+
+<span class="h">Map output:</span>
+  (<span class="str">"red"</span>, <span class="num">1</span>)
+  (<span class="str">"blue"</span>, <span class="num">1</span>)
+  (<span class="str">"red"</span>, <span class="num">1</span>)
+
+<span class="h">After shuffle/group:</span>
+  <span class="str">"blue"</span> -&gt; [<span class="num">1</span>]
+  <span class="str">"red"</span>  -&gt; [<span class="num">1</span>, <span class="num">1</span>]
+
+<span class="h">Reduce output:</span>
+  (<span class="str">"blue"</span>, <span class="num">1</span>)
+  (<span class="str">"red"</span>, <span class="num">2</span>)
+</pre>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">Interview Insight</div>
+    <p>The mapper and reducer are user code. The shuffle is platform code. When an interviewer asks how to scale a batch analytics job, do not stop at "use MapReduce." Say how input splits are sized, how reducers are chosen, how much data crosses the network, what happens when a worker dies, and which keys could be hot.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 4 ============ -->
+<section class="section" id="s4">
+  <div class="section-num">04</div>
+  <h2>Partition, Sort, and Group</h2>
+
+  <p>The shuffle has three jobs: choose a reducer for each intermediate record, sort records so equal keys are adjacent, and expose each key with all of its values to the reducer.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Mechanism</th><th>What It Does</th><th>Why It Matters</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Partitioner</strong></td><td>Maps each intermediate key to a reducer, often with <code>hash(key) % R</code></td><td>Controls reducer load, key ownership, and output file distribution</td></tr>
+        <tr><td><strong>Sort</strong></td><td>Orders records by key within each partition</td><td>Makes grouping streaming-friendly; reducers do not need a giant random-access hash table</td></tr>
+        <tr><td><strong>Group</strong></td><td>Presents one key with an iterable of all values</td><td>Defines the actual reduce call boundary</td></tr>
+        <tr><td><strong>Spill</strong></td><td>Writes intermediate data to disk when memory fills</td><td>Lets jobs process more data than memory, at disk I/O cost</td></tr>
+        <tr><td><strong>Merge</strong></td><td>Combines sorted spill files into larger sorted runs</td><td>Reduces file count and prepares reducer input</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Reducer Count</h3>
+  <p>Too few reducers creates large reduce tasks and slow tail latency. Too many reducers creates many small output files, more scheduling overhead, and more shuffle connections. A common design answer is to size reducers by target output per reducer and by the number of keys, then adjust after looking at skew and runtime metrics.</p>
+
+  <div class="callout purple">
+    <div class="callout-label">Default Hash Partitioning Is Not Magic</div>
+    <p>Hashing usually balances <em>keys</em>, not necessarily <em>work</em>. If one key has 40% of all records, hash partitioning puts that key on exactly one reducer, and that reducer becomes the job straggler. This is the same hot-key problem you see in sharding, caching, and load balancing.</p>
+  </div>
+
+  <h3>Range Partitioning</h3>
+  <p>Range partitioning routes key intervals to reducers: A-F to reducer 0, G-M to reducer 1, and so on. It can produce globally sorted output, which is useful for indexes and exports, but it requires sampling and can still skew badly if the key distribution is uneven.</p>
+</section>
+
+<!-- ============ SECTION 5 ============ -->
+<section class="section" id="s5">
+  <div class="section-num">05</div>
+  <h2>Fault Tolerance</h2>
+
+  <p>MapReduce assumes commodity machines fail. The runtime treats task execution as retryable and intermediate output as reconstructable. Instead of preventing every failure, the system makes failed work cheap to redo.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Failure</th><th>Runtime Response</th><th>Design Implication</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Map worker dies</strong></td><td>Re-run its map tasks elsewhere</td><td>Map output usually lives on local disk, so it disappears with the worker</td></tr>
+        <tr><td><strong>Reduce worker dies</strong></td><td>Re-run the reduce task</td><td>Reducer output should be committed atomically so partial files are not exposed</td></tr>
+        <tr><td><strong>Slow worker</strong></td><td>May launch speculative duplicate attempts</td><td>Fastest successful attempt wins; user code must tolerate duplicate execution</td></tr>
+        <tr><td><strong>Coordinator fails</strong></td><td>Depends on implementation</td><td>Modern frameworks may restart the coordinator attempt; lost coordination state can force task attempts to rerun</td></tr>
+        <tr><td><strong>Bad input record</strong></td><td>May fail repeated attempts</td><td>Need counters, dead-letter policy, or input validation for dirty data</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout red">
+    <div class="callout-label">Duplicate Execution Is Normal</div>
+    <p>A task attempt can run twice. That means mapper and reducer code should not make irreversible external side effects such as charging a credit card, mutating a database row, or sending an email. Write deterministic output through the framework's commit protocol, or make external writes idempotent.</p>
+  </div>
+
+  <h3>Speculative Execution</h3>
+  <p>Large jobs often finish at the speed of their slowest task. If 999 tasks finish in two minutes and one task is stuck on a slow machine, the whole job waits. Speculative execution launches a backup copy of slow tasks on another worker. This improves tail latency when slowness is caused by the machine or local environment, but it wastes resources if the task is slow because the input is genuinely larger.</p>
+</section>
+
+<!-- ============ SECTION 6 ============ -->
+<section class="section" id="s6">
+  <div class="section-num">06</div>
+  <h2>Combiners and Data Locality</h2>
+
+  <p>MapReduce performance is often about moving less data. Two of the biggest levers are local aggregation before shuffle and scheduling map tasks near the data they read.</p>
+
+  <h3>Combiners</h3>
+  <p>A combiner can run after a mapper has produced intermediate records but before those records are transferred across the network. For a sum, min, max, or count, this can shrink output massively.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Combiner effect for word count</span></div>
+    <pre><span class="cm"># Mapper sees 1,000,000 log lines on one split.</span>
+<span class="cm"># Without a combiner:</span>
+emit (<span class="str">"ERROR"</span>, <span class="num">1</span>) <span class="num">120000</span> times
+
+<span class="cm"># With a local combiner:</span>
+emit (<span class="str">"ERROR"</span>, <span class="num">120000</span>) once
+
+<span class="cm"># The reducer still produces the same final count, but the network transfers far less data.</span>
+</pre>
+  </div>
+
+  <div class="callout blue">
+    <div class="callout-label">Combiner Rule</div>
+    <p>A combiner must preserve correctness if it runs zero times, one time, or multiple times. Sum works. Max works. Set union works. Average does not work as a naive combiner unless you combine a pair like <code class="inline">(sum, count)</code>, because averaging averages changes the result.</p>
+  </div>
+
+  <h3>Data Locality</h3>
+  <p>In systems built over distributed filesystems, input blocks are replicated across machines. A scheduler can place a map task on a worker that already has the block locally, or at least on the same rack. Local reads avoid saturating the network before the shuffle even begins. This mattered heavily in classic Hadoop clusters where compute and storage lived on the same machines.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Placement</th><th>Read Path</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Node-local</strong></td><td>Read from local disk</td><td>Best case; network saved for shuffle</td></tr>
+        <tr><td><strong>Rack-local</strong></td><td>Read from another node in same rack</td><td>Some network cost, usually less cross-rack pressure</td></tr>
+        <tr><td><strong>Remote</strong></td><td>Read from another rack or remote object store</td><td>Higher latency and shared network load</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SECTION 7 ============ -->
+<section class="section" id="s7">
+  <div class="section-num">07</div>
+  <h2>Hands-On: Terminal Demos</h2>
+
+  <p>You can feel MapReduce with ordinary Unix tools. This is not distributed, but the shape is the same: map each input line to key-value pairs, sort by key, then reduce adjacent equal keys.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>Local word count pipeline</span></div>
+    <pre>$ <span class="fn">cat</span> access.log
+<span class="num">200</span> /home
+<span class="num">500</span> /checkout
+<span class="num">200</span> /home
+<span class="num">404</span> /missing
+<span class="num">500</span> /checkout
+
+<span class="cm"># Map: extract status code. Sort: group equal codes. Reduce: count.</span>
+$ <span class="fn">awk</span> <span class="str">'{print $1}'</span> access.log | <span class="fn">sort</span> | <span class="fn">uniq</span> -c
+      <span class="num">2</span> <span class="num">200</span>
+      <span class="num">1</span> <span class="num">404</span>
+      <span class="num">2</span> <span class="num">500</span>
+</pre>
+  </div>
+
+  <h3>Mapper and Reducer as Separate Programs</h3>
+  <p>Hadoop Streaming popularized a simple interface: mapper reads stdin and writes tab-separated key-value pairs to stdout; reducer reads sorted key-value pairs and emits results.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>mapper.py</span></div>
+    <pre><span class="kw">import</span> sys
+
+<span class="kw">for</span> line <span class="kw">in</span> sys.stdin:
+    <span class="kw">for</span> word <span class="kw">in</span> line.strip().lower().split():
+        print(f<span class="str">"{word}\t1"</span>)
+</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>reducer.py</span></div>
+    <pre><span class="kw">import</span> sys
+
+current = None
+count = <span class="num">0</span>
+
+<span class="kw">for</span> line <span class="kw">in</span> sys.stdin:
+    word, raw_count = line.rstrip(<span class="str">"\n"</span>).split(<span class="str">"\t"</span>, <span class="num">1</span>)
+    <span class="kw">if</span> current <span class="kw">is not</span> None <span class="kw">and</span> word != current:
+        print(f<span class="str">"{current}\t{count}"</span>)
+        count = <span class="num">0</span>
+    current = word
+    count += int(raw_count)
+
+<span class="kw">if</span> current <span class="kw">is not</span> None:
+    print(f<span class="str">"{current}\t{count}"</span>)
+</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-header"><span>Run the local streaming version</span></div>
+    <pre>$ <span class="fn">python3</span> mapper.py &lt; input.txt | <span class="fn">sort</span> | <span class="fn">python3</span> reducer.py
+blue    <span class="num">1</span>
+red     <span class="num">2</span>
+</pre>
+  </div>
+</section>
+
+<!-- ============ SECTION 8 ============ -->
+<section class="section" id="s8">
+  <div class="section-num">08</div>
+  <h2>Mini-Project: Toy MapReduce Engine</h2>
+
+  <p>The fastest way to understand the runtime is to build a tiny single-process version. It will not be distributed, but it will enforce the same contract: map emits records, partition groups them, reduce consumes each group.</p>
+
+  <div class="code-block">
+    <div class="code-header"><span>toy_mapreduce.py</span></div>
+    <pre><span class="kw">from</span> collections <span class="kw">import</span> defaultdict
+<span class="kw">from</span> hashlib <span class="kw">import</span> md5
+
+
+<span class="kw">def</span> <span class="fn">stable_partition</span>(key, reducers):
+    digest = md5(str(key).encode()).hexdigest()
+    <span class="kw">return</span> int(digest, <span class="num">16</span>) % reducers
+
+
+<span class="kw">def</span> <span class="fn">run_map_reduce</span>(inputs, mapper, reducer, reducers=<span class="num">4</span>, combiner=None):
+    partitions = [defaultdict(list) <span class="kw">for</span> _ <span class="kw">in</span> range(reducers)]
+
+    <span class="kw">for</span> input_key, input_value <span class="kw">in</span> inputs:
+        local = defaultdict(list)
+        <span class="kw">for</span> key, value <span class="kw">in</span> mapper(input_key, input_value):
+            local[key].append(value)
+
+        <span class="kw">if</span> combiner:
+            items = []
+            <span class="kw">for</span> key, values <span class="kw">in</span> local.items():
+                items.extend(combiner(key, values))
+        <span class="kw">else</span>:
+            items = [(key, value) <span class="kw">for</span> key, values <span class="kw">in</span> local.items() <span class="kw">for</span> value <span class="kw">in</span> values]
+
+        <span class="kw">for</span> key, value <span class="kw">in</span> items:
+            partitions[stable_partition(key, reducers)][key].append(value)
+
+    output = []
+    <span class="kw">for</span> partition <span class="kw">in</span> partitions:
+        <span class="kw">for</span> key <span class="kw">in</span> sorted(partition):
+            output.extend(reducer(key, partition[key]))
+    <span class="kw">return</span> output
+
+
+<span class="kw">def</span> <span class="fn">word_mapper</span>(path, text):
+    <span class="kw">for</span> word <span class="kw">in</span> text.lower().split():
+        <span class="kw">yield</span> word, <span class="num">1</span>
+
+
+<span class="kw">def</span> <span class="fn">sum_reducer</span>(key, values):
+    <span class="kw">yield</span> key, sum(values)
+
+
+inputs = [
+    (<span class="str">"a.txt"</span>, <span class="str">"red blue red"</span>),
+    (<span class="str">"b.txt"</span>, <span class="str">"blue green red"</span>),
+]
+
+<span class="kw">for</span> key, count <span class="kw">in</span> run_map_reduce(inputs, word_mapper, sum_reducer, reducers=<span class="num">2</span>, combiner=sum_reducer):
+    print(key, count)
+</pre>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">What The Toy Engine Covers</div>
+    <p>This toy engine has stable partitioning, local combine, reducer isolation, and deterministic output ordering. A real cluster runtime adds scheduling, input splitting, spill files, remote fetch, retry, counters, output commit, and monitoring.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 9 ============ -->
+<section class="section" id="s9">
+  <div class="section-num">09</div>
+  <h2>Production Example 1: Google MapReduce and Hadoop</h2>
+
+  <p>Google's MapReduce paper framed the model as both a programming abstraction and a cluster runtime. The programmer wrote map and reduce; the system took ownership of partitioning input, scheduling work, handling failures, and coordinating inter-machine communication. <a href="#ref1" class="ref">[1]</a></p>
+
+  <p>Apache Hadoop brought the model into an open-source ecosystem, pairing MapReduce with HDFS and later YARN. The Hadoop tutorial exposes the production knobs interviewers care about: mappers, reducers, partitioners, counters, input formats, task attempts, job configuration, and shuffle tuning. <a href="#ref2" class="ref">[2]</a></p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Component</th><th>Google MapReduce</th><th>Hadoop MapReduce</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Storage assumption</strong></td><td>Google File System</td><td>HDFS or compatible input formats</td></tr>
+        <tr><td><strong>Coordinator</strong></td><td>Master assigns map and reduce tasks</td><td>Job/application master coordinates attempts</td></tr>
+        <tr><td><strong>Failure model</strong></td><td>Re-execute failed tasks and lost map output</td><td>Task attempts, counters, logs, configurable retry behavior</td></tr>
+        <tr><td><strong>User extension points</strong></td><td>Map, reduce, partitioning, optional combine</td><td>Mapper, Reducer, Partitioner, Combiner, InputFormat, OutputFormat</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">Production Lesson</div>
+    <p>The paper's power was not that map and reduce were new functions. The power was packaging task scheduling, fault recovery, input locality, shuffle, and output commit behind a constrained API that normal application engineers could use.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 10 ============ -->
+<section class="section" id="s10">
+  <div class="section-num">10</div>
+  <h2>Production Example 2: Spark and Beam</h2>
+
+  <p>Modern data systems did not abandon the MapReduce insight; they generalized it. Spark keeps the idea of partitioned parallel collections and shuffle boundaries, but supports richer DAGs, lazy transformations, in-memory persistence, and iterative workloads. The Spark docs call out transformations, actions, and shuffle operations as separate concerns, which maps directly to the same data-movement lesson. <a href="#ref3" class="ref">[3]</a></p>
+
+  <p>Beam expresses pipelines with transforms such as <code class="inline">ParDo</code>, <code class="inline">GroupByKey</code>, and <code class="inline">Combine</code>. Beam's model makes streaming and windowing first-class, but the core batch pattern is still visible: per-record processing, grouping by key, and associative combining where possible. <a href="#ref4" class="ref">[4]</a></p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>System</th><th>What It Keeps</th><th>What It Adds</th><th>Best Fit</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Classic MapReduce</strong></td><td>Map, shuffle, reduce, durable batch execution</td><td>Simple failure model and disk-backed stages</td><td>Large offline jobs with clear aggregation boundaries</td></tr>
+        <tr><td><strong>Spark</strong></td><td>Partitioned data and shuffle boundaries</td><td>DAG execution, caching, iterative workloads, richer APIs</td><td>ETL, machine learning prep, interactive analytics</td></tr>
+        <tr><td><strong>Beam</strong></td><td>Per-element processing and key grouping</td><td>Portable runners, windows, triggers, bounded and unbounded data</td><td>Pipelines that should run across batch and streaming engines</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout purple">
+    <div class="callout-label">Why This Still Matters</div>
+    <p>Once you recognize shuffle boundaries, you can reason about many systems: MapReduce, Spark, Flink, Beam, SQL engines, and distributed stream processors. They differ in APIs and execution engines, but grouping by key still means repartitioning data, and repartitioning data is expensive.</p>
+  </div>
+</section>
+
+<!-- ============ SECTION 11 ============ -->
+<section class="section" id="s11">
+  <div class="section-num">11</div>
+  <h2>Edge Cases &amp; Gotchas</h2>
+
+  <h3>Hot Keys</h3>
+  <p>A single key can dominate the input. Examples: a celebrity user ID, a default country code, an empty field, or a bot-generated token. One reducer owns that key and becomes the straggler. Fixes include salting the key, two-stage aggregation, custom partitioning, or special-case handling for known heavy hitters.</p>
+
+  <h3>Too Much Shuffle Data</h3>
+  <p>If every mapper emits many records per input record, the shuffle can be larger than the source dataset. Use combiners, early filters, compact serialization, and avoid emitting fields the reducer does not need.</p>
+
+  <h3>Non-Associative Reducers</h3>
+  <p>If the reducer's logic depends on exact input order or cannot be partially combined, it limits parallelism. Average, percentile, top-k, and distinct counts require careful accumulator design. For example, average should carry <code class="inline">(sum, count)</code>, not just a running average.</p>
+
+  <h3>Small Files</h3>
+  <p>Millions of tiny input files create too many tasks and too much metadata overhead. Batch systems prefer large splittable files. In data lakes, compaction is often a first-class maintenance job because small files quietly destroy throughput.</p>
+
+  <h3>Many Tiny Output Files</h3>
+  <p>Every reducer usually writes one output file. Setting reducer count to 10,000 might parallelize the job, but it can also create 10,000 files that punish downstream readers. The right reducer count depends on both job runtime and the next consumer.</p>
+
+  <h3>Stragglers</h3>
+  <p>The job completes only when the slowest required task finishes. Stragglers come from slow machines, skewed input, bad disks, noisy neighbors, or a reducer that got a hot partition. Speculation helps machine slowness; it does not fix true data skew.</p>
+</section>
+
+<!-- ============ SECTION 12 ============ -->
+<section class="section" id="s12">
+  <div class="section-num">12</div>
+  <h2>What If? Interactive Exploration</h2>
+
+  <p>Use the sliders to see the shape of a batch job. The estimates are intentionally simple: they are meant to train the intuition that shuffle size, reducer count, and skew dominate runtime.</p>
+
+  <div class="diagram-wrap" style="padding:24px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px;">
+      <div>
+        <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-family:var(--mono);font-size:12px;">
+          Input size: <span id="v-input" style="color:var(--accent);">1000</span> GB
+          <br><input type="range" id="r-input" min="100" max="10000" value="1000" step="100" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+        </label>
+        <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-family:var(--mono);font-size:12px;">
+          Mapper expansion: <span id="v-expand" style="color:var(--accent);">1.0</span>x
+          <br><input type="range" id="r-expand" min="1" max="50" value="10" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+        </label>
+        <label style="display:block;margin-bottom:14px;color:var(--text-dim);font-family:var(--mono);font-size:12px;">
+          Combiner reduction: <span id="v-combine" style="color:var(--accent);">70</span>%
+          <br><input type="range" id="r-combine" min="0" max="95" value="70" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+        </label>
+        <label style="display:block;color:var(--text-dim);font-family:var(--mono);font-size:12px;">
+          Reducers: <span id="v-reducers" style="color:var(--accent);">100</span>
+          <br><input type="range" id="r-reducers" min="10" max="1000" value="100" step="10" style="width:100%;accent-color:#6ee7b7;margin-top:4px;">
+        </label>
+      </div>
+      <div class="callout blue" style="margin:0;">
+        <div class="callout-label">Estimated Shape</div>
+        <p id="mr-shuffle">Shuffle size: 300 GB</p>
+        <p id="mr-per-reducer">Average per reducer: 3 GB</p>
+        <p id="mr-hot">Hot reducer at 10x skew: 30 GB</p>
+        <p id="mr-verdict" style="font-family:var(--mono);font-weight:600;color:var(--accent);">Reasonable batch shape</p>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;">
+    <div class="callout green" style="margin:0;">
+      <div class="callout-label">Lower Shuffle</div>
+      <p>Add a combiner, filter earlier, emit fewer fields, compress intermediate records, and avoid expanding one input record into many output records unless the reducer needs them.</p>
+    </div>
+    <div class="callout orange" style="margin:0;">
+      <div class="callout-label">More Reducers</div>
+      <p>More reducers lower average bytes per reducer, but too many reducers create tiny files and more scheduling overhead. They do not fix a hot key by themselves.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SECTION 13 ============ -->
+<section class="section" id="s13">
+  <div class="section-num">13</div>
+  <h2>Actual System Design Interview</h2>
+
+  <div class="callout blue">
+    <div class="callout-label">A Prompt You Could Actually Get</div>
+    <p>"Design a system that processes 10 TB of web server logs every night and produces per-customer metrics: request count, error count, bandwidth, p95 latency, and top URLs."</p>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">How I Would Structure the Answer</div>
+    <p>I would first define the batch contract: inputs are immutable log files partitioned by time and maybe region; outputs are daily metric files keyed by customer ID. Then I would map each log line into keyed metric fragments such as <code class="inline">(customer_id, count=1, errors=0/1, bytes=N, latency_sketch, url_counter)</code>. The shuffle groups by customer ID. Reducers merge counters, sketches, and top-k structures, then write one output partition per reducer. I would mention a combiner immediately because request counts and byte sums can be locally aggregated before shuffle. For p95 latency, I would not ship every raw latency if a mergeable sketch or histogram is acceptable.</p>
+  </div>
+
+  <div class="callout orange">
+    <div class="callout-label">Where the Interviewer Pushes</div>
+    <p>The likely push is skew: one enterprise customer may have 30% of the logs. A naive key of <code class="inline">customer_id</code> sends that customer to one reducer. I would propose salting heavy customer keys into subkeys, reducing them once, then running a second-stage reduce to merge the salted partials. The other push is bad data and late files. I would track counters for malformed lines, write rejected records to a separate path, and make the job rerunnable for a date partition without corrupting existing output.</p>
+  </div>
+
+  <div class="diagram-wrap">
+    <div class="mermaid">
+flowchart LR
+  A[Logs] --> B[Parse]
+  B --> C[Combine]
+  C --> D[Shuffle]
+  D --> E[Reduce]
+  E --> F[Metrics]
+  D --> G[Salted]
+  G --> H["Merge<br>hot"]
+  H --> F
+    </div>
+    <div class="diagram-caption">Whiteboard answer: parse logs into mergeable partials, combine locally, group by customer, and split hot customers before final merge.</div>
+  </div>
+</section>
+
+<!-- ============ SECTION 14 ============ -->
+<section class="section" id="s14">
+  <div class="section-num">14</div>
+  <h2>Interview Questions &amp; Answers</h2>
+
+  <div class="qa">
+    <div class="qa-q">What problem does MapReduce solve?</div>
+    <div class="qa-a">
+      <p>It lets programmers express large batch jobs as map and reduce functions while the runtime handles distributed execution: input splitting, scheduling, shuffle, fault tolerance, and output commit. It fits offline data processing where the computation is per-record extraction followed by per-key aggregation.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Why is shuffle expensive?</div>
+    <div class="qa-a">
+      <p>Shuffle moves intermediate data from mappers to reducers across the network, often writing and reading disk along the way. It also sorts, spills, merges, serializes, and deserializes records. If a job is slow, the shuffle is one of the first places to inspect.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">What is a combiner, and when is it safe?</div>
+    <div class="qa-a">
+      <p>A combiner performs local aggregation before shuffle. It is safe when the operation can be applied partially without changing the final answer. Sum, count, min, max, and set union are natural. Average needs a structured accumulator such as sum and count.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">How do you handle a hot key?</div>
+    <div class="qa-a">
+      <p>Detect it with counters and reducer-size metrics, then split the key into salted subkeys so multiple reducers process partial results. A second reduce stage merges those partials. For known heavy hitters, route them through a custom path instead of pretending hash partitioning will fix skew.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">How is MapReduce different from Spark?</div>
+    <div class="qa-a">
+      <p>Classic MapReduce is stage-oriented and usually disk-backed between map and reduce phases. Spark generalizes distributed batch processing into a DAG of transformations and actions, can cache datasets in memory, and is better for iterative and interactive workloads. Both still have shuffle boundaries that dominate cost.</p>
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="qa-q">Can reducers emit multiple output records?</div>
+    <div class="qa-a">
+      <p>Yes. A reducer receives a key and values, then can emit zero, one, or many output records. The contract is that all values for the same intermediate key are presented to the same reduce invocation.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SECTION 15 ============ -->
+<section class="section" id="s15">
+  <div class="section-num">15</div>
+  <h2>Key Takeaways Cheat Sheet</h2>
+
+  <div class="callout green">
+    <div class="callout-label">The 12 Things You Must Know</div>
+    <p><strong>1.</strong> MapReduce is a batch model: map records, shuffle by key, reduce each key group.</p>
+    <p><strong>2.</strong> The runtime owns splitting, scheduling, retries, shuffle, and output commit.</p>
+    <p><strong>3.</strong> The mapper emits intermediate key-value pairs; it should be deterministic and retry-safe.</p>
+    <p><strong>4.</strong> The partitioner decides which reducer owns each key.</p>
+    <p><strong>5.</strong> The shuffle is usually the expensive phase because it moves and sorts data.</p>
+    <p><strong>6.</strong> A combiner can dramatically reduce network traffic when the operation is associative and commutative.</p>
+    <p><strong>7.</strong> Hash partitioning balances key space, not necessarily workload.</p>
+    <p><strong>8.</strong> Hot keys create straggler reducers; salting and two-stage aggregation are common fixes.</p>
+    <p><strong>9.</strong> Failed map tasks can be retried because map output is reconstructable.</p>
+    <p><strong>10.</strong> Speculative execution helps slow machines but does not solve true skew.</p>
+    <p><strong>11.</strong> Reducer count affects runtime, output file count, and downstream read cost.</p>
+    <p><strong>12.</strong> Modern engines changed the API, but shuffle-aware thinking still applies.</p>
+  </div>
+</section>
+
+<!-- ============ MENTAL MODEL ============ -->
+<section class="section" id="mental">
+  <div class="section-num">MM</div>
+  <h2>Mental Model</h2>
+
+  <div class="diagram-wrap">
+    <div class="mermaid">
+flowchart LR
+  A["Facts<br>A"] --> G[Group]
+  B["Facts<br>B"] --> G
+  C["Facts<br>C"] --> G
+  G --> X["Answer<br>X"]
+  G --> Y["Answer<br>Y"]
+    </div>
+    <div class="diagram-caption">MapReduce turns many local facts into grouped global answers. The grouping step is where distributed cost concentrates.</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-label">Short Version</div>
+    <p>Map is easy parallelism. Reduce is independent once keys are grouped. Shuffle is the hard distributed system in the middle. Most MapReduce design quality comes from shrinking shuffle data, choosing keys carefully, and preventing one reducer from owning too much work.</p>
+  </div>
+</section>
+
+<!-- ============ REFERENCES ============ -->
+<section class="section" id="refs">
+  <div class="section-num">REF</div>
+  <h2>References &amp; Further Reading</h2>
+
+  <p>Each source below is summarized for the runtime behavior, API contract, or design tradeoff worth carrying into system design discussions.</p>
+
+  <div id="ref1" class="callout green" style="margin-top:28px;">
+    <div class="callout-label">[1] Dean &amp; Ghemawat - "MapReduce: Simplified Data Processing on Large Clusters" (OSDI 2004)</div>
+    <p><strong>Jeffrey Dean, Sanjay Ghemawat.</strong> Google, OSDI 2004.<br>
+    <a href="https://research.google/pubs/mapreduce-simplified-data-processing-on-large-clusters/" style="color:var(--accent);" target="_blank">https://research.google/pubs/mapreduce-simplified-data-processing-on-large-clusters/</a></p>
+    <p>&#x2022; Defines the core abstraction: map emits intermediate key-value pairs, and reduce merges all values with the same intermediate key.</p>
+    <p>&#x2022; The runtime responsibilities are the enduring system design lesson: partition input, schedule execution, handle failures, and coordinate inter-machine communication.</p>
+    <p>&#x2022; The implementation assumes failure is normal, so failed tasks are re-executed and successful output is committed carefully.</p>
+  </div>
+
+  <div id="ref2" class="callout blue">
+    <div class="callout-label">[2] Apache Hadoop - MapReduce Tutorial</div>
+    <p><strong>Apache Hadoop project.</strong> Hadoop MapReduce client documentation.<br>
+    <a href="https://hadoop.apache.org/docs/stable3/hadoop-mapreduce-client/hadoop-mapreduce-client-core/MapReduceTutorial.html" style="color:var(--blue);" target="_blank">https://hadoop.apache.org/docs/stable3/hadoop-mapreduce-client/hadoop-mapreduce-client-core/MapReduceTutorial.html</a></p>
+    <p>&#x2022; Documents the concrete Hadoop programming surface: Mapper, Reducer, Partitioner, Combiner, counters, input formats, output formats, and job configuration.</p>
+    <p>&#x2022; Useful for turning abstract MapReduce language into operational controls such as task attempts, shuffle parameters, memory settings, and job monitoring.</p>
+  </div>
+
+  <div id="ref3" class="callout orange">
+    <div class="callout-label">[3] Apache Spark - RDD Programming Guide</div>
+    <p><strong>Apache Spark project.</strong> RDD programming guide.<br>
+    <a href="https://spark.apache.org/docs/latest/rdd-programming-guide.html" style="color:var(--orange);" target="_blank">https://spark.apache.org/docs/latest/rdd-programming-guide.html</a></p>
+    <p>&#x2022; Separates transformations from actions and explains lazy execution, which is the foundation for Spark's DAG planning.</p>
+    <p>&#x2022; Calls out shuffle operations as expensive because they involve network transfer, disk I/O, serialization, and memory pressure.</p>
+    <p>&#x2022; Shows how RDD persistence changes the classic MapReduce cost model for iterative or reused datasets.</p>
+  </div>
+
+  <div id="ref4" class="callout purple">
+    <div class="callout-label">[4] Apache Beam - Programming Guide</div>
+    <p><strong>Apache Beam project.</strong> Programming guide for transforms, GroupByKey, Combine, and windowing.<br>
+    <a href="https://beam.apache.org/documentation/programming-guide/" style="color:var(--purple);" target="_blank">https://beam.apache.org/documentation/programming-guide/</a></p>
+    <p>&#x2022; Maps the same conceptual shape onto modern pipeline transforms: per-element processing with ParDo, grouping with GroupByKey, and partial aggregation with Combine.</p>
+    <p>&#x2022; Adds the streaming concern MapReduce did not center: unbounded data needs windows and triggers before grouped aggregation can complete.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  System Design Fundamentals
+</footer>
+
+</div>
+<script src="../../assets/js/topic.js"></script>
+<script>
+// MapReduce shuffle estimator
+(function(){
+  const rInput = document.getElementById('r-input');
+  const rExpand = document.getElementById('r-expand');
+  const rCombine = document.getElementById('r-combine');
+  const rReducers = document.getElementById('r-reducers');
+  const vInput = document.getElementById('v-input');
+  const vExpand = document.getElementById('v-expand');
+  const vCombine = document.getElementById('v-combine');
+  const vReducers = document.getElementById('v-reducers');
+
+  function fmtGb(value) {
+    if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + ' TB';
+    return Math.round(value).toLocaleString() + ' GB';
+  }
+
+  function calc() {
+    const inputGb = parseInt(rInput.value, 10);
+    const expansion = parseInt(rExpand.value, 10) / 10;
+    const combinePct = parseInt(rCombine.value, 10);
+    const reducers = parseInt(rReducers.value, 10);
+    const shuffleGb = inputGb * expansion * (1 - combinePct / 100);
+    const perReducer = shuffleGb / reducers;
+    const hotReducer = perReducer * 10;
+
+    vInput.textContent = inputGb.toLocaleString();
+    vExpand.textContent = expansion.toFixed(1);
+    vCombine.textContent = combinePct;
+    vReducers.textContent = reducers.toLocaleString();
+
+    document.getElementById('mr-shuffle').textContent = 'Shuffle size: ' + fmtGb(shuffleGb);
+    document.getElementById('mr-per-reducer').textContent = 'Average per reducer: ' + fmtGb(perReducer);
+    document.getElementById('mr-hot').textContent = 'Hot reducer at 10x skew: ' + fmtGb(hotReducer);
+
+    const verdict = document.getElementById('mr-verdict');
+    if (hotReducer > 500) {
+      verdict.textContent = 'Skew will dominate this job';
+      verdict.style.color = '#f87171';
+    } else if (shuffleGb > inputGb * 1.5) {
+      verdict.textContent = 'Shuffle is larger than the source';
+      verdict.style.color = '#fb923c';
+    } else if (perReducer < 1) {
+      verdict.textContent = 'Likely too many tiny reducer outputs';
+      verdict.style.color = '#fbbf24';
+    } else {
+      verdict.textContent = 'Reasonable batch shape';
+      verdict.style.color = '#6ee7b7';
+    }
+  }
+
+  rInput.addEventListener('input', calc);
+  rExpand.addEventListener('input', calc);
+  rCombine.addEventListener('input', calc);
+  rReducers.addEventListener('input', calc);
+  calc();
+})();
+</script>
+<script type="module" src="../../assets/js/mermaid-init.js"></script>
+</body>
+</html>

@@ -86,6 +86,14 @@ GRAPH_LAYOUT = {
         "deps": ["proxies", "latency-and-throughput", "hashing"],
         "orbit_rotation": 22,
     },
+    "map-reduce": {
+        "x": 1080,
+        "y": 190,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["storage", "latency-and-throughput", "hashing"],
+        "orbit_rotation": 36,
+    },
     "availability": {
         "x": 620,
         "y": 160,
@@ -173,6 +181,14 @@ GRAPH_LAYOUT = {
         "tone": "reliability",
         "deps": ["availability", "latency-and-throughput", "sockets", "config"],
         "orbit_rotation": 6,
+    },
+    "security": {
+        "x": 1110,
+        "y": 730,
+        "cluster": "Reliability",
+        "tone": "reliability",
+        "deps": ["client-server-model", "network-protocols", "proxies", "load-balancer"],
+        "orbit_rotation": 32,
     },
     "pub-sub": {
         "x": 1290,
