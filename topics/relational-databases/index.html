@@ -611,7 +611,7 @@ print(f<span class="str">"  Speedup:       {no_idx/with_idx:.0f}×"</span>)</pre
   <div class="qa">
     <div class="qa-q">Q2: What is a database index and when should you create one?</div>
     <div class="qa-a">
-      <p>An index gives the planner a faster path than scanning the whole table. Create them on columns that drive real filters, joins, and sorts. Skip the rest. Every extra index costs write time and disk. If you want to know whether one is missing, look at <code>EXPLAIN ANALYZE</code> and find out why the planner chose a sequential scan.</p>
+      <p>An index is a lookup structure that helps the database find rows without reading the whole table. Create one when a column is used often for filtering, joining, or sorting. Do not index everything. Extra indexes take disk space and make writes slower because the database has to update each index when rows change.</p>
     </div>
   </div>
 
@@ -914,8 +914,19 @@ flowchart LR
   </div>
 </section>
 
-<footer class="site-footer">
-  System Design Fundamentals &middot; built for deep understanding
+<footer class="site-footer topic-nav">
+  <div class="topic-nav-links">
+    <a class="topic-nav-link topic-nav-prev" href="../hashing/">
+      <span class="topic-nav-label">Previous Topic</span>
+      <span class="topic-nav-title">09 &middot; Hashing</span>
+    </a>
+    <a class="topic-nav-link topic-nav-next" href="../key-value-stores/">
+      <span class="topic-nav-label">Next Topic</span>
+      <span class="topic-nav-title">11 &middot; Key-Value Stores</span>
+    </a>
+  </div>
+  <a class="topic-nav-home" href="../../index.html">Home</a>
+  <div class="topic-nav-meta">System Design Fundamentals &middot; Topic 10 &middot; built for deep understanding</div>
 </footer>
 
 </div>

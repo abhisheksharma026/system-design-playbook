@@ -492,7 +492,10 @@ def build_knowledge_graph(pages: list[dict[str, object]]) -> str:
   <main class="map-page">
     <section class="map-hero">
       <div class="map-copy">
-        <p class="map-eyebrow">System Design Playbook</p>
+        <div class="map-topline">
+          <p class="map-eyebrow">System Design Playbook</p>
+          <a class="map-home-link" href="index.html">Home</a>
+        </div>
         <h1>Knowledge graph for the playbook.</h1>
         <div class="map-legend">
           <span><i class="legend-dot legend-dependency"></i> prerequisite dependency</span>
@@ -573,13 +576,15 @@ def main() -> int:
         if href.endswith("/index.html"):
             href = href[: -len("index.html")]
 
+        slug = topic_slug(page.relative_path)
+        source_html = page.source_path.read_text(encoding="utf-8")
         page_cards.append(
             {
                 "href": href,
-                "slug": topic_slug(page.relative_path),
+                "slug": slug,
                 "title": page.h1 or page.title,
                 "description": page.description or page.title,
-                "order": topic_number_from_source(page.source_path.read_text(encoding="utf-8")),
+                "order": topic_number_from_source(source_html),
                 "label": "--",
                 "source_path": page.source_path,
             }

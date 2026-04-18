@@ -889,14 +889,25 @@ flowchart TB
     <a href="https://dataintensive.net" target="_blank">https://dataintensive.net</a></p>
     <p>• Discusses the fundamental challenges of distributed rate limiting: clock synchronization (Section 8.3), where wall-clock disagreements between nodes cause rate limit windows to drift; and network delays (Section 8.2), where a request that was within the limit when sent may exceed the limit by the time it's processed.</p>
     <p>• The "happens-before" relationship (Lamport clocks) is relevant for ordering rate limit events across distributed nodes: if two increments to the same counter happen concurrently on different nodes, which one "counts" first? In practice, rate limiters use eventual consistency and accept minor over-counting.</p>
-    <p>• Describes the tradeoff between strong consistency (centralized counter, always accurate, adds latency) and eventual consistency (local counters, allows temporary overages, no latency penalty) — the same CAP theorem tradeoff from Topic 7, applied specifically to rate limit state.</p>
+    <p>• Describes the tradeoff between strong consistency (centralized counter, always accurate, adds latency) and eventual consistency (local counters, allows temporary overages, no latency penalty) — the same CAP theorem tradeoff from the replication and sharding topic, applied specifically to rate limit state.</p>
     <p>• The concept of "fencing tokens" (Section 8.4) applies to rate limit token buckets: if a token is "consumed" but the request fails and needs to be retried, should the token be returned? Most systems say no (simpler, avoids race conditions) — the retry consumes a new token.</p>
     <p>• Motivates the design principle that rate limiting should be a "best effort" system — it's better to occasionally allow a few extra requests than to add significant latency to every request for perfect accuracy.</p>
   </div>
 </section>
 
-<footer class="site-footer">
-  System Design Fundamentals · Topic 18 · built for deep understanding
+<footer class="site-footer topic-nav">
+  <div class="topic-nav-links">
+    <a class="topic-nav-link topic-nav-prev" href="../config/">
+      <span class="topic-nav-label">Previous Topic</span>
+      <span class="topic-nav-title">17 &middot; Configuration Management</span>
+    </a>
+    <a class="topic-nav-link topic-nav-next" href="../logging/">
+      <span class="topic-nav-label">Next Topic</span>
+      <span class="topic-nav-title">19 &middot; Logging and Monitoring</span>
+    </a>
+  </div>
+  <a class="topic-nav-home" href="../../index.html">Home</a>
+  <div class="topic-nav-meta">System Design Fundamentals &middot; Topic 18 &middot; built for deep understanding</div>
 </footer>
 
 </div>
