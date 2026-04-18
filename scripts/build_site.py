@@ -86,6 +86,14 @@ GRAPH_LAYOUT = {
         "deps": ["proxies", "latency-and-throughput", "hashing"],
         "orbit_rotation": 22,
     },
+    "map-reduce": {
+        "x": 1080,
+        "y": 190,
+        "cluster": "Data",
+        "tone": "data",
+        "deps": ["storage", "latency-and-throughput", "hashing"],
+        "orbit_rotation": 36,
+    },
     "availability": {
         "x": 620,
         "y": 160,
