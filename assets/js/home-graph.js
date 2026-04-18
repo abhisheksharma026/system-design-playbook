@@ -319,7 +319,6 @@
         .map((node) => `<a class="details-link" href="${node.href}" data-slug-link="${node.slug}">${node.title}</a>`)
         .join("")
       : '<span class="details-empty">No downstream topic dependency mapped yet.</span>';
-
     detailsEl.innerHTML = `
       <p class="overlay-label">${selected.kind === "topic" ? "Selected Topic" : "Selected Concept"}</p>
       <h2 class="details-title">${title}</h2>

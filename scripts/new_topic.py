@@ -29,8 +29,9 @@ TEMPLATE = """<!DOCTYPE html>
       <p>Write your topic content here.</p>
     </main>
 
-    <footer class="site-footer">
-      System Design Fundamentals
+    <footer class="site-footer topic-nav">
+      <a class="topic-nav-home" href="../../index.html">Home</a>
+      <div class="topic-nav-meta">System Design Fundamentals</div>
     </footer>
   </div>
   <script src="../../assets/js/topic.js"></script>
