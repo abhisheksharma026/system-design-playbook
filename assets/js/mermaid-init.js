@@ -8,7 +8,7 @@ mermaid.initialize({
   flowchart: {
     useMaxWidth: true,
     curve: "basis",
-    htmlLabels: false,
+    htmlLabels: true,
     padding: 18,
     nodeSpacing: 48,
     rankSpacing: 64,
