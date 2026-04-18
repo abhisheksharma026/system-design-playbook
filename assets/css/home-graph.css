@@ -59,6 +59,14 @@ button {
   padding: 22px 26px;
 }
 
+.map-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
 .map-eyebrow,
 .overlay-label,
 .note-label {
@@ -68,6 +76,28 @@ button {
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
+}
+
+.map-topline .map-eyebrow {
+  margin-bottom: 0;
+}
+
+.map-home-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid rgba(125, 211, 252, 0.34);
+  border-radius: 8px;
+  color: var(--foundation);
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.map-home-link:hover {
+  background: rgba(125, 211, 252, 0.1);
 }
 
 .map-copy h1 {

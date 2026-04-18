@@ -476,41 +476,74 @@ $ <span class="fn">curl</span> -X DELETE localhost:8080/greeting
     <p>"Design a rate limiter that enforces 100 requests per minute per user across a distributed system with multiple API servers. It should handle 50K RPS total and not become a bottleneck."</p>
   </div>
 
-  <div class="diagram-wrap">
-    <pre class="mermaid">
-flowchart LR
-    C["Clients"]
-    A1["API Server 1"]
-    A2["API Server 2"]
-    AN["API Server N"]
-    R["Rate Limiter"]
-    X["Redis"]
-    N1["Atomic INCR keeps updates safe"]
-    N2["EXPIRE clears each window"]
-    N3["One shared counter across every API server"]
-    N4["Sub-ms reads and writes"]
+  <div class="diagram-wrap kv-rate-diagram">
+    <svg class="kv-rate-svg" viewBox="0 0 920 430" role="img" aria-labelledby="kv-rate-title kv-rate-desc">
+      <title id="kv-rate-title">Distributed Redis-backed rate limiter</title>
+      <desc id="kv-rate-desc">Clients call multiple API servers. Each server checks a shared rate limiter backed by Redis. Redis provides atomic increments, expiry, and low-latency reads and writes.</desc>
+      <defs>
+        <marker id="kv-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L9,4.5 L0,9 Z"></path>
+        </marker>
+      </defs>
 
-    C --> A1 --> R
-    C --> A2 --> R
-    C --> AN --> R
-    R --> X
-    X -.-> N1
-    X -.-> N2
-    R -.-> N3
-    X -.-> N4
+      <path class="kv-line" d="M144 213 C174 213 185 113 220 113"></path>
+      <path class="kv-line" d="M144 213 C172 213 190 213 220 213"></path>
+      <path class="kv-line" d="M144 213 C174 213 185 313 220 313"></path>
 
-    classDef user fill:#222734,stroke:#f87171,color:#e2e6f0,stroke-width:3px;
-    classDef api fill:#222734,stroke:#a78bfa,color:#e2e6f0,stroke-width:3px;
-    classDef core fill:#222734,stroke:#fb923c,color:#e2e6f0,stroke-width:3px;
-    classDef data fill:#222734,stroke:#6ee7b7,color:#e2e6f0,stroke-width:3px;
-    classDef note fill:#14171e,stroke:#2a3040,color:#8891a8,stroke-dasharray: 6 6;
+      <path class="kv-line" d="M365 113 C405 113 405 216 440 216"></path>
+      <path class="kv-line" d="M365 213 C395 213 410 216 440 216"></path>
+      <path class="kv-line" d="M365 313 C405 313 405 216 440 216"></path>
+      <path class="kv-line" d="M590 216 C620 216 635 216 665 216"></path>
 
-    class C user;
-    class A1,A2,AN api;
-    class R core;
-    class X data;
-    class N1,N2,N3,N4 note;
-    </pre>
+      <path class="kv-line kv-dashed" d="M730 184 C748 132 760 106 780 106"></path>
+      <path class="kv-line kv-dashed" d="M795 216 C800 216 805 216 810 216"></path>
+      <path class="kv-line kv-dashed" d="M525 248 C545 292 565 326 600 341"></path>
+      <path class="kv-line kv-dashed" d="M730 248 C748 298 760 319 780 319"></path>
+
+      <rect class="kv-box kv-user" x="24" y="184" width="120" height="58" rx="2"></rect>
+      <text class="kv-box-text" x="84" y="219" text-anchor="middle">Clients</text>
+
+      <rect class="kv-box kv-api" x="220" y="84" width="145" height="58" rx="2"></rect>
+      <text class="kv-box-text" x="292.5" y="119" text-anchor="middle">API Server 1</text>
+
+      <rect class="kv-box kv-api" x="220" y="184" width="145" height="58" rx="2"></rect>
+      <text class="kv-box-text" x="292.5" y="219" text-anchor="middle">API Server 2</text>
+
+      <rect class="kv-box kv-api" x="220" y="284" width="145" height="58" rx="2"></rect>
+      <text class="kv-box-text" x="292.5" y="319" text-anchor="middle">API Server N</text>
+
+      <rect class="kv-box kv-core" x="440" y="184" width="150" height="64" rx="2"></rect>
+      <text class="kv-box-text" x="515" y="222" text-anchor="middle">Rate Limiter</text>
+
+      <rect class="kv-box kv-data" x="665" y="184" width="130" height="64" rx="2"></rect>
+      <text class="kv-box-text" x="730" y="222" text-anchor="middle">Redis</text>
+
+      <rect class="kv-note" x="780" y="66" width="126" height="80" rx="2"></rect>
+      <text class="kv-note-text" x="843" y="98" text-anchor="middle">
+        <tspan x="843" dy="0">Atomic INCR</tspan>
+        <tspan x="843" dy="18">safe updates</tspan>
+      </text>
+
+      <rect class="kv-note" x="810" y="184" width="96" height="64" rx="2"></rect>
+      <text class="kv-note-text" x="858" y="209" text-anchor="middle">
+        <tspan x="858" dy="0">EXPIRE</tspan>
+        <tspan x="858" dy="18">clears</tspan>
+        <tspan x="858" dy="18">window</tspan>
+      </text>
+
+      <rect class="kv-note" x="600" y="304" width="142" height="74" rx="2"></rect>
+      <text class="kv-note-text" x="671" y="333" text-anchor="middle">
+        <tspan x="671" dy="0">One shared</tspan>
+        <tspan x="671" dy="18">counter per</tspan>
+        <tspan x="671" dy="18">user window</tspan>
+      </text>
+
+      <rect class="kv-note" x="780" y="286" width="126" height="66" rx="2"></rect>
+      <text class="kv-note-text" x="843" y="312" text-anchor="middle">
+        <tspan x="843" dy="0">Sub-ms</tspan>
+        <tspan x="843" dy="18">read/write</tspan>
+      </text>
+    </svg>
     <div class="diagram-caption">Distributed rate limiter: API servers share one Redis-backed counter per user per time window, so enforcement remains global instead of fragmenting across instances.</div>
   </div>
 
@@ -653,8 +686,19 @@ flowchart TB
   </div>
 </section>
 
-<footer class="site-footer">
-  System Design Fundamentals &middot; built for deep understanding
+<footer class="site-footer topic-nav">
+  <div class="topic-nav-links">
+    <a class="topic-nav-link topic-nav-prev" href="../relational-databases/">
+      <span class="topic-nav-label">Previous Topic</span>
+      <span class="topic-nav-title">10 &middot; Relational Databases</span>
+    </a>
+    <a class="topic-nav-link topic-nav-next" href="../specialized-storage/">
+      <span class="topic-nav-label">Next Topic</span>
+      <span class="topic-nav-title">12 &middot; Specialized Storage Paradigms</span>
+    </a>
+  </div>
+  <a class="topic-nav-home" href="../../index.html">Home</a>
+  <div class="topic-nav-meta">System Design Fundamentals &middot; Topic 11 &middot; built for deep understanding</div>
 </footer>
 
 </div>

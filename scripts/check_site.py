@@ -12,6 +12,17 @@ def resolve_local_link(source_file: Path, link: str) -> Path:
     return (source_file.parent / clean_link).resolve()
 
 
+def is_generated_home_link(source_file: Path, link: str, target: Path) -> bool:
+    if link.split("#", 1)[0].split("?", 1)[0] != "../../index.html":
+        return False
+    root = repo_root()
+    try:
+        source_file.relative_to(root / "topics")
+    except ValueError:
+        return False
+    return target == (root / "index.html").resolve()
+
+
 def main() -> int:
     root = repo_root()
     pages = discover_pages(root)
@@ -37,7 +48,7 @@ def main() -> int:
             if not is_local_asset(link):
                 continue
             target = resolve_local_link(page.source_path, link)
-            if not target.exists():
+            if not target.exists() and not is_generated_home_link(page.source_path, link, target):
                 errors.append(f"{page.relative_path}: broken local link -> {link}")
 
     for warning in warnings:

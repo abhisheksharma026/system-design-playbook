@@ -542,7 +542,20 @@ flowchart TD
   <div class="ref"><div class="ref-title">[5] Designing Data-Intensive Applications — Chapter 4 & 10 (Kleppmann, 2017)</div><p><strong>Martin Kleppmann.</strong> O'Reilly, 2017.<br><a href="https://dataintensive.net" target="_blank">https://dataintensive.net</a></p><p>• Chapter 4 discusses encoding formats relevant to log pipelines: JSON (human-readable but verbose), Protocol Buffers/Thrift (binary, compact, schema-enforced), and Avro (schema evolution without field tags). OTLP uses Protocol Buffers; Kafka log pipelines often use Avro with Schema Registry for evolution.</p><p>• Chapter 10 on batch processing describes the log-structured approach: immutable, append-only records that flow through processing stages. This is exactly how log aggregation pipelines work (append logs → Kafka → transform → store). The insight: treating logs as an immutable stream enables replay, reprocessing, and derived views (different indexes over the same log data).</p><p>• The concept of "derived data systems" (Chapter 10–11) applies directly to observability: metrics, dashboards, and alerts are all derived views of the raw telemetry stream. The raw data (logs, spans) is the source of truth; metrics are a compressed, aggregated projection optimized for specific queries.</p><p>• Chapter 8's discussion of clock synchronization (NTP accuracy of 100ms–1s) is directly relevant to distributed tracing, where spans from different hosts must be ordered correctly. Dapper addresses this by recording clock skew between RPC client and server timestamps within each span.</p></div>
 </section>
 
-<footer class="site-footer">System Design Fundamentals · Topic 19 · built for deep understanding</footer>
+<footer class="site-footer topic-nav">
+  <div class="topic-nav-links">
+    <a class="topic-nav-link topic-nav-prev" href="../rate-limiting/">
+      <span class="topic-nav-label">Previous Topic</span>
+      <span class="topic-nav-title">18 &middot; Rate Limiting</span>
+    </a>
+    <a class="topic-nav-link topic-nav-next" href="../pub-sub/">
+      <span class="topic-nav-label">Next Topic</span>
+      <span class="topic-nav-title">20 &middot; Publish/Subscribe Patterns</span>
+    </a>
+  </div>
+  <a class="topic-nav-home" href="../../index.html">Home</a>
+  <div class="topic-nav-meta">System Design Fundamentals &middot; Topic 19 &middot; built for deep understanding</div>
+</footer>
 </div>
 
 <script type="module" src="../../assets/js/mermaid-init.js"></script>
